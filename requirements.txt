@@ -1,0 +1,9 @@
+# 与 pyproject.toml [project.dependencies] 对齐；推荐任选其一安装：
+#   pip install -r requirements.txt
+#   pip install -e .
+fastapi==0.136.0
+uvicorn[standard]==0.44.0
+akshare==1.18.56
+httpx==0.28.1
+pandas==3.0.2
+pydantic-settings>=2.2.0,<3

@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "goldquant"
+version = "0.1.0"
+description = "GoldQuant stock data API (FastAPI + AKShare)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi==0.136.0",
+    "uvicorn[standard]==0.44.0",
+    "akshare==1.18.56",
+    "httpx==0.28.1",
+    "pandas==3.0.2",
+    "pydantic-settings>=2.2.0,<3",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
