@@ -1,4 +1,4 @@
-"""mkt_hsgt"""
+"""北向/南向、沪深港通等互联互通数据。"""
 from __future__ import annotations
 
 import akshare as ak

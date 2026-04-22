@@ -1,4 +1,4 @@
-"""乐咕乐股：市场整体概况类指标。"""
+"""全市场情绪、活动度与宏观概况类指标。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from fastapi.concurrency import run_in_threadpool
 from app.schemas.ak_table import AkTableOut
 from app.utils.ak_response import wrap_ak_table
 
-router = APIRouter(tags=["乐咕", "市场情绪", "概况"])
+router = APIRouter(tags=["市场情绪", "概况"])
 
 
 def _ak(name: str, params: dict, df) -> AkTableOut:

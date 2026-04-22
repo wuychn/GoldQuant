@@ -1,4 +1,4 @@
-"""mkt_company_social"""
+"""公司互动、动态与新股相关。"""
 from __future__ import annotations
 
 import akshare as ak
@@ -8,7 +8,7 @@ from fastapi.concurrency import run_in_threadpool
 from app.schemas.ak_table import AkTableOut
 from app.utils.ak_response import wrap_ak_table
 
-router = APIRouter(tags=["公司与新股", "公司动态", "盘前", "评论", "同花顺新股"])
+router = APIRouter(tags=["公司", "新股", "互动", "盘前", "评论"])
 
 _DOC = "https://akshare.akfamily.xyz/data/stock/stock.html"
 

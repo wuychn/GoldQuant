@@ -1,4 +1,4 @@
-"""东财自定义请求头配置（写入项目根 `.eastmoney.header`）。"""
+"""管理端：部分第三方站点可注入的请求头（示例：写入项目根 `.eastmoney.header`）。"""
 
 from __future__ import annotations
 

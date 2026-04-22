@@ -1,4 +1,4 @@
-"""东财：盘口/板块异动与涨跌停、次新股等股池。"""
+"""盘口与板块异动、涨跌停、次新股等股池/极端行情。"""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from app.schemas.ak_table import AkTableOut
 from app.utils.ak_response import wrap_ak_table
 
 _DOC = "https://akshare.akfamily.xyz/data/stock/stock.html"
-router = APIRouter(tags=["异动", "涨跌停", "东财", "股池"])
+router = APIRouter(tags=["异动", "涨跌停", "股池"])
 
 
 def _ak(name: str, params: dict, df) -> AkTableOut:

@@ -470,7 +470,7 @@ class ThsHotOut(BaseModel):
     )
     url: str = Field(
         ...,
-        description="本次请求同花顺 API 的 URL 基址（与 `mkt_ths_portal.THS_HOT_STOCK_API` 一致），完整查询见 `params` 各键。",
+        description="本次请求直连接口 URL 的基址（与 `mkt_heat.HOT_STOCK_LIST_API` 一致），完整查询见 `params` 各键。",
     )
     params: ThsHotParamsEcho = Field(
         ..., description="与上游同花顺请求一致并回显的查询子集（已去掉 `host` 等，仅四至五项键值，见上）。")

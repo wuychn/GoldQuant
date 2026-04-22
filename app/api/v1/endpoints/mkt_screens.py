@@ -1,4 +1,4 @@
-"""同花顺：技术形态/强弱排行类榜单。"""
+"""技术形态、强弱、连板与创新高类榜单/筛股。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from fastapi.concurrency import run_in_threadpool
 from app.schemas.ak_table import AkTableOut
 from app.utils.ak_response import wrap_ak_table
 
-router = APIRouter(tags=["同花顺", "排行", "技术形态", "连板"])
+router = APIRouter(tags=["排行", "技术形态", "连板", "榜"])
 
 
 def _ak(name: str, params: dict, df) -> AkTableOut:

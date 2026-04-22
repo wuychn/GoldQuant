@@ -1,4 +1,4 @@
-"""概念与板块（东财概念 + 同花顺概念指数）。"""
+"""概念、行业与板块：列表、成份、K 线/分时及板块指数/简介（AKShare 封装，具体来源见各接口说明）。"""
 
 from __future__ import annotations
 
@@ -6,11 +6,12 @@ import akshare as ak
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
 
+from app.schemas.ak_openapi import ThsIndustrySummaryOut
 from app.schemas.ak_table import AkTableOut
-from app.utils.ak_response import wrap_ak_table
+from app.utils.ak_response import wrap_ak_dataframe, wrap_ak_table
 
 _DOC = "https://akshare.akfamily.xyz/data/stock/stock.html"
-router = APIRouter(tags=["概念", "板块"])
+router = APIRouter(tags=["板块", "概念", "行业"])
 
 
 def _ak(name: str, params: dict, df) -> AkTableOut:
@@ -126,7 +127,7 @@ async def em_board_concept_hist_min(
     return _ak("stock_board_concept_hist_min_em", p, df)
 
 
-# —— 同花顺 概念板块 ——
+# —— 概念：板块指数/简介（AKShare 封装） ——
 
 
 @router.get(
@@ -175,7 +176,52 @@ async def ths_board_concept_info(
     return _ak("stock_board_concept_info_ths", p, df)
 
 
-# —— 东方财富 行业板块 ——
+# —— 行业：一览与指数（AKShare 封装） ——
+
+
+@router.get(
+    "/board/ths/industry-summary",
+    response_model=ThsIndustrySummaryOut,
+    summary="行业列表（概览，AKShare 封装）",
+    description="封装 `ak.stock_board_industry_summary_ths`。",
+)
+async def ths_industry_board_summary() -> ThsIndustrySummaryOut:
+    try:
+        df = await run_in_threadpool(ak.stock_board_industry_summary_ths)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return wrap_ak_dataframe(
+        ThsIndustrySummaryOut, "stock_board_industry_summary_ths", {}, df
+    )
+
+
+@router.get(
+    "/board/ths/industry-index",
+    response_model=AkTableOut,
+    summary="行业指数（AKShare 封装）",
+    description=(
+        "封装 `ak.stock_board_industry_index_ths`；`symbol` 为行业名。"
+        f"文档：[A 股数据]({_DOC})。"
+    ),
+)
+async def ths_board_industry_index(
+    symbol: str = Query("元件", description="行业名称。例 元件。"),
+    start_date: str = Query("20240101", description="开始 YYYYMMDD。"),
+    end_date: str = Query("20240718", description="结束 YYYYMMDD。"),
+) -> AkTableOut:
+    p = {"symbol": symbol, "start_date": start_date, "end_date": end_date}
+    try:
+        df = await run_in_threadpool(
+            lambda: ak.stock_board_industry_index_ths(
+                symbol=symbol, start_date=start_date, end_date=end_date
+            )
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return _ak("stock_board_industry_index_ths", p, df)
+
+
+# —— 行业：东财 列表/行情/成份/K ——
 
 
 @router.get(

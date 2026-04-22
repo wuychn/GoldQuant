@@ -1,4 +1,4 @@
-"""mkt_block_trade"""
+"""大宗交易统计与明细。"""
 from __future__ import annotations
 
 import akshare as ak
