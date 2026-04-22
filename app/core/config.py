@@ -47,9 +47,6 @@ class Settings(BaseSettings):
 
     # HTTP 客户端（同花顺等直连）
     HTTP_CLIENT_TIMEOUT: float = 30.0
-    THS_HOT_URL: str = (
-        "https://dq.10jqka.com.cn/fuyao/hot_list_data/out/hot_list/v1/stock"
-    )
     THS_DEFAULT_USER_AGENT: str = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"

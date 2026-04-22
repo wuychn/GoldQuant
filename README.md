@@ -41,7 +41,7 @@ GoldQuant/
 
 - 配置类位于 `app/core/config.py`，通过 **`pydantic-settings`** 读取环境变量，**前缀为 `GOLDQUANT_`**（例如 `GOLDQUANT_ENV`）。
 - 项目根目录下的 **`.env`** 使用**固定绝对路径**加载（相对 `app/core/config.py` 解析），与从哪个目录启动无关；勿提交仓库（已列入 `.gitignore`），字段说明见 **`.env.example`**。
-- 常用项：`GOLDQUANT_CORS_ORIGINS`（跨域源，`*` 或逗号分隔）、`GOLDQUANT_HTTP_CLIENT_TIMEOUT`、`GOLDQUANT_THS_HOT_URL`、`GOLDQUANT_THS_DEFAULT_USER_AGENT` 等。
+- 常用项：`GOLDQUANT_CORS_ORIGINS`（跨域源，`*` 或逗号分隔）、`GOLDQUANT_HTTP_CLIENT_TIMEOUT`、`GOLDQUANT_THS_DEFAULT_USER_AGENT` 等。
 - **出站代理**：`GOLDQUANT_PROXY_ENABLED`、`GOLDQUANT_PROXY_URL`（或分别设置 `GOLDQUANT_PROXY_HTTP_URL` / `GOLDQUANT_PROXY_HTTPS_URL`）、`GOLDQUANT_PROXY_NO_PROXY`。开启后会在进程内设置 `HTTP_PROXY`/`HTTPS_PROXY`，AKShare 与本服务中的 httpx 请求均会走代理。
 
 ---
@@ -173,7 +173,7 @@ chmod +x run.sh
    - **安全提示**：该接口可改写对第三方的请求头，生产环境请自行加鉴权或网络隔离。
 
 7. **同花顺热榜** `/api/v1/hot/ths`  
-   - 默认请求与下列 URL 等价（可通过查询参数覆盖）：  
+   - 接口基址在代码中写死为 `fuyao/hot_list/.../v1/stock`（不通过环境变量配置）；默认请求与下列 URL 等价（可通过查询参数覆盖路径参数）：  
      `https://dq.10jqka.com.cn/fuyao/hot_list_data/out/hot_list/v1/stock?stock_type=a&type=hour&list_type=normal`  
    - 查询参数：`stock_type`、`type`（在 OpenAPI 中为避免与 Python 关键字冲突，代码里使用别名，URL 上仍为 `type`）、`list_type`；可选 `limit` 截取前 N 条 `stock_list`。  
    - 响应中包含上游 JSON（`raw`）；若设置 `limit`，仅截取 `data.stock_list` 前 N 条。另含 `stock_list_total`（截取前总条数）与 `stock_list_returned`（本次返回条数）。
