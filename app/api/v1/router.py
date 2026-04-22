@@ -10,14 +10,18 @@ from app.api.v1.endpoints import (
     mkt_company_social,
     mkt_concept_board,
     mkt_disclosure,
+    mkt_em_abnormal_zt,
     mkt_fund_flow,
     mkt_hsgt,
     mkt_hot_popularity,
+    mkt_info_feeds,
+    mkt_legu_sentiment,
     mkt_lhb,
     mkt_margin,
     mkt_quotes_kline,
     mkt_research_ratings,
     mkt_ths_portal,
+    mkt_ths_rankings,
 )
 
 api_router = APIRouter()
@@ -26,6 +30,10 @@ api_router.include_router(mkt_quotes_kline.router)
 api_router.include_router(mkt_fund_flow.router)
 api_router.include_router(mkt_lhb.router)
 api_router.include_router(mkt_concept_board.router)
+api_router.include_router(mkt_em_abnormal_zt.router)
+api_router.include_router(mkt_info_feeds.router)
+api_router.include_router(mkt_legu_sentiment.router)
+api_router.include_router(mkt_ths_rankings.router)
 api_router.include_router(mkt_company_social.router)
 api_router.include_router(mkt_research_ratings.router)
 api_router.include_router(mkt_ths_portal.router)

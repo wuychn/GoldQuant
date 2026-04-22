@@ -12,9 +12,15 @@ from fastapi.concurrency import run_in_threadpool
 
 from app.api.deps import SettingsDep
 from app.schemas.ak_openapi import ThsHotOut, ThsHotParamsEcho, ThsHotQueryDoc, ThsIndustrySummaryOut, field_desc
-from app.utils.ak_response import wrap_ak_dataframe
+from app.schemas.ak_table import AkTableOut
+from app.utils.ak_response import wrap_ak_dataframe, wrap_ak_table
 
+_STOCK_DOC = "https://akshare.akfamily.xyz/data/stock/stock.html"
 router = APIRouter(tags=["同花顺", "热榜", "行业"])
+
+
+def _ak_table(name: str, params: dict, df) -> AkTableOut:
+    return wrap_ak_table(name, params, df)
 
 
 @router.get(
@@ -29,6 +35,32 @@ async def ths_industry_board_summary() -> ThsIndustrySummaryOut:
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     return wrap_ak_dataframe(ThsIndustrySummaryOut, "stock_board_industry_summary_ths", {}, df)
+
+
+@router.get(
+    "/board/ths/industry-index",
+    response_model=AkTableOut,
+    summary="同花顺-行业指数",
+    description=(
+        "封装 `ak.stock_board_industry_index_ths`；`symbol` 为行业名。"
+        f"文档：[A 股数据]({_STOCK_DOC})。"
+    ),
+)
+async def ths_board_industry_index(
+    symbol: str = Query("元件", description="行业名称。例 元件。"),
+    start_date: str = Query("20240101", description="开始 YYYYMMDD。"),
+    end_date: str = Query("20240718", description="结束 YYYYMMDD。"),
+) -> AkTableOut:
+    p = {"symbol": symbol, "start_date": start_date, "end_date": end_date}
+    try:
+        df = await run_in_threadpool(
+            lambda: ak.stock_board_industry_index_ths(
+                symbol=symbol, start_date=start_date, end_date=end_date
+            )
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return _ak_table("stock_board_industry_index_ths", p, df)
 
 
 @router.get(

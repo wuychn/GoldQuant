@@ -9,6 +9,7 @@ from fastapi.concurrency import run_in_threadpool
 from app.schemas.ak_table import AkTableOut
 from app.utils.ak_response import wrap_ak_table
 
+_DOC = "https://akshare.akfamily.xyz/data/stock/stock.html"
 router = APIRouter(tags=["概念", "板块"])
 
 
@@ -172,3 +173,118 @@ async def ths_board_concept_info(
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     return _ak("stock_board_concept_info_ths", p, df)
+
+
+# —— 东方财富 行业板块 ——
+
+
+@router.get(
+    "/stock/em/board-industry/names",
+    response_model=AkTableOut,
+    summary="行业板块名称列表（东财）",
+    description=f"封装 `ak.stock_board_industry_name_em`，无入参。文档：[A 股数据]({_DOC})。",
+)
+async def em_board_industry_name() -> AkTableOut:
+    try:
+        df = await run_in_threadpool(ak.stock_board_industry_name_em)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return _ak("stock_board_industry_name_em", {}, df)
+
+
+@router.get(
+    "/stock/em/board-industry/spot",
+    response_model=AkTableOut,
+    summary="行业板块-实时行情（东财）",
+    description="封装 `ak.stock_board_industry_spot_em`；`symbol` 为行业名。",
+)
+async def em_board_industry_spot(
+    symbol: str = Query("小金属", description="行业名称。例 小金属。"),
+) -> AkTableOut:
+    p = {"symbol": symbol}
+    try:
+        df = await run_in_threadpool(
+            lambda: ak.stock_board_industry_spot_em(symbol=symbol)
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return _ak("stock_board_industry_spot_em", p, df)
+
+
+@router.get(
+    "/stock/em/board-industry/cons",
+    response_model=AkTableOut,
+    summary="行业板块成份股（东财）",
+    description="封装 `ak.stock_board_industry_cons_em`；`symbol` 为行业名。",
+)
+async def em_board_industry_cons(
+    symbol: str = Query("小金属", description="行业名称。例 小金属。"),
+) -> AkTableOut:
+    p = {"symbol": symbol}
+    try:
+        df = await run_in_threadpool(
+            lambda: ak.stock_board_industry_cons_em(symbol=symbol)
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return _ak("stock_board_industry_cons_em", p, df)
+
+
+@router.get(
+    "/stock/em/board-industry/hist",
+    response_model=AkTableOut,
+    summary="行业板块-历史K线日频（东财）",
+    description=(
+        "封装 `ak.stock_board_industry_hist_em`；`period` 如 日k/周k/月k 与官方一致；"
+        "`adjust` 复权约定同 `stock_zh_a_hist`。"
+    ),
+)
+async def em_board_industry_hist(
+    symbol: str = Query("小金属", description="行业名称。例 小金属。"),
+    start_date: str = Query("20211201", description="开始 YYYYMMDD。"),
+    end_date: str = Query("20240222", description="结束 YYYYMMDD。"),
+    period: str = Query("日k", description="K 线周期，如 日k、周k、月k。与 AKShare 文档一致。"),
+    adjust: str = Query("", description="复权：空（不复权）/ qfq / hfq。"),
+) -> AkTableOut:
+    p = {
+        "symbol": symbol,
+        "start_date": start_date,
+        "end_date": end_date,
+        "period": period,
+        "adjust": adjust,
+    }
+    try:
+        df = await run_in_threadpool(
+            lambda: ak.stock_board_industry_hist_em(
+                symbol=symbol,
+                start_date=start_date,
+                end_date=end_date,
+                period=period,
+                adjust=adjust,
+            )
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return _ak("stock_board_industry_hist_em", p, df)
+
+
+@router.get(
+    "/stock/em/board-industry/hist-min",
+    response_model=AkTableOut,
+    summary="行业板块-历史分时/分钟K（东财）",
+    description="封装 `ak.stock_board_industry_hist_min_em`；`period` 为分钟，如 1, 5, 15。",
+)
+async def em_board_industry_hist_min(
+    symbol: str = Query("小金属", description="行业名称。例 小金属。"),
+    period: str = Query("1", description="分钟周期 1/5/15/30/60 等。与官方一致。"),
+) -> AkTableOut:
+    p = {"symbol": symbol, "period": period}
+    try:
+        df = await run_in_threadpool(
+            lambda: ak.stock_board_industry_hist_min_em(
+                symbol=symbol, period=period
+            )
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return _ak("stock_board_industry_hist_min_em", p, df)
