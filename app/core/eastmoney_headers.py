@@ -58,7 +58,7 @@ def _patched_session_request(self: Session, method: str, url: str | bytes, **kwa
         url_s = url.decode("utf-8", errors="replace")
     else:
         url_s = str(url)
-    if "push2.eastmoney.com" in url_s:
+    if "push2.eastmoney.com" in url_s or "push2his.eastmoney.com" in url_s:
         extra = load_headers_from_file()
         if extra:
             h = dict(kwargs.get("headers") or {})
