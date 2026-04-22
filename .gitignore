@@ -3,9 +3,6 @@
 venv/
 env/
 
-# 东财自定义请求头（由 POST /api/v1/admin/eastmoney/headers 写入）
-.eastmoney.header
-
 # 环境变量（勿提交密钥）
 .env
 .env.local

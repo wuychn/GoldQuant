@@ -18,7 +18,10 @@ GoldQuant/
 │   │   └── v1/
 │   │       ├── router.py       # 聚合 v1 子路由
 │   │       └── endpoints/
-│   │           └── data.py     # 热度榜、资讯、同花顺等 HTTP 端点
+│   │           ├── stock_eastmoney.py  # 东财（行情、热度、资讯等）
+│   │           ├── stock_sina.py         # 新浪
+│   │           ├── stock_ths.py        # 同花顺（行业、热榜直连）
+│   │           └── eastmoney_config.py # 管理端：东财请求头
 │   ├── core/
 │   │   ├── config.py         # `pydantic-settings`：环境变量与 `.env`
 │   │   └── proxy.py          # 出站代理：写入进程 HTTP(S)_PROXY
@@ -179,17 +182,19 @@ chmod +x run.sh
 
 ## 响应格式约定
 
-除同花顺直连接口外，AKShare 封装接口统一返回类似结构：
+除同花顺直连接口外，多数 AKShare 封装接口（东财行情/热度/资讯、新浪、同花顺行业一览等）统一返回 DataFrame 转 JSON 结构：
 
 ```json
 {
   "source": "akshare.stock_hot_rank_em",
+  "params": {},
   "row_count": 100,
-  "rows": [ { "...": "..." } ]
+  "columns": ["列1", "列2"],
+  "rows": [ { "列1": "...", "列2": "..." } ]
 }
 ```
 
-雪球接口额外包含 `board`、`symbol` 字段；资讯接口包含查询所用的 `symbol`。
+`params` 为本次请求入参回显；`columns` 与每行 `rows` 的键一致。同花顺热榜直连仍返回 `source` / `raw` 等原结构（见上表）。
 
 HTTP **502** 通常表示上游抓取失败或返回异常，响应体中的 `detail` 为错误信息字符串。
 
