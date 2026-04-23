@@ -7,3 +7,4 @@ akshare==1.18.56
 httpx==0.28.1
 pandas==3.0.2
 pydantic-settings>=2.2.0,<3
+chardet>=5.0.0
