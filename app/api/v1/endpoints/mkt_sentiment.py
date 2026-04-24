@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.concurrency import run_in_threadpool
 
 from app.schemas.ak_table import AkTableOut
+from app.schemas.response import Response
 from app.utils.ak_response import wrap_ak_table
 
 router = APIRouter(tags=["市场情绪", "概况"])
@@ -18,13 +19,13 @@ def _ak(name: str, params: dict, df) -> AkTableOut:
 
 @router.get(
     "/stock/legu/market-activity",
-    response_model=AkTableOut,
+    response_model=Response,
     summary="赚钱效应分析（乐咕乐股）",
     description="封装 `ak.stock_market_activity_legu`，无入参。",
 )
-async def legu_market_activity() -> AkTableOut:
+async def legu_market_activity() -> Response:
     try:
         df = await run_in_threadpool(ak.stock_market_activity_legu)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return _ak("stock_market_activity_legu", {}, df)
+    return Response(data=_ak("stock_market_activity_legu", {}, df))

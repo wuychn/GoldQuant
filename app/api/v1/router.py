@@ -20,7 +20,7 @@ from app.api.v1.endpoints import (
     mkt_quotes,
     mkt_research,
     mkt_screens,
-    mkt_sentiment,
+    mkt_sentiment, quant_endpoint,
 )
 
 api_router = APIRouter()
@@ -40,3 +40,4 @@ api_router.include_router(mkt_disclosure.router)
 api_router.include_router(mkt_block.router)
 api_router.include_router(mkt_margin.router)
 api_router.include_router(mkt_config.router)
+api_router.include_router(quant_endpoint.router)

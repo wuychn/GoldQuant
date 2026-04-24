@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from app.core.eastmoney_headers import eastmoney_header_file_path, save_headers_to_file
+from app.schemas.response import Response
 
 router = APIRouter(prefix="/admin/eastmoney", tags=["admin"])
 
@@ -25,16 +26,21 @@ class EastmoneyHeaderItem(BaseModel):
         "整份配置会覆盖写入项目根目录下的 `.eastmoney.header`。"
         "已对 `requests` 打补丁：访问 **eastmoney.com** 时会从该文件读取并合并到请求头。"
     ),
+    response_model=Response,
 )
-async def set_eastmoney_headers(items: list[EastmoneyHeaderItem]) -> dict[str, Any]:
+async def set_eastmoney_headers(
+    items: list[EastmoneyHeaderItem],
+) -> Response:
     try:
         payload = [item.model_dump() for item in items]
         save_headers_to_file(payload)
     except OSError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     path = eastmoney_header_file_path()
-    return {
-        "ok": True,
-        "path": str(path),
-        "count": len(payload),
-    }
+    return Response(
+        data={
+            "ok": True,
+            "path": str(path),
+            "count": len(payload),
+        }
+    )

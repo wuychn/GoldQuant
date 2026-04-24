@@ -19,6 +19,7 @@ from app.schemas.ak_openapi import (
     ThsHotQueryDoc,
     field_desc,
 )
+from app.schemas.response import Response
 from app.utils.ak_response import wrap_ak_dataframe
 
 _BASE = "https://akshare.akfamily.xyz/data/stock/stock.html"
@@ -31,36 +32,40 @@ router = APIRouter(tags=["热度", "人气", "热榜"])
 
 @router.get(
     "/hot/eastmoney/surge",
-    response_model=EmSurgeOut,
+    response_model=Response,
     summary="A 股飙升榜",
     description=(
         "封装 `ak.stock_hot_up_em`（个股人气榜-飙升榜）。\n\n"
         f"文档：[飙升榜]({_BASE}#飙升榜-a股)。\n"
     ),
 )
-async def eastmoney_surge() -> EmSurgeOut:
+async def eastmoney_surge() -> Response:
     try:
         df = await run_in_threadpool(ak.stock_hot_up_em)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return wrap_ak_dataframe(EmSurgeOut, "stock_hot_up_em", {}, df)
+    return Response(
+        data=wrap_ak_dataframe(EmSurgeOut, "stock_hot_up_em", {}, df)
+    )
 
 
 @router.get(
     "/hot/eastmoney/popularity",
-    response_model=EmPopularityOut,
+    response_model=Response,
     summary="A 股个股人气榜（约前 100）",
     description=(
         "封装 `ak.stock_hot_rank_em`。\n\n"
         f"文档：[人气榜]({_BASE}#人气榜-a股)。"
     ),
 )
-async def eastmoney_popularity() -> EmPopularityOut:
+async def eastmoney_popularity() -> Response:
     try:
         df = await run_in_threadpool(ak.stock_hot_rank_em)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return wrap_ak_dataframe(EmPopularityOut, "stock_hot_rank_em", {}, df)
+    return Response(
+        data=wrap_ak_dataframe(EmPopularityOut, "stock_hot_rank_em", {}, df)
+    )
 
 
 async def hot_list_direct(
@@ -123,7 +128,7 @@ async def hot_list_direct(
 
 @router.get(
     "/hot/ths",
-    response_model=ThsHotOut,
+    response_model=Response,
     summary="热股列表（直连接口，可配 list_type 等）",
     description=(
         "直连热股 JSON。`params` 为转发到上游的查询子集；`limit` 仅截断本服务返回的 `stock_list`。"
@@ -144,15 +149,17 @@ async def hot_list_flexible(
         le=500,
         description=field_desc(ThsHotQueryDoc, "limit"),
     ),
-) -> ThsHotOut:
-    return await hot_list_direct(
-        settings, stock_type, time_type, list_type, limit
+) -> Response:
+    return Response(
+        data=await hot_list_direct(
+            settings, stock_type, time_type, list_type, limit
+        )
     )
 
 
 @router.get(
     "/hot/ths/popularity",
-    response_model=ThsHotOut,
+    response_model=Response,
     summary="热股-人气榜（直连接口）",
     description=(
         "固定查询：`stock_type=a`·`type=hour`·`list_type=normal`。"
@@ -167,13 +174,15 @@ async def hot_list_popularity(
         le=500,
         description=field_desc(ThsHotQueryDoc, "limit"),
     ),
-) -> ThsHotOut:
-    return await hot_list_direct(settings, "a", "hour", "normal", limit)
+) -> Response:
+    return Response(
+        data=await hot_list_direct(settings, "a", "hour", "normal", limit)
+    )
 
 
 @router.get(
     "/hot/ths/skyrocket",
-    response_model=ThsHotOut,
+    response_model=Response,
     summary="热股-人气飙升榜（直连接口）",
     description=(
         "固定查询：`stock_type=a`·`type=hour`·`list_type=skyrocket`。"
@@ -187,5 +196,7 @@ async def hot_list_skyrocket(
         le=500,
         description=field_desc(ThsHotQueryDoc, "limit"),
     ),
-) -> ThsHotOut:
-    return await hot_list_direct(settings, "a", "hour", "skyrocket", limit)
+) -> Response:
+    return Response(
+        data=await hot_list_direct(settings, "a", "hour", "skyrocket", limit)
+    )
