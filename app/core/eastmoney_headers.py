@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from time import sleep
 from typing import Any
 
 from requests.sessions import Session
@@ -58,12 +59,14 @@ def _patched_session_request(self: Session, method: str, url: str | bytes, **kwa
         url_s = url.decode("utf-8", errors="replace")
     else:
         url_s = str(url)
-    if "push2.eastmoney.com" in url_s:
-        extra = load_headers_from_file()
-        if extra:
+    extra = load_headers_from_file()
+    if extra:
+        if "https://push2.eastmoney.com" in url_s or "https://33.push2.eastmoney.com/api/qt/clist/get" in url_s:
             h = dict(kwargs.get("headers") or {})
             h.update(extra)
             kwargs["headers"] = h
+    if "eastmoney.com" in url_s:
+        sleep(3)
     return _ORIGINAL_SESSION_REQUEST(self, method, url, **kwargs)
 
 
