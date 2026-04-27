@@ -36,8 +36,10 @@ def format_percent(num):
     """
      四舍五入保留2位小数，并在最后追加%
      """
-    res = round(num, 2)
-    return f"{res}%"
+    if num:
+        res = round(num, 2)
+        return f"{res}%"
+    return ''
 
 
 def today():

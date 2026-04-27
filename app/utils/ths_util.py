@@ -85,19 +85,24 @@ async def stock_skyrocket(settings):
     )
     result = []
     for s in r['data']['stock_list']:
-        code_ = s['code']
-        if code_.startswith('60') or code_.startswith('0') or code_.startswith('3'):
-            result.append({
-                '市场': '深证' if s['market'] == 33 else '上证',
-                '股票代码': s['code'],
-                '股票名称': s['name'],
-                '热度': str(float(s['rate'])).replace(".0", ''),
-                '涨跌': format_percent(s['rise_and_fall']),
-                '人气排名': s['order'],
-                '人气排名变化': f'上升{s["hot_rank_chg"]}位' if s['hot_rank_chg'] > 0 else '无变化' if s['hot_rank_chg'] == 0 else f'下降{s["hot_rank_chg"]}位',
-                '概念': s['tag']['concept_tag'] if 'tag' in s and 'concept_tag' in s['tag'] else '无',
-                '连扳情况': s['tag']['popularity_tag'] if 'tag' in s and 'popularity_tag' in s['tag'] else '无'
-            })
+        try:
+            code_ = s['code']
+            if code_.startswith('60') or code_.startswith('0') or code_.startswith('3'):
+                result.append({
+                    '市场': '深证' if s['market'] == 33 else '上证',
+                    '股票代码': s['code'],
+                    '股票名称': s['name'],
+                    '热度': str(float(s['rate'])).replace(".0", ''),
+                    '涨跌': format_percent(s['rise_and_fall']),
+                    '人气排名': s['order'],
+                    '人气排名变化': f'上升{s["hot_rank_chg"]}位' if s['hot_rank_chg'] > 0 else '无变化' if s[
+                                                                                                               'hot_rank_chg'] == 0 else f'下降{s["hot_rank_chg"]}位',
+                    '概念': s['tag']['concept_tag'] if 'tag' in s and 'concept_tag' in s['tag'] else '无',
+                    '连扳情况': s['tag']['popularity_tag'] if 'tag' in s and 'popularity_tag' in s['tag'] else '无'
+                })
+        except Exception as e:
+            print(e)
+            pass
     return result
 
 

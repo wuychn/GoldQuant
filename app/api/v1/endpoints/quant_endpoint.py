@@ -143,7 +143,8 @@ async def during_market(settings: SettingsDep) -> Response:
                     thsrqg.append(item)
                 except Exception as e:
                     print(e)
-        except:
+        except Exception as e:
+            print(e)
             thsrqg = []
 
         # 同花顺人气飙升榜
@@ -166,7 +167,8 @@ async def during_market(settings: SettingsDep) -> Response:
                 except Exception as e:
                     print(e)
                     pass
-        except:
+        except Exception as e:
+            print(e)
             thsrqbsb = []
 
         result = {
