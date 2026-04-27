@@ -10,8 +10,8 @@ from app.api.deps import SettingsDep
 from app.schemas.response import Response
 from app.utils.common_util import list_to_dict
 from app.utils.dataframe import dataframe_to_records
-from app.utils.dfcf_util import ztgc
-from app.utils.ths_util import stock_fund_flow_concept
+from app.utils.dfcf_util import ztgc, jbxx, pk, xw
+from app.utils.ths_util import stock_fund_flow_concept, hot_stock, stock_skyrocket
 
 router = APIRouter(tags=["量化入口"])
 
@@ -124,41 +124,61 @@ async def during_market(settings: SettingsDep) -> Response:
         except:
             zttj = None
 
+        # 获取同花顺人气股/人气飙升榜/自选/持仓
+        thsrqg = []
+        try:
+            hot_stocks = await hot_stock(settings=settings)
+            # 取前10
+            hot_stocks = hot_stocks[:10]
+            for item in hot_stocks:
+                try:
+                    symbol = item['股票代码']
+                    # 基本信息
+                    jbxx_ = jbxx(symbol)
+                    pk_ = pk(symbol)
+                    xw_ = xw(symbol)
+                    item['盘口'] = pk_
+                    item['新闻'] = xw_
+                    item['基本信息'] = jbxx_
+                    thsrqg.append(item)
+                except Exception as e:
+                    print(e)
+        except:
+            thsrqg = []
+
+        # 同花顺人气飙升榜
+        thsrqbsb = []
+        try:
+            stock_skyrockets = await stock_skyrocket(settings=settings)
+            # 取前10
+            stock_skyrockets = stock_skyrockets[:10]
+            for item in stock_skyrockets:
+                try:
+                    symbol = item['股票代码']
+                    # 基本信息
+                    jbxx_ = jbxx(symbol)
+                    pk_ = pk(symbol)
+                    xw_ = xw(symbol)
+                    item['盘口'] = pk_
+                    item['新闻'] = xw_
+                    item['基本信息'] = jbxx_
+                    thsrqbsb.append(item)
+                except Exception as e:
+                    print(e)
+                    pass
+        except:
+            thsrqbsb = []
+
         result = {
             "大盘指数": dpzs,
             "赚钱效应": zqxy,
             "今日涨幅前十概念": jrzfqsgn,
             "今日资金流入前十概念": jrzjlrqsgn,
-            "涨停统计": zttj
+            "涨停统计": zttj,
+            "同花顺人气股": thsrqg,
+            "人气飙升榜": thsrqbsb
         }
 
-        # 涨停池/连扳股（从结果筛选？）
-        # ztgc = list_to_dict(dataframe_to_records(await run_in_threadpool(lambda: ak.stock_zt_pool_em(date="20260424"))))
-
-        # 个股基本信息
-        # ggjbxx = list_to_dict(dataframe_to_records(await run_in_threadpool(lambda: ak.stock_individual_info_em(symbol="002580"))))
-
-        # 个股买卖报价（买卖盘口）
-        # ggmmbj = list_to_dict(dataframe_to_records(await run_in_threadpool(lambda: ak.stock_bid_ask_em(symbol="002580"))))
-
-        # 个股历史行情
-        # gglshq = dataframe_to_records(await run_in_threadpool(lambda: ak.stock_zh_a_hist(symbol="002580", start_date="20260420", end_date="20260424")))
-
-        # 个股龙虎榜日期
-        # gglhbrq = dataframe_to_records(await run_in_threadpool(lambda: ak.stock_lhb_stock_detail_date_em(symbol="002580")))
-
-        # 个股龙虎榜详情
-        # gglhbmr = dataframe_to_records(await run_in_threadpool(lambda: ak.stock_lhb_stock_detail_em(symbol="002580", date="20260423", flag='买入')))
-        # gglhbmc = dataframe_to_records(await run_in_threadpool(lambda: ak.stock_lhb_stock_detail_em(symbol="002580", date="20260423", flag='卖出')))
-
-        # 个股新闻
-        # ggxw = dataframe_to_records(await run_in_threadpool(lambda: ak.stock_news_em(symbol="002580")))
-
-        # 集合镜像（不存在）
-        # jjjj = dataframe_to_records(await run_in_threadpool(ak.stock_call_auction_em))
-
-        # 美股
-        # mgzd = dataframe_to_records(await run_in_threadpool(ak.stock_us_spot))
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     return Response(data=result)

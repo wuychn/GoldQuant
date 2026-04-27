@@ -1,37 +1,74 @@
+import json
+
 import akshare as ak
 
-from app.utils.common_util import sort_by_field_desc_and_limit, today, get_val, set_field_value
+from app.utils.common_util import sort_by_field_desc_and_limit, today, get_val, set_field_value, list_to_dict, \
+    today_before
 from app.utils.dataframe import dataframe_to_records
 
 
-def ggxxcx(symbol):
+def jbxx(symbol):
     """
-    个股信息查询（东财）
+    基本信息
     :return:
     """
-    return ak.stock_individual_info_em(symbol=str(symbol))
+    return list_to_dict(dataframe_to_records(ak.stock_individual_info_em(symbol=str(symbol))))
 
 
-def bsb():
+def pk(symbol):
     """
-    飙升榜（东财）
-    :return:
-    """
-    return ak.stock_hot_up_em()
-
-
-def hqbj(symbol):
-    """
-    行情报价（买卖队列、涨跌幅等）
+    盘口
     :param symbol:
     :return:
     """
-    return ak.stock_bid_ask_em(symbol=str(symbol))
+    records = dataframe_to_records(ak.stock_bid_ask_em(symbol=str(symbol)))
+    result = []
+    for record in records:
+        item_ = record['item']
+        item_ = item_.replace('buy_', '买').replace('sell_', '卖').replace('_vol', '量（单位：手）')
+        record['item'] = item_
+        result.append(record)
+    return list_to_dict(result)
 
 
-def zfqsgn():
-    records = dataframe_to_records(ak.stock_board_concept_name_em())
-    return sort_by_field_desc_and_limit(records, "涨跌幅")
+def lshq(symbol):
+    """
+    历史行情
+    :param symbol:
+    :return:
+    """
+    # 使用东方财富
+    return dataframe_to_records(ak.stock_zh_a_hist(symbol=str(symbol), start_date=today_before(5), end_date=today()))
+    # 可以使用使用新浪
+    # ak.stock_zh_a_daily()
+
+
+def lhbrq(symbol):
+    """
+    龙虎榜日期
+    :return:
+    """
+    return dataframe_to_records(ak.stock_lhb_stock_detail_date_em(symbol=str(symbol)))
+
+
+def lhbxq(symbol, date, type_):
+    """
+    龙虎榜详情
+    :param symbol:
+    :param date:
+    :param type_:
+    :return:
+    """
+    return dataframe_to_records(ak.stock_lhb_stock_detail_em(symbol=str(symbol), date=date, flag=type_))
+
+
+def xw(symbol):
+    """
+    个股新闻
+    :param symbol:
+    :return:
+    """
+    return dataframe_to_records(ak.stock_news_em(symbol=str(symbol)))
 
 
 def ztgc():
@@ -53,8 +90,33 @@ def ztgc():
     return sort_by_field_desc_and_limit(filtered_records, "连板数", limit=1000)
 
 
+def ggjbxx(symbol):
+    """
+    获取个股基本信息
+    :param symbol:
+    :return:
+    """
+    jbxx_ = jbxx(symbol)
+
+    # 个股买卖报价（买卖盘口）
+    pk_ = pk(symbol)
+
+    # 个股历史行情
+    lshq_ = lshq(symbol)
+
+    # 个股龙虎榜日期
+    lhbrq_ = lhbrq(symbol)
+
+    # 个股龙虎榜详情
+    lhbmr = lhbxq(symbol, today(), '买入')
+    lhbmc = lhbxq(symbol, today(), '卖出')
+
+    # 个股新闻
+    xw_ = xw(symbol)
+
+
 if __name__ == "__main__":
-    print(ggxxcx(600519))
+    print(json.dumps(jbxx(600519), ensure_ascii=False, indent=2))
     # print(hqbj_dc(600519))
     # print(hqbj("002580"))
     # print(json.dumps(ztgc(), ensure_ascii=False, indent=2))

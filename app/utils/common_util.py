@@ -46,6 +46,17 @@ def today():
     """
     return datetime.now().strftime("%Y%m%d")
 
+def today():
+    """
+    获取当日日期
+    """
+    return datetime.now().strftime("%Y%m%d")
+
+def today_before(days):
+    from datetime import datetime, timedelta
+    day5 = datetime.now() - timedelta(days=days)
+    return day5.strftime("%Y%m%d")
+
 
 def sort_by_field_desc_and_limit(
         data_list: List[Any],
