@@ -70,7 +70,7 @@ async def hot_stock(settings):
                 '人气排名变化': f'上升{s["hot_rank_chg"]}位' if s['hot_rank_chg'] > 0 else '无变化' if s[
                                                                                                            'hot_rank_chg'] == 0 else f'下降{s["hot_rank_chg"]}位',
                 '所属概念': s['tag']['concept_tag'] if 'tag' in s and 'concept_tag' in s['tag'] else '无',
-                '连扳情况': s['tag']['popularity_tag'] if 'tag' in s and 'popularity_tag' in s['tag'] else '无'
+                '连板情况': s['tag']['popularity_tag'] if 'tag' in s and 'popularity_tag' in s['tag'] else '无'
             })
     return result
 
@@ -98,7 +98,7 @@ async def stock_skyrocket(settings):
                     '人气排名变化': f'上升{s["hot_rank_chg"]}位' if s['hot_rank_chg'] > 0 else '无变化' if s[
                                                                                                                'hot_rank_chg'] == 0 else f'下降{s["hot_rank_chg"]}位',
                     '概念': s['tag']['concept_tag'] if 'tag' in s and 'concept_tag' in s['tag'] else '无',
-                    '连扳情况': s['tag']['popularity_tag'] if 'tag' in s and 'popularity_tag' in s['tag'] else '无'
+                    '连板情况': s['tag']['popularity_tag'] if 'tag' in s and 'popularity_tag' in s['tag'] else '无'
                 })
         except Exception as e:
             print(e)
