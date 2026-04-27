@@ -90,6 +90,13 @@ def ztgc():
     return sort_by_field_desc_and_limit(filtered_records, "连板数", limit=1000)
 
 
+def zj(symbol):
+    """
+    个股资金
+    """
+    return ak.stock_individual_fund_flow(stock=str(symbol), market="sh" if str(symbol).startswith("6") else "sz")
+
+
 def ggjbxx(symbol):
     """
     获取个股基本信息
