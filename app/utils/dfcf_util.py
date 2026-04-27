@@ -94,7 +94,22 @@ def zj(symbol):
     """
     个股资金
     """
-    return ak.stock_individual_fund_flow(stock=str(symbol), market="sh" if str(symbol).startswith("6") else "sz")
+    return dataframe_to_records(
+        ak.stock_individual_fund_flow(stock=str(symbol), market="sh" if str(symbol).startswith("6") else "sz"))
+
+
+def hsgtzj():
+    """
+    沪深港通资金流向
+    """
+    return dataframe_to_records(ak.stock_hsgt_fund_flow_summary_em())
+
+
+def cmfb(symbol):
+    """
+    筹码分布
+    """
+    return dataframe_to_records(ak.stock_cyq_em(symbol=str(symbol), adjust=""))
 
 
 def ggjbxx(symbol):

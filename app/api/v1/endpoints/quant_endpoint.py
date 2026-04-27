@@ -13,7 +13,7 @@ from app.api.deps import SettingsDep
 from app.schemas.response import Response
 from app.utils.common_util import list_to_dict, today
 from app.utils.dataframe import dataframe_to_records
-from app.utils.dfcf_util import ztgc, jbxx, pk, xw, zj, lhbxq
+from app.utils.dfcf_util import cmfb, hsgtzj, jbxx, lhbxq, pk, xw, zj, ztgc
 from app.utils.ths_util import stock_fund_flow_concept, hot_stock, stock_skyrocket
 
 logger = logging.getLogger(__name__)
@@ -99,6 +99,14 @@ async def _ztgc_or_none(context: str):
         return None
 
 
+async def _hsgtzj_or_none(context: str):
+    try:
+        return await run_in_threadpool(hsgtzj)
+    except Exception:
+        _log_api_error(context)
+        return None
+
+
 async def _enrich_ths_stock_list(
     settings: SettingsDep,
     fetch_stocks: Callable[..., Awaitable[list]],
@@ -133,10 +141,15 @@ async def _enrich_ths_stock_list(
                 f"{list_context} dfcf.zj symbol={symbol!r}",
                 lambda: zj(symbol),
             )
+            cmfb_ = _sync_call_or_none(
+                f"{list_context} dfcf.cmfb symbol={symbol!r}",
+                lambda: cmfb(symbol),
+            )
             item["盘口"] = pk_
             item["新闻"] = xw_
             item["基本信息"] = jbxx_
             item["资金流入流出"] = zj_
+            item["筹码分布"] = cmfb_
 
             if with_lhb:
                 lhbmr = _sync_call_or_none(
@@ -261,6 +274,7 @@ async def during_market(settings: SettingsDep) -> Response:
         "流入资金",
     )
     zttj = await _ztgc_or_none(f"{route} | dfcf.ztgc")
+    hsgtzjlx = await _hsgtzj_or_none(f"{route} | dfcf.hsgtzj")
     thsrqg = await _enrich_ths_stock_list(
         settings,
         hot_stock,
@@ -278,6 +292,7 @@ async def during_market(settings: SettingsDep) -> Response:
         "大盘指数": dpzs,
         "赚钱效应": zqxy,
         "大盘资金流": zjl,
+        "沪深港通资金流向": hsgtzjlx,
         "今日涨幅前十概念": jrzfqsgn,
         "今日资金流入前十概念": jrzjlrqsgn,
         "涨停统计": zttj,
@@ -309,6 +324,7 @@ async def post_market(settings: SettingsDep) -> Response:
         "流入资金",
     )
     zttj = await _ztgc_or_none(f"{route} | dfcf.ztgc")
+    hsgtzjlx = await _hsgtzj_or_none(f"{route} | dfcf.hsgtzj")
     thsrqg = await _enrich_ths_stock_list(
         settings,
         hot_stock,
@@ -326,6 +342,7 @@ async def post_market(settings: SettingsDep) -> Response:
         "大盘指数": dpzs,
         "赚钱效应": zqxy,
         "大盘资金流": zjl,
+        "沪深港通资金流向": hsgtzjlx,
         "今日涨幅前十概念": jrzfqsgn,
         "今日资金流入前十概念": jrzjlrqsgn,
         "涨停统计": zttj,
