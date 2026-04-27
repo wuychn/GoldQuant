@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Awaitable, Callable
+
 import akshare as ak
 from fastapi import APIRouter
 from fastapi.concurrency import run_in_threadpool
@@ -13,7 +16,144 @@ from app.utils.dataframe import dataframe_to_records
 from app.utils.dfcf_util import ztgc, jbxx, pk, xw, zj, lhbxq
 from app.utils.ths_util import stock_fund_flow_concept, hot_stock, stock_skyrocket
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(tags=["量化入口"])
+
+_INDEX_SERIAL_WHITELIST = (1, 2, 4)
+
+
+def _log_api_error(context: str) -> None:
+    """记录上游/本地调用失败，带固定上下文便于定位，避免单点异常拖垮整次聚合。"""
+    logger.exception("量化数据接口异常 [%s]", context)
+
+
+def _sync_call_or_none(context: str, fn: Callable[[], object]) -> object | None:
+    try:
+        return fn()
+    except Exception:
+        _log_api_error(context)
+        return None
+
+
+async def _dataframe_records_or_none(context: str, fetch: Callable[..., object]) -> list | None:
+    try:
+        return dataframe_to_records(await run_in_threadpool(fetch))
+    except Exception:
+        _log_api_error(context)
+        return None
+
+
+async def _important_index_spot(context: str) -> list | None:
+    try:
+        raw = dataframe_to_records(
+            await run_in_threadpool(lambda: ak.stock_zh_index_spot_em(symbol="沪深重要指数"))
+        )
+        return [item for item in raw if item["序号"] in _INDEX_SERIAL_WHITELIST]
+    except Exception:
+        _log_api_error(context)
+        return None
+
+
+async def _last_market_fund_flow_row(context: str) -> list | None:
+    try:
+        return dataframe_to_records(await run_in_threadpool(ak.stock_market_fund_flow))[-1:]
+    except Exception:
+        _log_api_error(context)
+        return None
+
+
+async def _earning_effect_pre_market(context: str) -> dict | None:
+    try:
+        return list_to_dict(
+            dataframe_to_records(await run_in_threadpool(ak.stock_market_activity_legu))
+        )
+    except Exception:
+        _log_api_error(context)
+        return None
+
+
+async def _earning_effect_intraday(context: str) -> dict | None:
+    try:
+        return list_to_dict(
+            dataframe_to_records(await run_in_threadpool(lambda: ak.stock_market_activity_legu()))
+        )
+    except Exception:
+        _log_api_error(context)
+        return None
+
+
+async def _stock_fund_flow_concept_or_none(context: str, rank_by: str):
+    try:
+        return await stock_fund_flow_concept("即时", rank_by)
+    except Exception:
+        _log_api_error(f"{context} rank_by={rank_by!r}")
+        return None
+
+
+async def _ztgc_or_none(context: str):
+    try:
+        return ztgc()
+    except Exception:
+        _log_api_error(context)
+        return None
+
+
+async def _enrich_ths_stock_list(
+    settings: SettingsDep,
+    fetch_stocks: Callable[..., Awaitable[list]],
+    *,
+    with_lhb: bool,
+    list_context: str,
+) -> list:
+    out: list = []
+    try:
+        rows = await fetch_stocks(settings=settings)
+        rows = rows[:10]
+        for item in rows:
+            try:
+                symbol = item["股票代码"]
+            except Exception:
+                _log_api_error(f"{list_context} read_symbol item_keys={list(item)!r}")
+                continue
+
+            jbxx_ = _sync_call_or_none(
+                f"{list_context} dfcf.jbxx symbol={symbol!r}",
+                lambda: jbxx(symbol),
+            )
+            pk_ = _sync_call_or_none(
+                f"{list_context} dfcf.pk symbol={symbol!r}",
+                lambda: pk(symbol),
+            )
+            xw_ = _sync_call_or_none(
+                f"{list_context} dfcf.xw symbol={symbol!r}",
+                lambda: xw(symbol),
+            )
+            zj_ = _sync_call_or_none(
+                f"{list_context} dfcf.zj symbol={symbol!r}",
+                lambda: zj(symbol),
+            )
+            item["盘口"] = pk_
+            item["新闻"] = xw_
+            item["基本信息"] = jbxx_
+            item["资金流入流出"] = zj_
+
+            if with_lhb:
+                lhbmr = _sync_call_or_none(
+                    f"{list_context} dfcf.lhbxq buy symbol={symbol!r}",
+                    lambda: lhbxq(symbol, today(), "买入"),
+                )
+                lhbmc = _sync_call_or_none(
+                    f"{list_context} dfcf.lhbxq sell symbol={symbol!r}",
+                    lambda: lhbxq(symbol, today(), "卖出"),
+                )
+                item["龙虎榜"] = {"买入": lhbmr, "卖出": lhbmc}
+
+            out.append(item)
+    except Exception:
+        _log_api_error(f"{list_context}.fetch_list")
+        out = []
+    return out
 
 
 @router.get(
@@ -26,41 +166,39 @@ async def news():
     """
     新闻，每30分钟执行一次，使用AI总结后保存到当日重要资讯中
     """
-    # 财经早餐
-    try:
-        cjzc = dataframe_to_records(await run_in_threadpool(ak.stock_info_cjzc_em))
-    except Exception as e:
-        print(e)
-        cjzc = None
+    cjzc = await _dataframe_records_or_none(
+        "GET /quant/market/news | ak.stock_info_cjzc_em",
+        ak.stock_info_cjzc_em,
+    )
 
-    # 全球财经快讯（东方财富）
-    cjzx = []
+    cjzx: list = []
     try:
-        qqcjzx = dataframe_to_records(await run_in_threadpool(ak.stock_info_global_em))
-        cjzx.append(qqcjzx)
-    except Exception as e:
-        print(e)
-        qqcjzx = None
+        cjzx.append(
+            dataframe_to_records(
+                await run_in_threadpool(ak.stock_info_global_em)
+            )
+        )
+    except Exception:
+        _log_api_error("GET /quant/market/news | ak.stock_info_global_em")
 
-    # 全球财经快讯（新浪）
     try:
-        qqcjzxxl = dataframe_to_records(await run_in_threadpool(ak.stock_info_global_sina))
-        cjzx.append(qqcjzxxl)
-    except Exception as e:
-        print(e)
-        qqcjzxxl = None
+        cjzx.append(
+            dataframe_to_records(
+                await run_in_threadpool(ak.stock_info_global_sina)
+            )
+        )
+    except Exception:
+        _log_api_error("GET /quant/market/news | ak.stock_info_global_sina")
 
-    # 财联社电报
-    try:
-        cls = dataframe_to_records(await run_in_threadpool(ak.stock_info_global_cls))
-    except Exception as e:
-        print(e)
-        cls = None
+    cls = await _dataframe_records_or_none(
+        "GET /quant/market/news | ak.stock_info_global_cls",
+        ak.stock_info_global_cls,
+    )
 
     result = {
-        "财经早餐": cjzx,
+        "财经早餐": cjzc,
         "全球财经快讯": cjzx,
-        "财联社电报": cls
+        "财联社电报": cls,
     }
 
     return Response(data=result)
@@ -83,33 +221,15 @@ async def pre_market(settings: SettingsDep) -> Response:
     5、给出判断
     6、保存到当日盘前数据，避免再次调用接口
     """
-    # 东方财富大盘指数（实时）
-    try:
-        dpzs = [item for item in dataframe_to_records(
-            await run_in_threadpool(lambda: ak.stock_zh_index_spot_em(symbol="沪深重要指数"))) if
-                item["序号"] in [1, 2, 4]]
-    except Exception as e:
-        print(e)
-        dpzs = None
-
-    # 大盘资金流
-    try:
-        zjl = dataframe_to_records(await run_in_threadpool(ak.stock_market_fund_flow))[-1:]
-    except Exception as e:
-        print(e)
-        zjl = None
-
-    # 赚钱效应分析（近实时）
-    try:
-        zqxy = list_to_dict(dataframe_to_records(await run_in_threadpool(ak.stock_market_activity_legu)))
-    except Exception as e:
-        print(e)
-        zqxy = None
+    route = "GET /quant/market/pre_market"
+    dpzs = await _important_index_spot(f"{route} | ak.stock_zh_index_spot_em")
+    zjl = await _last_market_fund_flow_row(f"{route} | ak.stock_market_fund_flow")
+    zqxy = await _earning_effect_pre_market(f"{route} | ak.stock_market_activity_legu")
 
     result = {
         "大盘指数": dpzs,
         "大盘资金流": zjl,
-        "赚钱效应": zqxy
+        "赚钱效应": zqxy,
     }
     return Response(data=result)
 
@@ -128,100 +248,31 @@ async def during_market(settings: SettingsDep) -> Response:
     4、概念资金流
     5、自选/持仓/人气股/飙升榜以及个股的资金流
     """
-    # 东方财富大盘指数（实时）
-    try:
-        dpzs = [item for item in dataframe_to_records(
-            await run_in_threadpool(lambda: ak.stock_zh_index_spot_em(symbol="沪深重要指数"))) if
-                item["序号"] in [1, 2, 4]]
-    except Exception as e:
-        print(e)
-        dpzs = None
-
-    # 赚钱效应（是不是实时？）
-    try:
-        zqxy = list_to_dict(dataframe_to_records(await run_in_threadpool(lambda: ak.stock_market_activity_legu())))
-    except Exception as e:
-        print(e)
-        zqxy = None
-
-    # 大盘资金流
-    try:
-        zjl = dataframe_to_records(await run_in_threadpool(ak.stock_market_fund_flow))[-1:]
-    except Exception as e:
-        print(e)
-        zjl = None
-
-    # 今日涨幅前十概念
-    try:
-        jrzfqsgn = await stock_fund_flow_concept('即时', '行业-涨跌幅')
-    except Exception as e:
-        print(e)
-        jrzfqsgn = None
-
-    # 今日资金流入前十概念
-    try:
-        jrzjlrqsgn = await stock_fund_flow_concept('即时', '流入资金')
-    except Exception as e:
-        print(e)
-        jrzjlrqsgn = None
-
-    # 涨停统计
-    try:
-        zttj = ztgc()
-    except Exception as e:
-        print(e)
-        zttj = None
-
-    # 获取同花顺人气股/人气飙升榜/自选/持仓
-    thsrqg = []
-    try:
-        hot_stocks = await hot_stock(settings=settings)
-        # 取前10
-        hot_stocks = hot_stocks[:10]
-        for item in hot_stocks:
-            try:
-                symbol = item['股票代码']
-                # 基本信息
-                jbxx_ = jbxx(symbol)
-                pk_ = pk(symbol)
-                xw_ = xw(symbol)
-                zj_ = zj(symbol)
-                item['盘口'] = pk_
-                item['新闻'] = xw_
-                item['基本信息'] = jbxx_
-                item['资金流入流出'] = zj_
-                thsrqg.append(item)
-            except Exception as e:
-                print(e)
-    except Exception as e:
-        print(e)
-        thsrqg = []
-
-    # 同花顺人气飙升榜
-    thsrqbsb = []
-    try:
-        stock_skyrockets = await stock_skyrocket(settings=settings)
-        # 取前10
-        stock_skyrockets = stock_skyrockets[:10]
-        for item in stock_skyrockets:
-            try:
-                symbol = item['股票代码']
-                # 基本信息
-                jbxx_ = jbxx(symbol)
-                pk_ = pk(symbol)
-                xw_ = xw(symbol)
-                zj_ = zj(symbol)
-                item['盘口'] = pk_
-                item['新闻'] = xw_
-                item['基本信息'] = jbxx_
-                item['资金流入流出'] = zj_
-                thsrqbsb.append(item)
-            except Exception as e:
-                print(e)
-                pass
-    except Exception as e:
-        print(e)
-        thsrqbsb = []
+    route = "GET /quant/market/during_market"
+    dpzs = await _important_index_spot(f"{route} | ak.stock_zh_index_spot_em")
+    zqxy = await _earning_effect_intraday(f"{route} | ak.stock_market_activity_legu()")
+    zjl = await _last_market_fund_flow_row(f"{route} | ak.stock_market_fund_flow")
+    jrzfqsgn = await _stock_fund_flow_concept_or_none(
+        f"{route} | ths.stock_fund_flow_concept",
+        "行业-涨跌幅",
+    )
+    jrzjlrqsgn = await _stock_fund_flow_concept_or_none(
+        f"{route} | ths.stock_fund_flow_concept",
+        "流入资金",
+    )
+    zttj = await _ztgc_or_none(f"{route} | dfcf.ztgc")
+    thsrqg = await _enrich_ths_stock_list(
+        settings,
+        hot_stock,
+        with_lhb=False,
+        list_context=f"{route} | ths.hot_stock",
+    )
+    thsrqbsb = await _enrich_ths_stock_list(
+        settings,
+        stock_skyrocket,
+        with_lhb=False,
+        list_context=f"{route} | ths.stock_skyrocket",
+    )
 
     result = {
         "大盘指数": dpzs,
@@ -233,7 +284,7 @@ async def during_market(settings: SettingsDep) -> Response:
         "同花顺人气股": thsrqg,
         "人气飙升榜": thsrqbsb,
         "自选股": None,
-        "持仓股": None
+        "持仓股": None,
     }
     return Response(data=result)
 
@@ -245,114 +296,31 @@ async def during_market(settings: SettingsDep) -> Response:
     description="盘后",
 )
 async def post_market(settings: SettingsDep) -> Response:
-    # 东方财富大盘指数（实时）
-    try:
-        dpzs = [item for item in dataframe_to_records(
-            await run_in_threadpool(lambda: ak.stock_zh_index_spot_em(symbol="沪深重要指数"))) if
-                item["序号"] in [1, 2, 4]]
-    except Exception as e:
-        print(e)
-        dpzs = None
-
-    # 赚钱效应（是不是实时？）
-    try:
-        zqxy = list_to_dict(dataframe_to_records(await run_in_threadpool(lambda: ak.stock_market_activity_legu())))
-    except Exception as e:
-        print(e)
-        zqxy = None
-
-    # 大盘资金流
-    try:
-        zjl = dataframe_to_records(await run_in_threadpool(ak.stock_market_fund_flow))[-1:]
-    except Exception as e:
-        print(e)
-        zjl = None
-
-    # 今日涨幅前十概念
-    try:
-        jrzfqsgn = await stock_fund_flow_concept('即时', '行业-涨跌幅')
-    except Exception as e:
-        print(e)
-        jrzfqsgn = None
-
-    # 今日资金流入前十概念
-    try:
-        jrzjlrqsgn = await stock_fund_flow_concept('即时', '流入资金')
-    except Exception as e:
-        print(e)
-        jrzjlrqsgn = None
-
-    # 涨停统计
-    try:
-        zttj = ztgc()
-    except Exception as e:
-        print(e)
-        zttj = None
-
-    # 获取同花顺人气股/人气飙升榜/自选/持仓
-    thsrqg = []
-    try:
-        hot_stocks = await hot_stock(settings=settings)
-        # 取前10
-        hot_stocks = hot_stocks[:10]
-        for item in hot_stocks:
-            try:
-                symbol = item['股票代码']
-                # 基本信息
-                jbxx_ = jbxx(symbol)
-                pk_ = pk(symbol)
-                xw_ = xw(symbol)
-                zj_ = zj(symbol)
-                lhbmr = lhbxq(symbol, today(), '买入')
-                lhbmc = lhbxq(symbol, today(), '卖出')
-                lhb = {
-                    "买入": lhbmr,
-                    "卖出": lhbmc
-                }
-                item['盘口'] = pk_
-                item['新闻'] = xw_
-                item['基本信息'] = jbxx_
-                item['资金流入流出'] = zj_
-                item['龙虎榜'] = lhb
-                thsrqg.append(item)
-            except Exception as e:
-                print(e)
-    except Exception as e:
-        print(e)
-        thsrqg = []
-
-    # 同花顺人气飙升榜
-    thsrqbsb = []
-    try:
-        stock_skyrockets = await stock_skyrocket(settings=settings)
-        # 取前10
-        stock_skyrockets = stock_skyrockets[:10]
-        for item in stock_skyrockets:
-            try:
-                symbol = item['股票代码']
-                # 基本信息
-                jbxx_ = jbxx(symbol)
-                pk_ = pk(symbol)
-                xw_ = xw(symbol)
-                zj_ = zj(symbol)
-                lhbmr = lhbxq(symbol, today(), '买入')
-                lhbmc = lhbxq(symbol, today(), '卖出')
-                lhb = {
-                    "买入": lhbmr,
-                    "卖出": lhbmc
-                }
-                item['盘口'] = pk_
-                item['新闻'] = xw_
-                item['基本信息'] = jbxx_
-                item['资金流入流出'] = zj_
-                item['龙虎榜'] = lhb
-                thsrqbsb.append(item)
-            except Exception as e:
-                print(e)
-                pass
-    except Exception as e:
-        print(e)
-        thsrqbsb = []
+    route = "GET /quant/market/post_market"
+    dpzs = await _important_index_spot(f"{route} | ak.stock_zh_index_spot_em")
+    zqxy = await _earning_effect_intraday(f"{route} | ak.stock_market_activity_legu()")
+    zjl = await _last_market_fund_flow_row(f"{route} | ak.stock_market_fund_flow")
+    jrzfqsgn = await _stock_fund_flow_concept_or_none(
+        f"{route} | ths.stock_fund_flow_concept",
+        "行业-涨跌幅",
+    )
+    jrzjlrqsgn = await _stock_fund_flow_concept_or_none(
+        f"{route} | ths.stock_fund_flow_concept",
+        "流入资金",
+    )
+    zttj = await _ztgc_or_none(f"{route} | dfcf.ztgc")
+    thsrqg = await _enrich_ths_stock_list(
+        settings,
+        hot_stock,
+        with_lhb=True,
+        list_context=f"{route} | ths.hot_stock",
+    )
+    thsrqbsb = await _enrich_ths_stock_list(
+        settings,
+        stock_skyrocket,
+        with_lhb=True,
+        list_context=f"{route} | ths.stock_skyrocket",
+    )
 
     result = {
         "大盘指数": dpzs,
@@ -364,6 +332,6 @@ async def post_market(settings: SettingsDep) -> Response:
         "同花顺人气股": thsrqg,
         "人气飙升榜": thsrqbsb,
         "自选股": None,
-        "持仓股": None
+        "持仓股": None,
     }
     return Response(data=result)
