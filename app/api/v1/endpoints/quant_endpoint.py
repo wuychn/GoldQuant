@@ -236,6 +236,7 @@ async def pre_market(settings: SettingsDep) -> Response:
     """
     route = "GET /quant/market/pre_market"
     dpzs = await _important_index_spot(f"{route} | ak.stock_zh_index_spot_em")
+    # TODO 开盘时获取到的是昨天的数据
     zjl = await _last_market_fund_flow_row(f"{route} | ak.stock_market_fund_flow")
     zqxy = await _earning_effect_pre_market(f"{route} | ak.stock_market_activity_legu")
 
@@ -263,8 +264,11 @@ async def during_market(settings: SettingsDep) -> Response:
     """
     route = "GET /quant/market/during_market"
     dpzs = await _important_index_spot(f"{route} | ak.stock_zh_index_spot_em")
+
+    # TODO 数据延迟太大，可能是昨天的数据
     zqxy = await _earning_effect_intraday(f"{route} | ak.stock_market_activity_legu()")
     zjl = await _last_market_fund_flow_row(f"{route} | ak.stock_market_fund_flow")
+
     jrzfqsgn = await _stock_fund_flow_concept_or_none(
         f"{route} | ths.stock_fund_flow_concept",
         "行业-涨跌幅",
