@@ -168,7 +168,7 @@ async def _enrich_ths_stock_list(
             if avg_5:
                 item["5日线"] = avg_5
             if avg_10:
-                item["10日线"] = avg_5
+                item["10日线"] = avg_10
 
             if with_lhb:
                 lhbmr = _sync_call_or_none(
