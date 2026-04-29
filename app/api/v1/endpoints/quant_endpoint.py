@@ -128,10 +128,10 @@ async def _enrich_ths_stock_list(
                 _log_api_error(f"{list_context} read_symbol item_keys={list(item)!r}")
                 continue
 
-            jbxx_ = _sync_call_or_none(
-                f"{list_context} dfcf.jbxx symbol={symbol!r}",
-                lambda: jbxx(symbol),
-            )
+            # jbxx_ = _sync_call_or_none(
+            #     f"{list_context} dfcf.jbxx symbol={symbol!r}",
+            #     lambda: jbxx(symbol),
+            # )
             pk_ = _sync_call_or_none(
                 f"{list_context} dfcf.pk symbol={symbol!r}",
                 lambda: pk(symbol),
@@ -176,7 +176,7 @@ async def _enrich_ths_stock_list(
                 avg_10 = cal_avg(hist_10, '收盘')
 
             item["盘口"] = pk_
-            item["基本信息"] = jbxx_
+            # item["基本信息"] = jbxx_
             item["资金流入流出"] = zj_
             item["筹码分布"] = cmfb_
             item["历史行情"] = hist_
