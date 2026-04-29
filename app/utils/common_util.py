@@ -1,6 +1,7 @@
 import datetime
+import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from functools import lru_cache
 from typing import Any, List
 from typing import Optional
@@ -163,7 +164,7 @@ def format_sci_to_decimal(num, decimal=2) -> float:
     return res
 
 
-def get_val(item: Any, field_name: str, default_value: Any) -> Any:
+def get_val(item: Any, field_name: str, default_value: Any = '') -> Any:
     # 自动判断 dict / 对象
     if isinstance(item, dict):
         return item.get(field_name, default_value)
@@ -205,10 +206,98 @@ def cal_avg(data, f):
 MAX_RETRIES = 2
 RETRY_DELAY = 0.5  # 秒
 
+# 进程内按年缓存：年份 -> 该年全部法定「休」日期（成功拉取聚合接口后写入；失败不写入以便重试）
+_YEAR_HOLIDAY_REST_CACHE: dict[int, frozenset[date]] = {}
+_YEAR_HOLIDAY_CACHE_LOCK = threading.Lock()
+
+
+def _fetch_year_holiday_rest_from_api(year: int) -> Optional[frozenset[date]]:
+    """仅 HTTP 拉取某年休日集合，不读不写内存缓存。"""
+    url = f"https://holiday.ailcc.com/api/holiday/year/{year}"
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            resp = requests.get(url, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+            if data.get("code") != 0:
+                if attempt == MAX_RETRIES:
+                    return None
+                time.sleep(RETRY_DELAY)
+                continue
+            out: set[date] = set()
+            for mmdd, info in (data.get("holiday") or {}).items():
+                if not info.get("holiday"):
+                    continue
+                mo, da = mmdd.split("-", 1)
+                out.add(date(year, int(mo), int(da)))
+            return frozenset(out)
+        except Exception:
+            if attempt == MAX_RETRIES:
+                return None
+            time.sleep(RETRY_DELAY)
+    return None
+
+
+def _get_year_holiday_rest_days(year: int) -> Optional[frozenset[date]]:
+    """
+    获取某年法定「休」日期集合：先读内存逐年缓存；无该年时再请求聚合接口，
+    成功则写入缓存，失败不写缓存便于下次调用重试。
+    """
+    with _YEAR_HOLIDAY_CACHE_LOCK:
+        if year in _YEAR_HOLIDAY_REST_CACHE:
+            return _YEAR_HOLIDAY_REST_CACHE[year]
+        rest = _fetch_year_holiday_rest_from_api(year)
+        if rest is not None:
+            _YEAR_HOLIDAY_REST_CACHE[year] = rest
+        return rest
+
+
+@lru_cache(maxsize=4096)
+def _is_real_workday_single_day_api(d: date) -> bool:
+    """兜底：单日 info 接口，仅 type==0 计为工作日（排除补班周末 type=4 等）。"""
+    url = f"https://holiday.ailcc.com/api/holiday/info/{d}"
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            resp = requests.get(url, timeout=5)
+            resp.raise_for_status()
+            data = resp.json()
+            if data.get("code") != 0:
+                return False
+            wtype = data.get("type", {}).get("type")
+            return wtype == 0
+        except Exception:
+            if attempt == MAX_RETRIES:
+                return False
+            time.sleep(RETRY_DELAY)
+    return False
+
+
+def _is_real_workday_cn(d: date) -> bool:
+    """
+    周一至周五：在法定「休」集合中则非工作日；周六日恒为否（不调接口）。
+    年份接口失败时对该日回退单日查询。
+    """
+    if d.weekday() >= 5:
+        return False
+    rest = _get_year_holiday_rest_days(d.year)
+    if rest is not None:
+        return d not in rest
+    return _is_real_workday_single_day_api(d)
+
 
 def get_n_workdays_ago(date_input: Optional[str] = None, n: int = 5) -> Optional[str]:
     """
-    从基准日期前一天开始，向前找第 n 个真实工作日（排除周末、法定节假日、补班周末）
+    求基准日之前（不含基准日）第 n 个真实工作日：
+    - 排除周末；
+    - 排除法定节假日；
+    - 排除调休补班日（与旧版单日接口 type=0 口径一致；周末补班不参与统计）。
+
+    节假日数据：按年在进程内存中缓存聚合结果，某年尚无缓存时再请求接口；年份接口失败时再对该日单日查询兜底。
+
+    至多先看近 n 个自然日组成的窗口 [基准日前第 n 天, 基准日前第 1 天]：在连续全是工作日时，
+    第 n 个工作日必落在该窗口内（必不晚于「基准日前第 n 个自然日」）。若节假日较多导致窗口内工作日不足，
+    再从「基准日前第 n+1 天」往更早回溯。
+
     返回格式: yyyyMMdd，找不到返回 None
     """
     # 解析基准日期
@@ -220,57 +309,55 @@ def get_n_workdays_ago(date_input: Optional[str] = None, n: int = 5) -> Optional
         except ValueError:
             return None
 
-    @lru_cache(maxsize=2048)
-    def is_real_workday(d: datetime.date) -> bool:
-        """调用 API 判断是否为真实工作日，带简单重试"""
-        url = f"https://holiday.ailcc.com/api/holiday/info/{d}"
-        for attempt in range(MAX_RETRIES + 1):
-            try:
-                resp = requests.get(url, timeout=5)
-                resp.raise_for_status()
-                data = resp.json()
-                if data.get("code") != 0:
-                    return False
-                wtype = data.get("type", {}).get("type")
-                # 只有 type=0 才是我们需要的工作日（排除补班周末 type=4）
-                return wtype == 0
-            except Exception as e:
-                if attempt == MAX_RETRIES:
-                    # 重试失败后，保守起见视为非工作日（避免程序崩溃）
-                    return False
-                time.sleep(RETRY_DELAY)
-        return False
+    if n <= 0:
+        return None
 
-    # 从基准日期的前一天开始
-    cur_date = base_date - timedelta(days=1)
-    workday_count = 0
+    # 预取可能涉及年份，正常情况整次调用仅 1～2 次年历请求
+    earliest = base_date - timedelta(days=max(n, 365))
+    for y in range(earliest.year, base_date.year + 1):
+        _get_year_holiday_rest_days(y)
+
     max_search_days = 365  # 最多回溯一年，防止无限循环
+    workday_count = 0
+
+    # 阶段一：只在 [base_date - n, base_date - 1]（至多 n 个自然日）内找；
+    # 至多 n 个连续自然日中最多出现 n 个工作日，若第 n 个工作日存在且中间无长假空档，必落在此区间内。
+    phase1_end = base_date - timedelta(days=n)
+    cur_date = base_date - timedelta(days=1)
 
     for _ in range(max_search_days):
-        # 步骤1: 本地快速判断周末（5=周六, 6=周日）
+        if cur_date < phase1_end:
+            break
         if cur_date.weekday() >= 5:
             cur_date -= timedelta(days=1)
             continue
-
-        # 步骤2: 非周末，调用 API 判断是否为真实工作日
-        if is_real_workday(cur_date):
+        if _is_real_workday_cn(cur_date):
             workday_count += 1
             if workday_count == n:
                 return cur_date.strftime('%Y%m%d')
+        cur_date -= timedelta(days=1)
 
-        # 继续向前移动一天
+    # 阶段二：区间内工作日不足（含节假日多时），从区间外再往更早回溯
+    for _ in range(max_search_days):
+        if cur_date.weekday() >= 5:
+            cur_date -= timedelta(days=1)
+            continue
+        if _is_real_workday_cn(cur_date):
+            workday_count += 1
+            if workday_count == n:
+                return cur_date.strftime('%Y%m%d')
         cur_date -= timedelta(days=1)
 
     return None
 
 
 if __name__ == "__main__":
-    # 测试用例
-    # print(get_n_workdays_ago("2026-10-08", n=5))  # 期望 20260923
-    # print(get_n_workdays_ago("2026-10-08", n=6))
-    # print(get_n_workdays_ago("2026-10-08", n=7))
-    # print(get_n_workdays_ago("2026-10-08", n=8))
-    # print(get_n_workdays_ago("2026-10-08", n=9))
+    # 测试用例（具体日期依赖节假日接口）
+    print(get_n_workdays_ago("2026-10-08", n=5))
+    print(get_n_workdays_ago("2026-10-08", n=6))
+    print(get_n_workdays_ago("2026-10-08", n=7))
+    print(get_n_workdays_ago("2026-10-08", n=8))
+    print(get_n_workdays_ago("2026-10-08", n=9))
 
     # 今天
     result = get_n_workdays_ago()

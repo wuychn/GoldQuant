@@ -148,6 +148,18 @@ async def _enrich_ths_stock_list(
                 lambda: hist(symbol),
             )
 
+            # 历史行情（周线）
+            weekly_ = _sync_call_or_none(
+                f"{list_context} dfcf.hist symbol={symbol!r}",
+                lambda: hist(symbol, 'weekly'),
+            )
+
+            # 历史行情（月线）
+            monthly_ = _sync_call_or_none(
+                f"{list_context} dfcf.hist symbol={symbol!r}",
+                lambda: hist(symbol, 'monthly'),
+            )
+
             # 计算五日均价
             avg_5 = None
             hist_5 = hist_[-5:]
@@ -165,6 +177,8 @@ async def _enrich_ths_stock_list(
             item["资金流入流出"] = zj_
             item["筹码分布"] = cmfb_
             item["历史行情"] = hist_
+            item["周线"] = weekly_
+            item["月线"] = monthly_
             if avg_5:
                 item["5日线"] = avg_5
             if avg_10:
@@ -248,7 +262,7 @@ async def news():
         cls_data = dataframe_to_records(await run_in_threadpool(ak.stock_info_global_cls))
         if cls_data:
             for d in cls_data:
-                if get_val(d, '标题') or get_val(d, '摘要'):
+                if get_val(d, '标题', '') or get_val(d, '摘要', ''):
                     news.append({
                         "标题": get_val(d, '标题'),
                         "摘要": get_val(d, '摘要'),
