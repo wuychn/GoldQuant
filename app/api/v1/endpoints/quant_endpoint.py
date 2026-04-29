@@ -11,7 +11,7 @@ from fastapi.concurrency import run_in_threadpool
 
 from app.api.deps import SettingsDep
 from app.schemas.response import Response
-from app.utils.common_util import list_to_dict, today
+from app.utils.common_util import list_to_dict, today, get_val
 from app.utils.dataframe import dataframe_to_records
 from app.utils.dfcf_util import cmfb, hsgtzj, jbxx, lhbxq, pk, xw, zj, ztgc
 from app.utils.ths_util import stock_fund_flow_concept, hot_stock, stock_skyrocket
@@ -108,11 +108,11 @@ async def _hsgtzj_or_none(context: str):
 
 
 async def _enrich_ths_stock_list(
-    settings: SettingsDep,
-    fetch_stocks: Callable[..., Awaitable[list]],
-    *,
-    with_lhb: bool,
-    list_context: str,
+        settings: SettingsDep,
+        fetch_stocks: Callable[..., Awaitable[list]],
+        *,
+        with_lhb: bool,
+        list_context: str,
 ) -> list:
     out: list = []
     try:
@@ -177,44 +177,60 @@ async def _enrich_ths_stock_list(
 )
 async def news():
     """
-    新闻，每30分钟执行一次，使用AI总结后保存到当日重要资讯中
+    新闻
     """
-    cjzc = await _dataframe_records_or_none(
-        "GET /quant/market/news | ak.stock_info_cjzc_em",
-        ak.stock_info_cjzc_em,
-    )
 
-    cjzx: list = []
+    news: list = []
+
+    # 全球财经资讯
     try:
-        cjzx.append(
-            dataframe_to_records(
-                await run_in_threadpool(ak.stock_info_global_em)
-            )
-        )
+        dfcf_data = dataframe_to_records(await run_in_threadpool(ak.stock_info_global_em))
+        if dfcf_data:
+            for d in dfcf_data:
+                if get_val(d, '标题') or get_val(d, '摘要'):
+                    news.append({
+                        "标题": get_val(d, '标题'),
+                        "摘要": get_val(d, '摘要'),
+                        "发布时间": get_val(d, '发布时间'),
+                        "链接": get_val(d, '链接'),
+                        "来源": '东方财富'
+                    })
     except Exception:
         _log_api_error("GET /quant/market/news | ak.stock_info_global_em")
 
+    # 同花顺财经
     try:
-        cjzx.append(
-            dataframe_to_records(
-                await run_in_threadpool(ak.stock_info_global_sina)
-            )
-        )
+        ths_data = dataframe_to_records(await run_in_threadpool(ak.stock_info_global_ths))
+        if ths_data:
+            for d in ths_data:
+                if get_val(d, '标题') or get_val(d, '内容'):
+                    news.append({
+                        "标题": get_val(d, '标题'),
+                        "摘要": get_val(d, '内容'),
+                        "发布时间": get_val(d, '发布时间'),
+                        "链接": get_val(d, '链接'),
+                        "来源": '同花顺'
+                    })
     except Exception:
-        _log_api_error("GET /quant/market/news | ak.stock_info_global_sina")
+        _log_api_error("GET /quant/market/news | ak.stock_info_global_ths")
 
-    cls = await _dataframe_records_or_none(
-        "GET /quant/market/news | ak.stock_info_global_cls",
-        ak.stock_info_global_cls,
-    )
+    # 财联社电报
+    try:
+        cls_data = dataframe_to_records(await run_in_threadpool(ak.stock_info_global_cls))
+        if cls_data:
+            for d in cls_data:
+                if get_val(d, '标题') or get_val(d, '摘要'):
+                    news.append({
+                        "标题": get_val(d, '标题'),
+                        "摘要": get_val(d, '摘要'),
+                        "发布时间": get_val(d, '发布日期').replace('T00:00:00.000', ' ') + get_val(d, '发布时间'),
+                        "链接": '',
+                        "来源": '财联社'
+                    })
+    except Exception:
+        _log_api_error("GET /quant/market/news | ak.stock_info_global_cls")
 
-    result = {
-        "财经早餐": cjzc,
-        "全球财经快讯": cjzx,
-        "财联社电报": cls,
-    }
-
-    return Response(data=result)
+    return Response(data=news)
 
 
 @router.get(

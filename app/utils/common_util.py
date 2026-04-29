@@ -48,11 +48,13 @@ def today():
     """
     return datetime.now().strftime("%Y%m%d")
 
+
 def today():
     """
     获取当日日期
     """
     return datetime.now().strftime("%Y%m%d")
+
 
 def today_before(days):
     from datetime import datetime, timedelta
@@ -150,7 +152,7 @@ def format_sci_to_decimal(num, decimal=2) -> float:
     return res
 
 
-def get_val(item: Any, field_name: str, default_value) -> Any:
+def get_val(item: Any, field_name: str, default_value='') -> Any:
     # 自动判断 dict / 对象
     if isinstance(item, dict):
         return item.get(field_name, default_value)
