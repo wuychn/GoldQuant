@@ -61,7 +61,7 @@ def _patched_session_request(self: Session, method: str, url: str | bytes, **kwa
         url_s = str(url)
     extra = load_headers_from_file()
     if extra:
-        if "https://push2.eastmoney.com" in url_s or "https://33.push2.eastmoney.com/api/qt/clist/get" in url_s:
+        if "https://push2.eastmoney.com" in url_s or "https://33.push2.eastmoney.com/api/qt/clist/get" in url_s or "https://push2his.eastmoney.com/api/qt/stock/kline/get" in url_s:
             h = dict(kwargs.get("headers") or {})
             h.update(extra)
             kwargs["headers"] = h

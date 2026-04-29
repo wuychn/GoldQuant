@@ -1,5 +1,11 @@
-from datetime import datetime
+import datetime
+import time
+from datetime import datetime, timedelta
+from functools import lru_cache
 from typing import Any, List
+from typing import Optional
+
+import requests
 
 
 def list_to_dict(data_list: list[dict]) -> dict:
@@ -57,6 +63,11 @@ def today():
 
 
 def today_before(days):
+    """
+    自然天，非工作日
+    :param days:
+    :return:
+    """
     from datetime import datetime, timedelta
     day5 = datetime.now() - timedelta(days=days)
     return day5.strftime("%Y%m%d")
@@ -152,7 +163,7 @@ def format_sci_to_decimal(num, decimal=2) -> float:
     return res
 
 
-def get_val(item: Any, field_name: str, default_value='') -> Any:
+def get_val(item: Any, field_name: str, default_value: Any) -> Any:
     # 自动判断 dict / 对象
     if isinstance(item, dict):
         return item.get(field_name, default_value)
@@ -176,3 +187,91 @@ def set_field_value(item: Any, field_name: str, value: Any) -> Any:
         setattr(item, field_name, value)
 
     return item
+
+
+def cal_avg(data, f):
+    try:
+        if data:
+            s = 0.0
+            for h in data:
+                s = s + get_val(h, f, 0)
+            return round(s / len(data), 2)
+    except Exception as e:
+        print(e)
+    return None
+
+
+# 可选：配置重试次数
+MAX_RETRIES = 2
+RETRY_DELAY = 0.5  # 秒
+
+
+def get_n_workdays_ago(date_input: Optional[str] = None, n: int = 5) -> Optional[str]:
+    """
+    从基准日期前一天开始，向前找第 n 个真实工作日（排除周末、法定节假日、补班周末）
+    返回格式: yyyyMMdd，找不到返回 None
+    """
+    # 解析基准日期
+    if date_input is None:
+        base_date = datetime.now().date()
+    else:
+        try:
+            base_date = datetime.strptime(date_input, '%Y-%m-%d').date()
+        except ValueError:
+            return None
+
+    @lru_cache(maxsize=2048)
+    def is_real_workday(d: datetime.date) -> bool:
+        """调用 API 判断是否为真实工作日，带简单重试"""
+        url = f"https://holiday.ailcc.com/api/holiday/info/{d}"
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                resp = requests.get(url, timeout=5)
+                resp.raise_for_status()
+                data = resp.json()
+                if data.get("code") != 0:
+                    return False
+                wtype = data.get("type", {}).get("type")
+                # 只有 type=0 才是我们需要的工作日（排除补班周末 type=4）
+                return wtype == 0
+            except Exception as e:
+                if attempt == MAX_RETRIES:
+                    # 重试失败后，保守起见视为非工作日（避免程序崩溃）
+                    return False
+                time.sleep(RETRY_DELAY)
+        return False
+
+    # 从基准日期的前一天开始
+    cur_date = base_date - timedelta(days=1)
+    workday_count = 0
+    max_search_days = 365  # 最多回溯一年，防止无限循环
+
+    for _ in range(max_search_days):
+        # 步骤1: 本地快速判断周末（5=周六, 6=周日）
+        if cur_date.weekday() >= 5:
+            cur_date -= timedelta(days=1)
+            continue
+
+        # 步骤2: 非周末，调用 API 判断是否为真实工作日
+        if is_real_workday(cur_date):
+            workday_count += 1
+            if workday_count == n:
+                return cur_date.strftime('%Y%m%d')
+
+        # 继续向前移动一天
+        cur_date -= timedelta(days=1)
+
+    return None
+
+
+if __name__ == "__main__":
+    # 测试用例
+    # print(get_n_workdays_ago("2026-10-08", n=5))  # 期望 20260923
+    # print(get_n_workdays_ago("2026-10-08", n=6))
+    # print(get_n_workdays_ago("2026-10-08", n=7))
+    # print(get_n_workdays_ago("2026-10-08", n=8))
+    # print(get_n_workdays_ago("2026-10-08", n=9))
+
+    # 今天
+    result = get_n_workdays_ago()
+    print(result)

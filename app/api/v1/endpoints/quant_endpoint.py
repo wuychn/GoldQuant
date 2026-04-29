@@ -11,9 +11,9 @@ from fastapi.concurrency import run_in_threadpool
 
 from app.api.deps import SettingsDep
 from app.schemas.response import Response
-from app.utils.common_util import list_to_dict, today, get_val
+from app.utils.common_util import list_to_dict, today, get_val, cal_avg
 from app.utils.dataframe import dataframe_to_records
-from app.utils.dfcf_util import cmfb, hsgtzj, jbxx, lhbxq, pk, xw, zj, ztgc
+from app.utils.dfcf_util import cmfb, hsgtzj, jbxx, lhbxq, pk, zj, ztgc, hist
 from app.utils.ths_util import stock_fund_flow_concept, hot_stock, stock_skyrocket
 
 logger = logging.getLogger(__name__)
@@ -133,10 +133,6 @@ async def _enrich_ths_stock_list(
                 f"{list_context} dfcf.pk symbol={symbol!r}",
                 lambda: pk(symbol),
             )
-            xw_ = _sync_call_or_none(
-                f"{list_context} dfcf.xw symbol={symbol!r}",
-                lambda: xw(symbol),
-            )
             zj_ = _sync_call_or_none(
                 f"{list_context} dfcf.zj symbol={symbol!r}",
                 lambda: zj(symbol),
@@ -145,11 +141,34 @@ async def _enrich_ths_stock_list(
                 f"{list_context} dfcf.cmfb symbol={symbol!r}",
                 lambda: cmfb(symbol),
             )
+
+            # 历史行情（日线）
+            hist_ = _sync_call_or_none(
+                f"{list_context} dfcf.hist symbol={symbol!r}",
+                lambda: hist(symbol),
+            )
+
+            # 计算五日均价
+            avg_5 = None
+            hist_5 = hist_[-5:]
+            if hist_5 and len(hist_5) >= 5:
+                avg_5 = cal_avg(hist_5, '收盘')
+
+            # 计算10日均价
+            avg_10 = None
+            hist_10 = hist_
+            if hist_10 and len(hist_10) >= 5:
+                avg_10 = cal_avg(hist_10, '收盘')
+
             item["盘口"] = pk_
-            item["新闻"] = xw_
             item["基本信息"] = jbxx_
             item["资金流入流出"] = zj_
             item["筹码分布"] = cmfb_
+            item["历史行情"] = hist_
+            if avg_5:
+                item["5日线"] = avg_5
+            if avg_10:
+                item["10日线"] = avg_5
 
             if with_lhb:
                 lhbmr = _sync_call_or_none(
@@ -167,6 +186,16 @@ async def _enrich_ths_stock_list(
         _log_api_error(f"{list_context}.fetch_list")
         out = []
     return out
+
+
+async def _zx(settings):
+    # 从 ~/data/quant/optional.md 获取自选股，自选股格式 [{"股票代码": "xx股份", "股票代码": "xxxx"}]
+    return [{"股票代码": "002580", "股票名称": "圣阳股份"}]
+
+
+async def _cc(settings):
+    # 从 ~/data/quant/holding.md 获取持仓股，持仓股格式 [{"股票代码": "xx股份", "股票代码": "xxxx", "买入时间": "xxxx-xx-xx xx:xx:xx", "买入价格": "xxxx"}]
+    return [{"股票代码": "002580", "股票名称": "圣阳股份"}]
 
 
 @router.get(
@@ -253,13 +282,29 @@ async def pre_market(settings: SettingsDep) -> Response:
     route = "GET /quant/market/pre_market"
     dpzs = await _important_index_spot(f"{route} | ak.stock_zh_index_spot_em")
     # TODO 开盘时获取到的是昨天的数据
-    zjl = await _last_market_fund_flow_row(f"{route} | ak.stock_market_fund_flow")
-    zqxy = await _earning_effect_pre_market(f"{route} | ak.stock_market_activity_legu")
+    # zjl = await _last_market_fund_flow_row(f"{route} | ak.stock_market_fund_flow")
+    # zqxy = await _earning_effect_pre_market(f"{route} | ak.stock_market_activity_legu")
+
+    # 从 ~/data/quant/optional.md 获取自选股，自选股格式 [{"股票代码": "xx股份", "股票代码": "xxxx"}]
+    zxg = await _enrich_ths_stock_list(
+        settings,
+        _zx,
+        with_lhb=False,
+        list_context=f"{route} | _zx",
+    )
+
+    # 从 ~/data/quant/holding.md 获取持仓股，持仓股格式 [{"股票代码": "xx股份", "股票代码": "xxxx", "买入时间": "xxxx-xx-xx xx:xx:xx", "买入价格": "xxxx"}]
+    ccg = await _enrich_ths_stock_list(
+        settings,
+        _cc,
+        with_lhb=False,
+        list_context=f"{route} | _cc",
+    )
 
     result = {
         "大盘指数": dpzs,
-        "大盘资金流": zjl,
-        "赚钱效应": zqxy,
+        "自选股": zxg,
+        "持仓股": ccg,
     }
     return Response(data=result)
 
@@ -308,6 +353,22 @@ async def during_market(settings: SettingsDep) -> Response:
         list_context=f"{route} | ths.stock_skyrocket",
     )
 
+    # 从 ~/data/quant/optional.md 获取自选股，自选股格式 [{"股票代码": "xx股份", "股票代码": "xxxx"}]
+    zxg = await _enrich_ths_stock_list(
+        settings,
+        _zx,
+        with_lhb=False,
+        list_context=f"{route} | _zx",
+    )
+
+    # 从 ~/data/quant/holding.md 获取持仓股，持仓股格式 [{"股票代码": "xx股份", "股票代码": "xxxx", "买入时间": "xxxx-xx-xx xx:xx:xx", "买入价格": "xxxx"}]
+    ccg = await _enrich_ths_stock_list(
+        settings,
+        _cc,
+        with_lhb=False,
+        list_context=f"{route} | _cc",
+    )
+
     result = {
         "大盘指数": dpzs,
         "赚钱效应": zqxy,
@@ -318,8 +379,8 @@ async def during_market(settings: SettingsDep) -> Response:
         "涨停统计": zttj,
         "同花顺人气股": thsrqg,
         "人气飙升榜": thsrqbsb,
-        "自选股": None,
-        "持仓股": None,
+        "自选股": zxg,
+        "持仓股": ccg,
     }
     return Response(data=result)
 
@@ -358,6 +419,22 @@ async def post_market(settings: SettingsDep) -> Response:
         list_context=f"{route} | ths.stock_skyrocket",
     )
 
+    # 从 ~/data/quant/optional.md 获取自选股，自选股格式 [{"股票代码": "xx股份", "股票代码": "xxxx"}]
+    zxg = await _enrich_ths_stock_list(
+        settings,
+        _zx,
+        with_lhb=False,
+        list_context=f"{route} | _zx",
+    )
+
+    # 从 ~/data/quant/holding.md 获取持仓股，持仓股格式 [{"股票代码": "xx股份", "股票代码": "xxxx", "买入时间": "xxxx-xx-xx xx:xx:xx", "买入价格": "xxxx"}]
+    ccg = await _enrich_ths_stock_list(
+        settings,
+        _cc,
+        with_lhb=False,
+        list_context=f"{route} | _cc",
+    )
+
     result = {
         "大盘指数": dpzs,
         "赚钱效应": zqxy,
@@ -368,7 +445,7 @@ async def post_market(settings: SettingsDep) -> Response:
         "涨停统计": zttj,
         "同花顺人气股": thsrqg,
         "人气飙升榜": thsrqbsb,
-        "自选股": None,
-        "持仓股": None,
+        "自选股": zxg,
+        "持仓股": ccg,
     }
     return Response(data=result)

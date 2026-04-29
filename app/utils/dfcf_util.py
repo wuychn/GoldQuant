@@ -3,7 +3,7 @@ import json
 import akshare as ak
 
 from app.utils.common_util import sort_by_field_desc_and_limit, today, get_val, set_field_value, list_to_dict, \
-    today_before
+    get_n_workdays_ago
 from app.utils.dataframe import dataframe_to_records
 
 
@@ -38,7 +38,8 @@ def lshq(symbol):
     :return:
     """
     # 使用东方财富
-    return dataframe_to_records(ak.stock_zh_a_hist(symbol=str(symbol), start_date=today_before(5), end_date=today()))
+    return dataframe_to_records(
+        ak.stock_zh_a_hist(symbol=str(symbol), start_date=get_n_workdays_ago(), end_date=today()))
     # 可以使用使用新浪
     # ak.stock_zh_a_daily()
 
@@ -92,10 +93,10 @@ def ztgc():
 
 def zj(symbol):
     """
-    个股资金
+    个股资金，取最新5条
     """
     return dataframe_to_records(
-        ak.stock_individual_fund_flow(stock=str(symbol), market="sh" if str(symbol).startswith("6") else "sz"))
+        ak.stock_individual_fund_flow(stock=str(symbol), market="sh" if str(symbol).startswith("6") else "sz"))[-5:]
 
 
 def hsgtzj():
@@ -107,9 +108,17 @@ def hsgtzj():
 
 def cmfb(symbol):
     """
-    筹码分布
+    筹码分布，取最新5条
     """
-    return dataframe_to_records(ak.stock_cyq_em(symbol=str(symbol), adjust=""))
+    return dataframe_to_records(ak.stock_cyq_em(symbol=str(symbol), adjust=""))[-5:]
+
+
+def hist(symbol):
+    """
+    个股历史行情
+    """
+    return dataframe_to_records(
+        ak.stock_zh_a_hist(symbol=str(symbol), start_date=get_n_workdays_ago(n=9), end_date=today()))
 
 
 def ggjbxx(symbol):
