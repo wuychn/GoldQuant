@@ -14,7 +14,7 @@ from fastapi.concurrency import run_in_threadpool
 
 from app.api.deps import SettingsDep
 from app.schemas.response import Response
-from app.utils.common_util import list_to_dict, today, get_val, cal_avg
+from app.utils.common_util import list_to_dict, today, get_val, cal_avg, is_real_workday_cn
 from app.utils.dataframe import dataframe_to_records
 from app.utils.dfcf_util import cmfb, hsgtzj, jbxx, lhbxq, pk, zj, ztgc, hist
 from app.utils.ths_util import stock_fund_flow_concept, hot_stock, stock_skyrocket
@@ -266,6 +266,16 @@ def _load_stock_rows_from_quant_file(filename: str) -> list:
     return _normalize_quant_stock_rows(raw)
 
 
+_NOT_TRADING_DAY_RESPONSE = Response(code=1, message="今天不是交易日", data=None)
+
+
+async def _guard_real_workday_or_non_trading_response() -> Response | None:
+    ok = await run_in_threadpool(is_real_workday_cn)
+    if not ok:
+        return _NOT_TRADING_DAY_RESPONSE
+    return None
+
+
 async def _zx(settings):
     """从 ~/data/quant/optional.md 读取自选股，格式为 JSON 数组，元素含 股票代码、股票名称 等。"""
     return await run_in_threadpool(lambda: _load_stock_rows_from_quant_file("optional.md"))
@@ -357,6 +367,8 @@ async def pre_market(settings: SettingsDep) -> Response:
     5、给出判断
     6、保存到当日盘前数据，避免再次调用接口
     """
+    if (blocked := await _guard_real_workday_or_non_trading_response()) is not None:
+        return blocked
     route = "GET /quant/market/pre_market"
     dpzs = await _important_index_spot(f"{route} | ak.stock_zh_index_spot_em")
     # TODO 开盘时获取到的是昨天的数据
@@ -401,6 +413,8 @@ async def during_market(settings: SettingsDep) -> Response:
     4、概念资金流
     5、自选/持仓/人气股/飙升榜以及个股的资金流
     """
+    if (blocked := await _guard_real_workday_or_non_trading_response()) is not None:
+        return blocked
     route = "GET /quant/market/during_market"
     dpzs = await _important_index_spot(f"{route} | ak.stock_zh_index_spot_em")
 
@@ -470,6 +484,8 @@ async def during_market(settings: SettingsDep) -> Response:
     description="盘后",
 )
 async def post_market(settings: SettingsDep) -> Response:
+    if (blocked := await _guard_real_workday_or_non_trading_response()) is not None:
+        return blocked
     route = "GET /quant/market/post_market"
     dpzs = await _important_index_spot(f"{route} | ak.stock_zh_index_spot_em")
     zqxy = await _earning_effect_intraday(f"{route} | ak.stock_market_activity_legu()")

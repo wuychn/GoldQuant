@@ -285,6 +285,16 @@ def _is_real_workday_cn(d: date) -> bool:
     return _is_real_workday_single_day_api(d)
 
 
+def is_real_workday_cn(d: Optional[date] = None) -> bool:
+    """
+    是否为大陆「真实工作日」：周一至周五且非法定休日；周六日恒为否。
+    口径与 holiday 单日接口 type==0 一致，可用于盘前/盘中/盘后接口兜底。
+    """
+    if d is None:
+        d = datetime.now().date()
+    return _is_real_workday_cn(d)
+
+
 def get_n_workdays_ago(date_input: Optional[str] = None, n: int = 5) -> Optional[str]:
     """
     求基准日之前（不含基准日）第 n 个真实工作日：
