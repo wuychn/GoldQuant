@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 
 import akshare as ak
 from fastapi import APIRouter
@@ -202,14 +205,75 @@ async def _enrich_ths_stock_list(
     return out
 
 
+def _quant_data_file(name: str) -> Path:
+    return Path.home() / "data" / "quant" / name
+
+
+def _json_candidates_from_text(text: str):
+    stripped = text.strip()
+    if stripped:
+        yield stripped
+    m = re.search(r"```(?:json)?\s*([\s\S]*?)```", text, re.IGNORECASE)
+    if m:
+        inner = m.group(1).strip()
+        if inner:
+            yield inner
+    start, end = text.find("["), text.rfind("]")
+    if start != -1 and end > start:
+        yield text[start : end + 1]
+
+
+def _parse_json_array_from_text(text: str) -> list | None:
+    for candidate in _json_candidates_from_text(text):
+        try:
+            data = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, list):
+            return data
+    return None
+
+
+def _normalize_quant_stock_rows(raw: list | None) -> list:
+    if not raw:
+        return []
+    out: list = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        code = item.get("股票代码")
+        if code is None or str(code).strip() == "":
+            continue
+        row = dict(item)
+        row["股票代码"] = str(code).strip()
+        out.append(row)
+    return out
+
+
+def _load_stock_rows_from_quant_file(filename: str) -> list:
+    path = _quant_data_file(filename)
+    if not path.is_file():
+        return []
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        _log_api_error(f"quant read file path={path!s}")
+        return []
+    raw = _parse_json_array_from_text(text)
+    if raw is None:
+        logger.warning("量化数据文件不是合法 JSON 数组: %s", path)
+        return []
+    return _normalize_quant_stock_rows(raw)
+
+
 async def _zx(settings):
-    # 从 ~/data/quant/optional.md 获取自选股，自选股格式 [{"股票代码": "xx股份", "股票代码": "xxxx"}]
-    return [{"股票代码": "002580", "股票名称": "圣阳股份"}]
+    """从 ~/data/quant/optional.md 读取自选股，格式为 JSON 数组，元素含 股票代码、股票名称 等。"""
+    return await run_in_threadpool(lambda: _load_stock_rows_from_quant_file("optional.md"))
 
 
 async def _cc(settings):
-    # 从 ~/data/quant/holding.md 获取持仓股，持仓股格式 [{"股票代码": "xx股份", "股票代码": "xxxx", "买入时间": "xxxx-xx-xx xx:xx:xx", "买入价格": "xxxx"}]
-    return [{"股票代码": "002580", "股票名称": "圣阳股份"}]
+    """从 ~/data/quant/holding.md 读取持仓，格式为 JSON 数组，元素含 股票代码、股票名称、买入时间、买入价格 等。"""
+    return await run_in_threadpool(lambda: _load_stock_rows_from_quant_file("holding.md"))
 
 
 @router.get(
