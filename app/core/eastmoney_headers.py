@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from time import sleep
 from typing import Any
+import random
 
 from requests.sessions import Session
 
@@ -66,7 +67,7 @@ def _patched_session_request(self: Session, method: str, url: str | bytes, **kwa
             h.update(extra)
             kwargs["headers"] = h
     if "eastmoney.com" in url_s:
-        sleep(3)
+        sleep(random.randint(1, 3))
     return _ORIGINAL_SESSION_REQUEST(self, method, url, **kwargs)
 
 

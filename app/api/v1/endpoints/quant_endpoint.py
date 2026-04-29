@@ -339,19 +339,19 @@ async def during_market(settings: SettingsDep) -> Response:
         "流入资金",
     )
     zttj = await _ztgc_or_none(f"{route} | dfcf.ztgc")
-    hsgtzjlx = await _hsgtzj_or_none(f"{route} | dfcf.hsgtzj")
+    # hsgtzjlx = await _hsgtzj_or_none(f"{route} | dfcf.hsgtzj")
     thsrqg = await _enrich_ths_stock_list(
         settings,
         hot_stock,
         with_lhb=False,
         list_context=f"{route} | ths.hot_stock",
     )
-    thsrqbsb = await _enrich_ths_stock_list(
-        settings,
-        stock_skyrocket,
-        with_lhb=False,
-        list_context=f"{route} | ths.stock_skyrocket",
-    )
+    # thsrqbsb = await _enrich_ths_stock_list(
+    #     settings,
+    #     stock_skyrocket,
+    #     with_lhb=False,
+    #     list_context=f"{route} | ths.stock_skyrocket",
+    # )
 
     # 从 ~/data/quant/optional.md 获取自选股，自选股格式 [{"股票代码": "xx股份", "股票代码": "xxxx"}]
     zxg = await _enrich_ths_stock_list(
@@ -373,12 +373,12 @@ async def during_market(settings: SettingsDep) -> Response:
         "大盘指数": dpzs,
         "赚钱效应": zqxy,
         "大盘资金流": zjl,
-        "沪深港通资金流向": hsgtzjlx,
+        # "沪深港通资金流向": hsgtzjlx,
         "今日涨幅前十概念": jrzfqsgn,
         "今日资金流入前十概念": jrzjlrqsgn,
         "涨停统计": zttj,
         "同花顺人气股": thsrqg,
-        "人气飙升榜": thsrqbsb,
+        # "人气飙升榜": thsrqbsb,
         "自选股": zxg,
         "持仓股": ccg,
     }
@@ -405,19 +405,19 @@ async def post_market(settings: SettingsDep) -> Response:
         "流入资金",
     )
     zttj = await _ztgc_or_none(f"{route} | dfcf.ztgc")
-    hsgtzjlx = await _hsgtzj_or_none(f"{route} | dfcf.hsgtzj")
+    # hsgtzjlx = await _hsgtzj_or_none(f"{route} | dfcf.hsgtzj")
     thsrqg = await _enrich_ths_stock_list(
         settings,
         hot_stock,
         with_lhb=True,
         list_context=f"{route} | ths.hot_stock",
     )
-    thsrqbsb = await _enrich_ths_stock_list(
-        settings,
-        stock_skyrocket,
-        with_lhb=True,
-        list_context=f"{route} | ths.stock_skyrocket",
-    )
+    # thsrqbsb = await _enrich_ths_stock_list(
+    #     settings,
+    #     stock_skyrocket,
+    #     with_lhb=True,
+    #     list_context=f"{route} | ths.stock_skyrocket",
+    # )
 
     # 从 ~/data/quant/optional.md 获取自选股，自选股格式 [{"股票代码": "xx股份", "股票代码": "xxxx"}]
     zxg = await _enrich_ths_stock_list(
@@ -439,12 +439,12 @@ async def post_market(settings: SettingsDep) -> Response:
         "大盘指数": dpzs,
         "赚钱效应": zqxy,
         "大盘资金流": zjl,
-        "沪深港通资金流向": hsgtzjlx,
+        # "沪深港通资金流向": hsgtzjlx,
         "今日涨幅前十概念": jrzfqsgn,
         "今日资金流入前十概念": jrzjlrqsgn,
         "涨停统计": zttj,
         "同花顺人气股": thsrqg,
-        "人气飙升榜": thsrqbsb,
+        # "人气飙升榜": thsrqbsb,
         "自选股": zxg,
         "持仓股": ccg,
     }
