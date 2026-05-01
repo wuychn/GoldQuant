@@ -11,6 +11,7 @@ A股短线交易机器人 - 自主决策版
 import os
 import re
 import sys
+from pathlib import Path
 
 # 禁用代理
 for k in list(os.environ.keys()):
@@ -30,13 +31,29 @@ LLM_API_KEY = "sk-cp-hlnhKJEBNgidhd_VzCm8eFuxlBJcwLLKNxF8EoBHWMGyOYrov_lsflxjGab
 LLM_BASE_URL = "https://api.minimaxi.com/anthropic"
 LLM_MODEL = "MiniMax-M2.7"
 
-# 数据目录
+# 项目根目录（与本文件 main.py 同级）
+_PROJECT_ROOT = Path(__file__).resolve().parent
+# 策略文件：项目根目录 strategy.md（与 main.py 同级），Linux/Windows 通用
+STRATEGY_FILE = _PROJECT_ROOT / "strategy.md"
+
+# 数据目录（用户主目录 ~/data/quant，路径不变）
 DATA_DIR = os.path.expanduser("~/data/quant")
 FUND_FILE = f"{DATA_DIR}/fund.md"
 OPTIONAL_FILE = f"{DATA_DIR}/optional.jsonl"
 HOLDING_FILE = f"{DATA_DIR}/holding.jsonl"
-STRATEGY_FILE = f"{DATA_DIR}/strategy.md"
 INITIAL_CAPITAL = 10000
+
+
+def _read_user_text(path: str) -> str:
+    """读取用户主目录（~/data/quant）下文本：优先 UTF-8（含 BOM），失败则回退 GBK，避免历史文件编码不一导致失败。"""
+    with open(path, "rb") as f:
+        raw = f.read()
+    for enc in ("utf-8-sig", "utf-8", "gbk"):
+        try:
+            return raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace")
 
 # ========== 飞书推送 ==========
 def get_token() -> str:
@@ -101,8 +118,7 @@ def fetch_post_market(): return fetch_data("/api/v1/quant/market/post_market")
 # ========== 资金/持仓管理 ==========
 def get_fund() -> float:
     try:
-        with open(FUND_FILE, 'r') as f:
-            return float(f.read().strip())
+        return float(_read_user_text(FUND_FILE).strip())
     except:
         return INITIAL_CAPITAL
 
@@ -111,22 +127,20 @@ def update_fund(profit: float):
     today = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     existing = {}
     try:
-        with open(FUND_FILE, 'r') as f:
-            content = f.read()
-            import re
-            hist = re.findall(r'(\d{4}-\d{2}-\d{2}):\s*([\d.]+)', content)
-            for d, v in hist:
-                existing[d] = float(v)
+        content = _read_user_text(FUND_FILE)
+        hist = re.findall(r'(\d{4}-\d{2}-\d{2}):\s*([\d.]+)', content)
+        for d, v in hist:
+            existing[d] = float(v)
         existing[today.split(' ')[0]] = fund
         lines = ["# 资金曲线", f"- 初始本金：{INITIAL_CAPITAL:.2f} 元", f"- 更新时间：{today}",
                  f"- 当前总资产：{fund:.2f} 元", f"- 当日盈亏：{profit:+.2f} 元 ({profit/INITIAL_CAPITAL*100:+.2f}%)",
                  "- 历史记录（累计）："]
         for d, v in sorted(existing.items()):
             lines.append(f"{d}: {v:.2f}")
-        with open(FUND_FILE, 'w') as f:
+        with open(FUND_FILE, "w", encoding="utf-8") as f:
             f.write('\n'.join(lines))
     except:
-        with open(FUND_FILE, 'w') as f:
+        with open(FUND_FILE, "w", encoding="utf-8") as f:
             f.write(str(int(fund)))
     return fund
 
@@ -135,21 +149,24 @@ def _read_jsonl_stock_file(path: str) -> list:
     if not os.path.isfile(path):
         return []
     out = []
-    with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(obj, list):
-                for it in obj:
-                    if isinstance(it, dict):
-                        out.append(it)
-            elif isinstance(obj, dict):
-                out.append(obj)
+    try:
+        text = _read_user_text(path)
+    except OSError:
+        return []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, list):
+            for it in obj:
+                if isinstance(it, dict):
+                    out.append(it)
+        elif isinstance(obj, dict):
+            out.append(obj)
     return out
 
 
@@ -180,22 +197,20 @@ def save_optional(optional: list):
 
 def read_trades(today: str) -> list:
     try:
-        with open(f"{DATA_DIR}/trade/{today}/trades.md", 'r') as f:
-            return json.loads(f.read())
+        return json.loads(_read_user_text(f"{DATA_DIR}/trade/{today}/trades.md"))
     except:
         return []
 
 def save_trades(today: str, trades: list):
     os.makedirs(f"{DATA_DIR}/trade/{today}", exist_ok=True)
-    with open(f"{DATA_DIR}/trade/{today}/trades.md", 'w') as f:
+    with open(f"{DATA_DIR}/trade/{today}/trades.md", "w", encoding="utf-8") as f:
         f.write(json.dumps(trades, ensure_ascii=False, indent=2))
 
 def load_strategy() -> str:
     try:
-        with open(STRATEGY_FILE, 'r') as f:
-            return f.read()
-    except:
-        return "策略文件加载失败"
+        return STRATEGY_FILE.read_text(encoding="utf-8")
+    except OSError as e:
+        return f"策略文件加载失败：{STRATEGY_FILE}（{e!r}）"
 
 def read_today_news(today: str) -> str:
     news_dir = f"{DATA_DIR}/news/{today}"
@@ -205,8 +220,7 @@ def read_today_news(today: str) -> str:
         files = sorted([f for f in os.listdir(news_dir) if f.endswith('.md')])
         contents = []
         for f in files:
-            with open(os.path.join(news_dir, f), 'r') as fp:
-                contents.append(fp.read())
+            contents.append(_read_user_text(os.path.join(news_dir, f)))
         return "\n\n".join(contents) if contents else "当日暂无新闻记录"
     except:
         return "当日暂无新闻记录"
@@ -238,11 +252,11 @@ def process_news(raw_data: dict, timestamp: str) -> str:
     user = f"原始新闻：\n{json.dumps(raw_data, ensure_ascii=False)[:100000]}"
     summary = call_llm(system, user)
 
-    # 保存原始数据
-    with open(news_file.replace('.md', '-origin.json'), 'w') as f:
+    # 保存原始数据（UTF-8）
+    with open(news_file.replace('.md', '-origin.json'), "w", encoding="utf-8") as f:
         json.dump(raw_data, f, ensure_ascii=False, indent=2)
     # 保存处理后的数据
-    with open(news_file, 'w') as f:
+    with open(news_file, "w", encoding="utf-8") as f:
         f.write(f"# 新闻 {timestamp}\n\n{summary}\n")
     return summary
 
@@ -752,12 +766,12 @@ def parse_and_update(content: str, mode: str) -> dict:
         update_fund(profit)
         today = datetime.now().strftime("%Y-%m-%d")
         os.makedirs(f"{DATA_DIR}/trade/{today}", exist_ok=True)
-        with open(f"{DATA_DIR}/trade/{today}/profit.md", "w") as f:
+        with open(f"{DATA_DIR}/trade/{today}/profit.md", "w", encoding="utf-8") as f:
             f.write(str(int(profit)))
         print(f"盈亏: {profit}")
 
     if new_fund is not None:
-        with open(FUND_FILE, "w") as f:
+        with open(FUND_FILE, "w", encoding="utf-8") as f:
             f.write(str(int(new_fund)))
         print(f"资金已更新: {new_fund}")
 
@@ -780,10 +794,10 @@ def save_review(timestamp: str, content: str, mode: str, raw_data: dict = None):
     review_file = f"{DATA_DIR}/trade/{today}/{suffix}-{time_str}.md"
     # 保存原始数据
     if raw_data:
-        with open(review_file.replace('.md', '-origin.json'), 'w') as f:
+        with open(review_file.replace('.md', '-origin.json'), "w", encoding="utf-8") as f:
             json.dump(raw_data, f, ensure_ascii=False, indent=2)
     # 保存处理后的数据
-    with open(review_file, 'w') as f:
+    with open(review_file, "w", encoding="utf-8") as f:
         f.write(content)
     parts = content.split("\n\n", 1)
     if len(parts) > 1:
@@ -814,7 +828,7 @@ def save_raw_data(mode: str, raw_data: dict):
         return  # 其他模式走save_review
     
     if raw_data:
-        with open(raw_file, 'w') as f:
+        with open(raw_file, "w", encoding="utf-8") as f:
             json.dump(raw_data, f, ensure_ascii=False, indent=2)
         print(f"原始数据已保存: {raw_file}")
 
