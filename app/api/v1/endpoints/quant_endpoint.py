@@ -596,7 +596,7 @@ async def during_market(settings: SettingsDep, background_tasks: BackgroundTasks
     2、大盘资金流
     3、概念板块
     4、概念资金流
-    5、自选/持仓/人气股/飙升榜以及个股的资金流
+    5、自选/持仓、涨停统计、概念板块及个股资金流（人气榜接口默认关闭以降低负载）
     """
     # if (blocked := await _guard_real_workday_or_non_trading_response()) is not None:
     #     return blocked

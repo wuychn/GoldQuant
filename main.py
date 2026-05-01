@@ -43,6 +43,262 @@ OPTIONAL_FILE = f"{DATA_DIR}/optional.jsonl"
 HOLDING_FILE = f"{DATA_DIR}/holding.jsonl"
 INITIAL_CAPITAL = 10000
 
+# 供 LLM 解读行情 JSON：与后端 ``quant_endpoint`` 聚合结构一致，避免把人气榜/涨停池误写进「自选」。
+RAW_DATA_FIELD_GUIDE = """【接口 JSON 顶层字段说明（必须按键名区分，禁止混用）】
+「自选股」：唯一表示用户自选股的数组，数据来自本机 ~/data/quant/optional.jsonl。只有该键下的标的才允许出现在正文里所有标题含「自选」的小节中。若该键为 [] 或不存在，对应小节只能写一句「无自选股」或「当前自选股为空」，不得用其他任何键里的股票名单顶替。
+「持仓股」：用户持仓，来自 ~/data/quant/holding.jsonl；凡标题含「持仓」的小节仅使用该键；若为空则写无持仓。
+「同花顺人气股」：仅盘后等部分接口会出现，为同花顺人气榜标的，不是用户自选；禁止写入「自选股」相关小节；仅在明确要求写人气股的小节（如晚间「五、同花顺人气股」）中使用该键数据。
+「涨停统计」「概念板块」「大盘指数」「赚钱效应」「大盘资金流」「市场状态机」等：市场环境或榜单类数据，其中的个股/代码不得当作「自选股」列出。"""
+
+# 「自选更新」JSON：与 strategy.md §2.1 等对齐，供模型与落盘前校验共用表述。
+OPTIONAL_UPDATE_RULES_BLOCK = """
+【自选更新硬性规则（与 strategy.md 一致；做不到则不要写入该项，宁可输出 []）】
+若「加入自选原因」出现涨停板战法、龙头板战法、涨停战法、打板战法、打板、龙头接力、连板接力、人气前20、涨停池等以「次日涨停接力」为逻辑的表述（整条理由中若明确为「龙回头」观察则按龙回头规则，不要套用本节），则该股票必须同时满足可核验条件：①在业务 JSON 的「涨停统计」列表中能找到该代码（与 strategy.md 一致：**不含首板**，连板数≥2）；②在「同花顺人气股」中该股「人气排名」≤20；③最近一日收盘价≤15 元；仅当连板数≥6（策略「最高连板」放宽的近似核验）时可放宽至收盘价≤20 元。股价明显高于 15/20 却写龙头板/涨停战法类理由的，属于违规输出，必须改为不写该项或改用与价格、战法真实匹配的表述。
+写入「自选更新」的代码须为 60/00/30 开头；名称不得含 ST/*ST；不得写入 688、8 开头标的。
+"""
+
+
+def _unwrap_quant_market_payload(raw: dict) -> dict:
+    """统一响应 ``{code,message,data:{...}}`` 时取出内层 ``data``，使「自选股」等与后端字段对齐。"""
+    inner = raw.get("data")
+    if isinstance(inner, dict):
+        return inner
+    return raw
+
+
+def _market_data_user_block(raw_data: dict, *, tail: str) -> str:
+    """行情类分析：先字段说明，再 JSON（已去 API 包装层），再资金/交易等尾部文案。"""
+    payload = _unwrap_quant_market_payload(raw_data)
+    return (
+        RAW_DATA_FIELD_GUIDE
+        + "\n\n【以下为接口业务数据 JSON（已去掉 code/message 外层；请仅按上文键名解读）】\n"
+        + json.dumps(payload, ensure_ascii=False)[:100000]
+        + tail
+    )
+
+
+def _float_or_none(v: object) -> float | None:
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _close_from_zt_pool_row(row: dict) -> float | None:
+    """东财涨停池记录上常见价格字段。"""
+    for k in ("最新价", "现价", "收盘价", "收盘", "最新", "price"):
+        p = _float_or_none(row.get(k))
+        if p is not None:
+            return p
+    return None
+
+
+def _last_close_from_enriched_row(row: dict) -> float | None:
+    hist = row.get("历史行情")
+    if isinstance(hist, list) and hist:
+        last = hist[-1]
+        if isinstance(last, dict):
+            for k in ("收盘", "收盘价", "close"):
+                p = _float_or_none(last.get(k))
+                if p is not None:
+                    return p
+    snap = row.get("盘前实时快照")
+    if isinstance(snap, dict):
+        p = _float_or_none(snap.get("最新价"))
+        if p is not None:
+            return p
+    return None
+
+
+def _parse_lianban_ge_6_from_tag(s: str) -> bool:
+    """从「连板情况」等文案中判断是否至少 6 连板（§2.1 股价放宽至 20 元）。"""
+    if not s:
+        return False
+    for pat in (r"(\d+)\s*连板", r"(\d+)\s*连", r"(\d+)\s*板"):
+        m = re.search(pat, s)
+        if m and int(m.group(1)) >= 6:
+            return True
+    return False
+
+
+def _hot_rank_int(row: dict) -> int | None:
+    v = row.get("人气排名")
+    if v is None:
+        return None
+    try:
+        return int(float(v))
+    except (TypeError, ValueError):
+        return None
+
+
+def _collect_zt_codes_from_payload(market: dict) -> set[str]:
+    out: set[str] = set()
+    zt = market.get("涨停统计")
+    if isinstance(zt, list):
+        for item in zt:
+            if not isinstance(item, dict):
+                continue
+            for k in ("代码", "股票代码"):
+                c = item.get(k)
+                if c is not None and str(c).strip():
+                    out.add(str(c).strip())
+                    break
+    return out
+
+
+def _merge_stock_facts(market: dict) -> dict[str, dict]:
+    """按代码合并收盘价、人气排名、连板数/连板文案（优先同花顺人气股中的字段）。"""
+    facts: dict[str, dict] = {}
+    for key in ("同花顺人气股", "自选股", "持仓股"):
+        rows = market.get(key)
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            code = str(row.get("股票代码", "") or "").strip()
+            if not code:
+                continue
+            slot = facts.setdefault(code, {})
+            px = _last_close_from_enriched_row(row)
+            if px is not None:
+                slot["收盘"] = px
+            rk = _hot_rank_int(row)
+            if rk is not None:
+                slot["人气排名"] = rk
+            lb = row.get("连板数")
+            if lb is not None:
+                try:
+                    slot["连板数"] = int(float(lb))
+                except (TypeError, ValueError):
+                    pass
+            tag = str(row.get("连板情况", "") or "").strip()
+            if tag:
+                slot["连板情况"] = tag
+    zt = market.get("涨停统计")
+    if isinstance(zt, list):
+        for row in zt:
+            if not isinstance(row, dict):
+                continue
+            code = ""
+            for k in ("代码", "股票代码"):
+                if row.get(k):
+                    code = str(row.get(k)).strip()
+                    break
+            if not code:
+                continue
+            slot = facts.setdefault(code, {})
+            if slot.get("收盘") is None:
+                p = _close_from_zt_pool_row(row)
+                if p is not None:
+                    slot["收盘"] = p
+            lb = row.get("连板数")
+            if lb is not None and "连板数" not in slot:
+                try:
+                    slot["连板数"] = int(float(lb))
+                except (TypeError, ValueError):
+                    pass
+    return facts
+
+
+def _reason_triggers_zhangting_audit(reason: str) -> bool:
+    """「加入自选原因」是否写明涨停/龙头板类战法，从而必须满足 strategy.md §2.1 可量化核验项。"""
+    if "龙回头" in reason:
+        return False
+    markers = (
+        "涨停板战法",
+        "龙头板战法",
+        "龙头板",
+        "涨停战法",
+        "打板战法",
+        "打板",
+        "龙头接力",
+        "连板接力",
+        "涨停池",
+        "人气前20",
+    )
+    if any(m in reason for m in markers):
+        return True
+    if "涨停" in reason and "战法" in reason:
+        return True
+    return False
+
+
+def _optional_row_allowed_by_strategy(
+    row: dict,
+    *,
+    facts: dict[str, dict],
+    zt_codes: set[str],
+) -> tuple[bool, str]:
+    """返回 (是否写入, 拒绝说明)。"""
+    code = str(row.get("股票代码", "") or "").strip()
+    name = str(row.get("股票名称", "") or "").strip()
+    reason = str(row.get("加入自选原因", "") or "")
+    if not code.startswith(("60", "00", "30")):
+        return False, "代码不在60/00/30标的池"
+    if code.startswith("688") or code.startswith("8"):
+        return False, "排除688/北交所"
+    up = name.upper()
+    if "ST" in up or "*" in name:
+        return False, "名称含ST"
+    if not _reason_triggers_zhangting_audit(reason):
+        return True, ""
+    f = facts.get(code) or {}
+    close_px = f.get("收盘")
+    if close_px is None:
+        return False, "写明涨停/龙头板战法类原因但缺少当日收盘价，无法核验"
+
+    if not zt_codes:
+        return False, "写明涨停/龙头板战法但涨停统计为空，无法核验涨停池"
+
+    if code not in zt_codes:
+        return False, "写明涨停/龙头板战法但不在当日涨停统计池"
+
+    rank = f.get("人气排名")
+    if rank is None:
+        return False, "写明涨停/龙头板战法但缺少同花顺人气排名（须人气榜前20）"
+    if rank > 20:
+        return False, f"写明涨停/龙头板战法但同花顺人气排名{rank}>20"
+
+    lb_count = f.get("连板数")
+    tag = str(f.get("连板情况", "") or "")
+    ge6 = (isinstance(lb_count, int) and lb_count >= 6) or _parse_lianban_ge_6_from_tag(tag)
+
+    if close_px <= 15.0:
+        return True, ""
+    if close_px <= 20.0 and ge6:
+        return True, ""
+    if close_px > 20.0:
+        return False, f"收盘{close_px:.2f}元>20，不满足§2.1价格带"
+    return False, f"收盘{close_px:.2f}元>15且未见≥6连板，不满足§2.1放宽"
+
+
+def _filter_optional_by_strategy(
+    optional: list,
+    market_payload: dict | None,
+) -> tuple[list, list[str]]:
+    """落盘前按 strategy.md 剔除明显不合规的「自选更新」条目。"""
+    if not optional or not isinstance(market_payload, dict):
+        return optional, []
+    facts = _merge_stock_facts(market_payload)
+    zt_codes = _collect_zt_codes_from_payload(market_payload)
+    kept: list = []
+    logs: list[str] = []
+    for row in optional:
+        if not isinstance(row, dict):
+            continue
+        ok, why = _optional_row_allowed_by_strategy(row, facts=facts, zt_codes=zt_codes)
+        if ok:
+            kept.append(row)
+        else:
+            nm = row.get("股票名称", "")
+            cd = row.get("股票代码", "")
+            rs = str(row.get("加入自选原因", "") or "")[:160]
+            logs.append(f"剔除自选：{nm}({cd}) — {why}；模型理由摘要：{rs}")
+    return kept, logs
+
 
 def _read_user_text(path: str) -> str:
     """读取用户主目录（~/data/quant）下文本：优先 UTF-8（含 BOM），失败则回退 GBK，避免历史文件编码不一导致失败。"""
@@ -286,11 +542,11 @@ def analyze_pre_market(raw_data: dict, timestamp: str) -> str:
 - 创业板指：{当前点位}（{涨跌幅}）
 - 市场情绪：{高/中/低}，{简要说明}
 
-二、自选股（根据行情数据）
+二、自选股（仅根据 JSON 根键「自选股」数组；该数组为空则本小节只写「无自选股」一句，不得从人气榜、涨停池、板块等其它键借股票充填）
 1、{股票名称}（{代码}）：{当前价}，{涨跌幅}，{异动/正常}
 2、……
 
-三、持仓股（根据行情数据）
+三、持仓股（仅根据 JSON 根键「持仓股」数组；为空则本小节只写「无持仓」一句）
 1、{股票名称}（{代码}）：{当前价}，{涨跌幅}，{成本价}，{浮盈亏}
 2、……
 
@@ -301,10 +557,10 @@ def analyze_pre_market(raw_data: dict, timestamp: str) -> str:
 - 卖出/减仓标的：{代码+名称}，理由……
 - 持仓股处理：{具体操作建议}"""
 
-    user = f"""【行情数据】（包含自选股、持仓股、行情等全部数据）
-{json.dumps(raw_data, ensure_ascii=False)[:100000]}
-
-【当前资金】：{fund:.2f} 元"""
+    user = _market_data_user_block(
+        raw_data,
+        tail=f"\n\n【当前资金】：{fund:.2f} 元",
+    )
 
     return call_llm(system, user, max_tokens=100000)
 
@@ -348,13 +604,17 @@ def analyze_during_market(raw_data: dict, timestamp: str) -> str:
 【格式：每条须尽量包含买入时间、买入价格、买入原因；若当日有卖出则补充卖出时间、卖出价格、卖出原因】
 [{"股票代码":"600000","股票名称":"浦发银行","买入时间":"10:30","买入价":11.2,"买入原因":"龙头接力","卖出时间":"","卖出价":"","卖出原因":""}]
 
-【风控】{触发状态描述}"""
+【风控】{触发状态描述}
 
-    user = f"""【盘中实时数据】（包含自选股、持仓股、行情等全部数据）
-{json.dumps(raw_data, ensure_ascii=False)[:100000]}
+【数据纪律】凡模型主动提及「自选股」时，只能引用 JSON 根键「自选股」内的标的；该键为空则不得编造自选名单。"""
 
-【当前资金】：{fund:.2f} 元
-【今日交易记录】：{json.dumps(trades, ensure_ascii=False) if trades else '无'}"""
+    user = _market_data_user_block(
+        raw_data,
+        tail=(
+            f"\n\n【当前资金】：{fund:.2f} 元\n"
+            f"【今日交易记录】：{json.dumps(trades, ensure_ascii=False) if trades else '无'}"
+        ),
+    )
 
     return call_llm(system, user, max_tokens=100000)
 
@@ -388,27 +648,29 @@ def analyze_lunch_market(raw_data: dict, timestamp: str) -> str:
 二、上午关键事件
 {根据新闻和走势总结的重要消息或异动}
 
-三、自选股表现
+三、自选股表现（仅 JSON「自选股」；若为空则本小节只写「无自选股」）
 1、{名称}（{代码}）：半日涨跌幅{x%}，最高/最低{价格}，{点评}
 2、……
 
-四、持仓股表现
+四、持仓股表现（仅 JSON「持仓股」；若为空则本小节只写「无持仓」）
 1、{名称}（{代码}）：半日涨跌幅{x%}，浮盈亏{y%}，{点评}
 2、……
 
 五、下午操作策略调整
 - 原计划回顾：{是否按计划执行}
 - 下午修正：{具体买入/卖出/持有决策及理由}
-
+""" + OPTIONAL_UPDATE_RULES_BLOCK + """
 六、自选更新
-【格式：JSON数组；每项必须含「加入自选原因」，缺一无效】
-[{"股票代码":"002580","股票名称":"圣阳股份","加入自选原因":"涨停战法-同花顺人气前20且当日涨停"}]"""
+【格式：JSON数组；每项必须含「加入自选原因」，缺一无效；无新增则输出 []】
+[{"股票代码":"600000","股票名称":"浦发银行","加入自选原因":"符合策略的盘中观察标的（示例占位，无则输出 []）"}]"""
 
-    user = f"""【上午行情数据】（包含自选股、持仓股、行情等全部数据）
-{json.dumps(raw_data, ensure_ascii=False)[:100000]}
-
-【当前资金】：{fund:.2f} 元
-【上午交易记录】：{json.dumps(trades, ensure_ascii=False) if trades else '无'}"""
+    user = _market_data_user_block(
+        raw_data,
+        tail=(
+            f"\n\n【当前资金】：{fund:.2f} 元\n"
+            f"【上午交易记录】：{json.dumps(trades, ensure_ascii=False) if trades else '无'}"
+        ),
+    )
 
     return call_llm(system, user, max_tokens=100000)
 
@@ -444,15 +706,15 @@ def analyze_evening_market(raw_data: dict, timestamp: str) -> str:
 二、今日市场分析
 {综述：关键事件、领涨领跌板块、资金流向、情绪变化、连板高度等}
 
-三、自选股全天表现
+三、自选股全天表现（仅 JSON「自选股」；若为空则本小节只写「无自选股」）
 1、{名称}（{代码}）：收盘{价格}（{涨跌幅}），振幅{x%}，{亮点/问题}
 2、……
 
-四、持仓股全天表现
+四、持仓股全天表现（仅 JSON「持仓股」；若为空则本小节只写「无持仓」）
 1、{名称}（{代码}）：收盘{价格}（{涨跌幅}），浮盈亏{y%}，{操作评价}
 2、……
 
-五、同花顺人气股
+五、同花顺人气股（仅 JSON「同花顺人气股」；若该键缺失或为空则写「本节无数据」；不得与第三节混写）
 1、{名称}（{代码}）：所属板块{板块}，上榜原因{原因}，连板情况{连板数}，收盘涨跌幅{x%}
 2、……
 
@@ -467,18 +729,20 @@ def analyze_evening_market(raw_data: dict, timestamp: str) -> str:
 
 八、经验及教训总结
 {根据今日交易记录总结优点、失误与改进点，并形成初步的明日选股方向或关注标的}
-
+""" + OPTIONAL_UPDATE_RULES_BLOCK + """
 九、自选更新
-【格式：JSON数组；每项必须含「加入自选原因」，缺一无效】
-[{"股票代码":"002580","股票名称":"圣阳股份","加入自选原因":"人气龙头-次日接力观察"}]"""
+【格式：JSON数组；每项必须含「加入自选原因」，缺一无效；无新增则输出 []】
+[{"股票代码":"600000","股票名称":"浦发银行","加入自选原因":"策略内次日观察（示例占位，无则输出 []）"}]"""
 
-    user = f"""【今日盘后数据】（包含自选股、持仓股、行情等全部数据）
-{json.dumps(raw_data, ensure_ascii=False)[:100000]}
-
-【当前资金】：{fund:.2f} 元
-【初始本金】：{INITIAL_CAPITAL}元
-【今日实际交易记录】：
-{json.dumps(trades, ensure_ascii=False) if trades else '无交易'}"""
+    user = _market_data_user_block(
+        raw_data,
+        tail=(
+            f"\n\n【当前资金】：{fund:.2f} 元\n"
+            f"【初始本金】：{INITIAL_CAPITAL}元\n"
+            f"【今日实际交易记录】：\n"
+            f"{json.dumps(trades, ensure_ascii=False) if trades else '无交易'}"
+        ),
+    )
 
     return call_llm(system, user, max_tokens=100000)
 
@@ -719,7 +983,7 @@ def replace_json_sections_for_feishu(
     return s
 
 
-def parse_and_update(content: str, mode: str) -> dict:
+def parse_and_update(content: str, mode: str, market_payload: dict | None = None) -> dict:
     """
     解析正文中的 JSON 数组，写入持仓/自选文件，并返回飞书替换所需字段。
     返回 dict：holdings_text, optional_text, holdings_lines, optional_lines,
@@ -730,6 +994,10 @@ def parse_and_update(content: str, mode: str) -> dict:
 
     holdings = _normalize_holding_rows(holdings_raw)
     optional = _normalize_optional_rows(optional_raw)
+    if mode in ("post_market_lunch", "post_market_evening") and market_payload is not None:
+        optional, _strategy_drop_logs = _filter_optional_by_strategy(optional, market_payload)
+        for line in _strategy_drop_logs:
+            print(line)
 
     holdings_lines = [_holding_item_to_readable(h) for h in holdings] if holdings else []
     optional_lines = [_optional_item_to_readable(o) for o in optional] if optional else []
@@ -921,7 +1189,13 @@ def main():
     feishu_content = analysis
 
     try:
-        pu = parse_and_update(analysis, mode)
+        pu = parse_and_update(
+            analysis,
+            mode,
+            market_payload=_unwrap_quant_market_payload(data)
+            if mode in ("post_market_lunch", "post_market_evening")
+            else None,
+        )
         feishu_content = replace_json_sections_for_feishu(
             analysis,
             optional_span=pu["optional_span"],

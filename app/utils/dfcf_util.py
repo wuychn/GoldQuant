@@ -74,11 +74,11 @@ def xw(symbol):
 
 def ztgc():
     """
-    涨停股
+    当日涨停股池（东财 ``stock_zt_pool_em``）：**剔除首板**，仅保留连板数≥2，与 strategy.md §2.1
+    「涨停池口径」及 ``quant_endpoint`` 的「涨停统计」、``main.py`` 自选校验一致。
     """
     records = dataframe_to_records(ak.stock_zt_pool_em(date=today()))
 
-    # 过滤：字段值大于1
     filtered_records = [
         item for item in records
         if get_val(item, "连板数", 0) > 1
