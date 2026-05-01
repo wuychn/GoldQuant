@@ -113,19 +113,27 @@ def cmfb(symbol):
     return dataframe_to_records(ak.stock_cyq_em(symbol=str(symbol), adjust=""))[-5:]
 
 
-def hist(symbol, period='daily'):
+def hist(symbol, period='daily', *, start_date=None, end_date=None):
     """
-    个股历史行情
+    个股历史行情。
+
+    ``start_date`` / ``end_date`` 为 ``YYYYMMDD``（或不带前导零的东财口径）；不传时按周期使用默认回溯窗口。
+    日线全量/增量由调用方传入 ``start_date`` 控制。
     """
-    n = 9
-    if period=='daily':
+    end = end_date or today()
+    if start_date is not None:
+        start = start_date
+    else:
         n = 9
-    elif period=='weekly':
-        n = 27
-    elif period=='monthly':
-        n = 60
+        if period == 'daily':
+            n = 9
+        elif period == 'weekly':
+            n = 27
+        elif period == 'monthly':
+            n = 60
+        start = get_n_workdays_ago(n=n)
     return dataframe_to_records(
-        ak.stock_zh_a_hist(symbol=str(symbol), period=period, start_date=get_n_workdays_ago(n=n), end_date=today()))
+        ak.stock_zh_a_hist(symbol=str(symbol), period=period, start_date=start, end_date=end))
 
 
 def ggjbxx(symbol):

@@ -62,6 +62,15 @@ class Settings(BaseSettings):
     #: 不走代理的地址列表（逗号分隔），常见内网与本机
     PROXY_NO_PROXY: str = "localhost,127.0.0.1"
 
+    #: 是否将盘前/盘中/盘后聚合结果写入本地归档（快照 + 合并日线 + 指标）
+    QUANT_ARCHIVE_ENABLED: bool = True
+    #: 归档根目录；未设置时默认为用户目录下 ``~/data/quant/archive``
+    QUANT_ARCHIVE_DIR: str | None = None
+    #: 某股票本地尚无日线归档时，日线全量拉取的起始日期（``YYYYMMDD``，可含 ``-``）
+    QUANT_HIST_FULL_START_DATE: str = "19900101"
+    #: 本地最后一根日线已是「今天」时，向前重叠拉取的交易日数（复权修正、同日多次刷新）；**补缺**时用「末根次日→今天」，不依赖本项。
+    QUANT_HIST_INCREMENTAL_TRADE_DAYS: int = 5
+
     @field_validator("CORS_ORIGINS")
     @classmethod
     def strip_cors_origins(cls, v: str) -> str:
