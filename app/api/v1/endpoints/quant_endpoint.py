@@ -373,8 +373,8 @@ async def pre_market(settings: SettingsDep) -> Response:
     5、给出判断
     6、保存到当日盘前数据，避免再次调用接口
     """
-    if (blocked := await _guard_real_workday_or_non_trading_response()) is not None:
-        return blocked
+    # if (blocked := await _guard_real_workday_or_non_trading_response()) is not None:
+    #     return blocked
     route = "GET /quant/market/pre_market"
     dpzs = await _important_index_spot(f"{route} | ak.stock_zh_index_spot_em")
     # TODO 开盘时获取到的是昨天的数据
@@ -419,8 +419,8 @@ async def during_market(settings: SettingsDep) -> Response:
     4、概念资金流
     5、自选/持仓/人气股/飙升榜以及个股的资金流
     """
-    if (blocked := await _guard_real_workday_or_non_trading_response()) is not None:
-        return blocked
+    # if (blocked := await _guard_real_workday_or_non_trading_response()) is not None:
+    #     return blocked
     route = "GET /quant/market/during_market"
     dpzs = await _important_index_spot(f"{route} | ak.stock_zh_index_spot_em")
 
@@ -491,8 +491,8 @@ async def during_market(settings: SettingsDep) -> Response:
     description="盘后",
 )
 async def post_market(settings: SettingsDep) -> Response:
-    if (blocked := await _guard_real_workday_or_non_trading_response()) is not None:
-        return blocked
+    # if (blocked := await _guard_real_workday_or_non_trading_response()) is not None:
+    #     return blocked
     route = "GET /quant/market/post_market"
     dpzs = await _important_index_spot(f"{route} | ak.stock_zh_index_spot_em")
     zqxy = await _earning_effect_intraday(f"{route} | ak.stock_market_activity_legu()")
