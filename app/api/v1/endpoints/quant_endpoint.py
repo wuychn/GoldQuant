@@ -16,7 +16,7 @@ from app.api.deps import SettingsDep
 from app.schemas.response import Response
 from app.utils.common_util import list_to_dict, today, get_val, cal_avg, is_real_workday_cn
 from app.utils.dataframe import dataframe_to_records
-from app.utils.dfcf_util import cmfb, hsgtzj, jbxx, lhbxq, pk, zj, ztgc, hist
+from app.utils.dfcf_util import cmfb, hsgtzj, jbxx, lhbxq, pk, zj, ztgc, hist, xw
 from app.utils.ths_util import stock_fund_flow_concept, hot_stock, stock_skyrocket
 
 logger = logging.getLogger(__name__)
@@ -114,7 +114,7 @@ async def _enrich_ths_stock_list(
         settings: SettingsDep,
         fetch_stocks: Callable[..., Awaitable[list]],
         *,
-        with_lhb: bool,
+        more: bool,
         list_context: str,
 ) -> list:
     out: list = []
@@ -187,7 +187,7 @@ async def _enrich_ths_stock_list(
             if avg_10:
                 item["10日线"] = avg_10
 
-            if with_lhb:
+            if more:
                 lhbmr = _sync_call_or_none(
                     f"{list_context} dfcf.lhbxq buy symbol={symbol!r}",
                     lambda: lhbxq(symbol, today(), "买入"),
@@ -197,6 +197,12 @@ async def _enrich_ths_stock_list(
                     lambda: lhbxq(symbol, today(), "卖出"),
                 )
                 item["龙虎榜"] = {"买入": lhbmr, "卖出": lhbmc}
+
+                xw_ = _sync_call_or_none(
+                    f"{list_context} dfcf.xw sell symbol={symbol!r}",
+                    lambda: xw(symbol),
+                )
+                item["个股新闻"] = xw_
 
             out.append(item)
     except Exception:
@@ -379,7 +385,7 @@ async def pre_market(settings: SettingsDep) -> Response:
     zxg = await _enrich_ths_stock_list(
         settings,
         _zx,
-        with_lhb=False,
+        more=False,
         list_context=f"{route} | _zx",
     )
 
@@ -387,7 +393,7 @@ async def pre_market(settings: SettingsDep) -> Response:
     ccg = await _enrich_ths_stock_list(
         settings,
         _cc,
-        with_lhb=False,
+        more=False,
         list_context=f"{route} | _cc",
     )
 
@@ -436,13 +442,13 @@ async def during_market(settings: SettingsDep) -> Response:
     # thsrqg = await _enrich_ths_stock_list(
     #     settings,
     #     hot_stock,
-    #     with_lhb=False,
+    #     more=False,
     #     list_context=f"{route} | ths.hot_stock",
     # )
     # thsrqbsb = await _enrich_ths_stock_list(
     #     settings,
     #     stock_skyrocket,
-    #     with_lhb=False,
+    #     more=False,
     #     list_context=f"{route} | ths.stock_skyrocket",
     # )
 
@@ -450,7 +456,7 @@ async def during_market(settings: SettingsDep) -> Response:
     zxg = await _enrich_ths_stock_list(
         settings,
         _zx,
-        with_lhb=False,
+        more=False,
         list_context=f"{route} | _zx",
     )
 
@@ -458,7 +464,7 @@ async def during_market(settings: SettingsDep) -> Response:
     ccg = await _enrich_ths_stock_list(
         settings,
         _cc,
-        with_lhb=False,
+        more=False,
         list_context=f"{route} | _cc",
     )
 
@@ -504,13 +510,13 @@ async def post_market(settings: SettingsDep) -> Response:
     thsrqg = await _enrich_ths_stock_list(
         settings,
         hot_stock,
-        with_lhb=True,
+        more=True,
         list_context=f"{route} | ths.hot_stock",
     )
     # thsrqbsb = await _enrich_ths_stock_list(
     #     settings,
     #     stock_skyrocket,
-    #     with_lhb=True,
+    #     more=True,
     #     list_context=f"{route} | ths.stock_skyrocket",
     # )
 
@@ -518,7 +524,7 @@ async def post_market(settings: SettingsDep) -> Response:
     zxg = await _enrich_ths_stock_list(
         settings,
         _zx,
-        with_lhb=False,
+        more=False,
         list_context=f"{route} | _zx",
     )
 
@@ -526,7 +532,7 @@ async def post_market(settings: SettingsDep) -> Response:
     ccg = await _enrich_ths_stock_list(
         settings,
         _cc,
-        with_lhb=False,
+        more=False,
         list_context=f"{route} | _cc",
     )
 
