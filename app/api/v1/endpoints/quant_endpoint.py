@@ -120,7 +120,7 @@ async def _enrich_ths_stock_list(
     out: list = []
     try:
         rows = await fetch_stocks(settings=settings)
-        rows = rows[:10]
+        rows = rows[:20]
         for item in rows:
             try:
                 symbol = item["股票代码"]
@@ -309,7 +309,7 @@ async def news():
                         "标题": get_val(d, '标题'),
                         "摘要": get_val(d, '摘要'),
                         "发布时间": get_val(d, '发布时间'),
-                        "链接": get_val(d, '链接'),
+                        # "链接": get_val(d, '链接'),
                         "来源": '东方财富'
                     })
     except Exception:
@@ -325,7 +325,7 @@ async def news():
                         "标题": get_val(d, '标题'),
                         "摘要": get_val(d, '内容'),
                         "发布时间": get_val(d, '发布时间'),
-                        "链接": get_val(d, '链接'),
+                        # "链接": get_val(d, '链接'),
                         "来源": '同花顺'
                     })
     except Exception:
@@ -341,7 +341,7 @@ async def news():
                         "标题": get_val(d, '标题'),
                         "摘要": get_val(d, '摘要'),
                         "发布时间": get_val(d, '发布日期').replace('T00:00:00.000', ' ') + get_val(d, '发布时间'),
-                        "链接": '',
+                        # "链接": '',
                         "来源": '财联社'
                     })
     except Exception:
@@ -432,12 +432,13 @@ async def during_market(settings: SettingsDep) -> Response:
     )
     zttj = await _ztgc_or_none(f"{route} | dfcf.ztgc")
     # hsgtzjlx = await _hsgtzj_or_none(f"{route} | dfcf.hsgtzj")
-    thsrqg = await _enrich_ths_stock_list(
-        settings,
-        hot_stock,
-        with_lhb=False,
-        list_context=f"{route} | ths.hot_stock",
-    )
+    # 盘中不获取人气股
+    # thsrqg = await _enrich_ths_stock_list(
+    #     settings,
+    #     hot_stock,
+    #     with_lhb=False,
+    #     list_context=f"{route} | ths.hot_stock",
+    # )
     # thsrqbsb = await _enrich_ths_stock_list(
     #     settings,
     #     stock_skyrocket,
@@ -469,7 +470,7 @@ async def during_market(settings: SettingsDep) -> Response:
         "今日涨幅前十概念": jrzfqsgn,
         "今日资金流入前十概念": jrzjlrqsgn,
         "涨停统计": zttj,
-        "同花顺人气股": thsrqg,
+        # "同花顺人气股": thsrqg,
         # "人气飙升榜": thsrqbsb,
         "自选股": zxg,
         "持仓股": ccg,
