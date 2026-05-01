@@ -35,7 +35,7 @@ DATA_DIR = os.path.expanduser("~/data/quant")
 FUND_FILE = f"{DATA_DIR}/fund.md"
 OPTIONAL_FILE = f"{DATA_DIR}/optional.jsonl"
 HOLDING_FILE = f"{DATA_DIR}/holding.jsonl"
-STRATEGY_FILE = f"{os.path.dirname(os.path.abspath(__file__))}/../references/strategy.md"
+STRATEGY_FILE = f"{DATA_DIR}/strategy.md"
 INITIAL_CAPITAL = 10000
 
 # ========== 飞书推送 ==========
@@ -266,8 +266,6 @@ def analyze_pre_market(raw_data: dict, timestamp: str) -> str:
 
 请严格按以下格式输出：
 
-【开盘啦：{当前时间，格式HH:MM}】
-
 一、市场整体概览
 - 上证指数：{当前点位}（{涨跌幅}）
 - 深证成指：{当前点位}（{涨跌幅}）
@@ -317,9 +315,8 @@ def analyze_during_market(raw_data: dict, timestamp: str) -> str:
 
 请严格按以下格式输出：
 
-【时间】{当前时间，格式yyyy-MM-dd HH:mm:ss}
 【市场状态】{强势/震荡/弱势}（{综合描述：上证位置、昨日涨停指数、成交额、连板高度}）
-【总仓位��限】80% | 当前持仓{x%}
+【总仓位限制】80% | 当前持仓{x%}
 
 【涨停战法买入】
 标的：{代码}，方向：买入，仓位：{x%}，委托价：{价格}（{开盘价/现价}），
@@ -363,8 +360,6 @@ def analyze_lunch_market(raw_data: dict, timestamp: str) -> str:
 【重要】禁止使用markdown格式，纯文本输出，避免任何#、*、-等符号。
 
 请严格按以下格式输出：
-
-【午间复盘：{当前时间，格式HH:MM}】
 
 一、上午大盘回顾
 - 上证：{开盘价} → {午间收盘价}（{涨跌幅}）
@@ -419,8 +414,6 @@ def analyze_evening_market(raw_data: dict, timestamp: str) -> str:
 【重要】禁止使用markdown格式，纯文本输出，避免任何#、*、-等符号。
 
 请严格按以下格式输出：
-
-【晚间复盘：{今日日期}】
 
 一、今日大盘概况
 - 上证指数：{收盘点位}（{涨跌幅}），最高{点位}，最低{点位}
