@@ -5,7 +5,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # `app/core/config.py` → 上两级为项目根（含 `.env`），避免依赖进程 cwd
@@ -70,6 +70,10 @@ class Settings(BaseSettings):
     QUANT_HIST_FULL_START_DATE: str = "19900101"
     #: 本地最后一根日线已是「今天」时，向前重叠拉取的交易日数（复权修正、同日多次刷新）；**补缺**时用「末根次日→今天」，不依赖本项。
     QUANT_HIST_INCREMENTAL_TRADE_DAYS: int = 5
+    #: 盘前聚合是否拉取东财 A 股全市场行情表 ``stock_zh_a_spot_em`` 再按代码筛选（数据量大、易触发源站限流；默认关闭）。需要「盘前实时快照」时设 ``GOLDQUANT_QUANT_SPOT_EM_FULL_TABLE=true``。
+    QUANT_SPOT_EM_FULL_TABLE: bool = False
+    #: 盘前/盘中/盘后接口里「历史行情」日线最多返回条数（从最新往前截），减轻模型上下文；完整 K 线仍在本地归档。
+    QUANT_HIST_RESPONSE_MAX_BARS: int = Field(default=48, ge=1, le=4000)
 
     @field_validator("CORS_ORIGINS")
     @classmethod

@@ -27,13 +27,14 @@ _SPOT_KEYS = (
     "成交额",
     "成交量",
     "振幅",
-    "总市值",
-    "流通市值",
 )
 
 
 def spot_snapshot_for_codes(context: str, codes: set[str]) -> dict[str, dict[str, Any]]:
-    """东财 A 股实时表（中文列名），按代码筛选子集；codes 为 6 位数字不含前缀。"""
+    """东财 A 股实时全表（``stock_zh_a_spot_em``）按代码筛选子集；codes 为 6 位数字不含前缀。
+
+    注意：全表体积大，频繁调用易触发源站限流；盘前聚合默认不调用（见 ``Settings.QUANT_SPOT_EM_FULL_TABLE``）。
+    """
     if not codes:
         return {}
     try:
@@ -126,7 +127,6 @@ def _index_ma20_vs_close_pct(context: str) -> dict[str, Any | None]:
 def _two_market_amount_ratio_vs_ma5(context: str) -> dict[str, Any | None]:
     """上证+深证成指日成交额之和，相对近 5 日（不含当日）均值的倍数（近似两市成交）。"""
     out: dict[str, Any | None] = {
-        "说明": "上证与深证成指日成交额相加，作两市成交近似；与真实全市场成交额可能有偏差。",
         "数据截止日": None,
         "今日合计成交额": None,
         "近5日合计成交额均值": None,
@@ -220,7 +220,6 @@ def build_market_state_machine_zh(
     ztp = _yesterday_zt_pool_performance_zh(context, prev_td)
     ztc = _zt_height_and_count_zh(context, pool_full)
     return {
-        "数据说明": "以下为依据公开行情聚合的参考指标，用于市场强弱判断；与交易所官方统计可能有偏差。",
         "上证指数": idx,
         "两市成交额近似": amt,
         "昨日涨停股池表现": ztp,

@@ -56,13 +56,6 @@ def today():
     return datetime.now().strftime("%Y%m%d")
 
 
-def today():
-    """
-    获取当日日期
-    """
-    return datetime.now().strftime("%Y%m%d")
-
-
 def today_before(days):
     """
     自然天，非工作日

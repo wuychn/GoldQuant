@@ -365,8 +365,6 @@ def load_computed_metrics_zh(settings: Settings, symbol: str) -> dict[str, Any] 
         return None
     macd = raw.get("MACD") if isinstance(raw.get("MACD"), dict) else {}
     return {
-        "本地K线根数": raw.get("bars_count"),
-        "指标截至日期": raw.get("latest_date"),
         "最新收盘价": raw.get("latest_close"),
         "均线5日": raw.get("MA5"),
         "均线10日": raw.get("MA10"),

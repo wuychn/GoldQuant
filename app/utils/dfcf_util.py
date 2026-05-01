@@ -93,10 +93,16 @@ def ztgc():
 
 def zj(symbol):
     """
-    个股资金，取最新5条
+    个股资金流向（日线级）；返回较近一段记录，供调用方按交易日再截断。
     """
-    return dataframe_to_records(
-        ak.stock_individual_fund_flow(stock=str(symbol), market="sh" if str(symbol).startswith("6") else "sz"))[-5:]
+    recs = dataframe_to_records(
+        ak.stock_individual_fund_flow(
+            stock=str(symbol), market="sh" if str(symbol).startswith("6") else "sz"
+        )
+    )
+    if not recs:
+        return []
+    return recs[-120:] if len(recs) > 120 else recs
 
 
 def hsgtzj():

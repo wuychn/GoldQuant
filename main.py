@@ -9,6 +9,7 @@ A股短线交易机器人 - 自主决策版
 """
 
 import os
+import re
 import sys
 
 # 禁用代理
@@ -32,8 +33,8 @@ LLM_MODEL = "MiniMax-M2.7"
 # 数据目录
 DATA_DIR = os.path.expanduser("~/data/quant")
 FUND_FILE = f"{DATA_DIR}/fund.md"
-OPTIONAL_FILE = f"{DATA_DIR}/optional.md"
-HOLDING_FILE = f"{DATA_DIR}/holding.md"
+OPTIONAL_FILE = f"{DATA_DIR}/optional.jsonl"
+HOLDING_FILE = f"{DATA_DIR}/holding.jsonl"
 STRATEGY_FILE = f"{os.path.dirname(os.path.abspath(__file__))}/../references/strategy.md"
 INITIAL_CAPITAL = 10000
 
@@ -129,29 +130,53 @@ def update_fund(profit: float):
             f.write(str(int(fund)))
     return fund
 
-def get_holdings() -> list:
-    try:
-        with open(HOLDING_FILE, 'r') as f:
-            return json.loads(f.read())
-    except:
+def _read_jsonl_stock_file(path: str) -> list:
+    """每行一条 JSON 对象；``#`` 开头为注释；单行可为数组则展开。"""
+    if not os.path.isfile(path):
         return []
+    out = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(obj, list):
+                for it in obj:
+                    if isinstance(it, dict):
+                        out.append(it)
+            elif isinstance(obj, dict):
+                out.append(obj)
+    return out
+
+
+def _write_jsonl_stock_file(path: str, rows: list) -> None:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        for row in rows:
+            if isinstance(row, dict):
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def get_holdings() -> list:
+    return _read_jsonl_stock_file(HOLDING_FILE)
+
 
 def save_holdings(holdings: list):
     os.makedirs(DATA_DIR, exist_ok=True)
-    with open(HOLDING_FILE, 'w') as f:
-        f.write(json.dumps(holdings, ensure_ascii=False, indent=2))
+    _write_jsonl_stock_file(HOLDING_FILE, holdings)
+
 
 def get_optional() -> list:
-    try:
-        with open(OPTIONAL_FILE, 'r') as f:
-            return json.loads(f.read())
-    except:
-        return []
+    return _read_jsonl_stock_file(OPTIONAL_FILE)
+
 
 def save_optional(optional: list):
     os.makedirs(DATA_DIR, exist_ok=True)
-    with open(OPTIONAL_FILE, 'w') as f:
-        f.write(json.dumps(optional, ensure_ascii=False, indent=2))
+    _write_jsonl_stock_file(OPTIONAL_FILE, optional)
 
 def read_trades(today: str) -> list:
     try:
@@ -199,14 +224,13 @@ def process_news(raw_data: dict, timestamp: str) -> str:
 {粘贴多条新闻，每条可标注来源}
 
 【输出要求】
-1. 从新闻中提取最重要的几条（通常3-6条），每条标注信息来源。
+1. 按重要度降序排列，输出前20条。
 2. 生成一段"解读"，站在短线交易者角度，分析这些新闻对大盘、板块、市场情绪可能产生的影响，并指出短线操作需要关注的方向。
 3. 【重要】禁止使用markdown格式，纯文本输出，避免任何#、*、-等markdown符号。
 4. 严格按以下纯文本格式输出：
 
-【整点要闻：{当前时间，格式HH:MM}】
-1、据{来源1}、{来源2}消息，{新闻标题或核心内容}
-2、据{来源1}消息，{新闻标题或核心内容}
+1、{新闻标题或核心内容}
+2、{新闻标题或核心内容}
 ……
 
 解读：{综合解读，说明对大盘/板块/情绪的可能影响，以及短线交易需注意的方向}"""
@@ -626,7 +650,7 @@ def main():
     today = now.strftime("%Y-%m-%d")
 
     labels = {
-        "news": "整点新闻",
+        "news": "新闻聚焦",
         "pre_market": "盘前分析",
         "during_market": "盘中实时",
         "post_market_lunch": "午间复盘",
@@ -662,7 +686,7 @@ def main():
     try:
         if mode == "news":
             summary = process_news(data, timestamp)
-            analysis = f"【{label}】{timestamp}\n\n今日新闻要点：\n{summary}"
+            analysis = f"【{label}】{timestamp}\n\n{summary}"
             save_raw_data(mode, data)
         elif mode == "pre_market":
             raw_data_pre = data
