@@ -154,7 +154,7 @@ def _slim_earning_effect_dict(zqxy: object, *, max_pairs: int = 22) -> dict[str,
     return dict(list(zqxy.items())[:max_pairs])
 
 
-def _merge_concept_boards(jzf: list | None, jzj: list | None, *, limit: int = 8) -> dict[str, Any]:
+def _merge_concept_boards(jzf: list | None, jzj: list | None, *, limit: int = 10) -> dict[str, Any]:
     return {
         "涨幅榜": (jzf or [])[:limit],
         "资金流入榜": (jzj or [])[:limit],
@@ -261,11 +261,13 @@ async def _enrich_ths_stock_list(
         more: bool,
         list_context: str,
         include_pre_snapshot: bool = False,
+        hot_limit: int = 20,
 ) -> list:
     out: list = []
     try:
         rows = await fetch_stocks(settings=settings)
-        rows = rows[:20]
+        if hot_limit > 0:
+            rows = rows[:hot_limit]
         spot_effective: dict[str, dict[str, object]] = {}
         if include_pre_snapshot and settings.QUANT_SPOT_EM_FULL_TABLE:
             codes_set = {
@@ -697,6 +699,7 @@ async def post_market(settings: SettingsDep, background_tasks: BackgroundTasks) 
         hot_stock,
         more=True,
         list_context=f"{route} | ths.hot_stock",
+        hot_limit=50,
     )
     # thsrqbsb = await _enrich_ths_stock_list(
     #     settings,
