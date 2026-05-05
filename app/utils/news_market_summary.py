@@ -13,7 +13,7 @@ from app.core.config import Settings
 logger = logging.getLogger(__name__)
 
 _SUMMARY_FILENAME = "news_market_impact_summary.txt"
-_MAX_CHARS = 500
+_MAX_CHARS = 1000
 
 
 def news_market_summary_path() -> Path:
@@ -66,7 +66,7 @@ def refresh_news_market_summary_sync(settings: Settings, news_items: list) -> No
     """
     **在每次** ``GET /quant/market/news`` 聚合出 ``news_items`` 之后调用。
 
-    仅使用 **大模型** 根据当次完整列表生成 **500 字以内** 摘要，成功则 **覆盖写入**
+    仅使用 **大模型** 根据当次完整列表生成 **1000 字以内** 摘要，成功则 **覆盖写入**
     ``~/data/quant/news_market_impact_summary.txt``。
 
     未配置全局 ``LLM_API_KEY``（环境变量 ``GOLDQUANT_LLM_API_KEY``）或 LLM 调用失败时：**不写入**（保留上次有效摘要，若有）。
