@@ -75,6 +75,11 @@ class Settings(BaseSettings):
     #: 盘前/盘中/盘后接口里「历史行情」日线最多返回条数（从最新往前截），减轻模型上下文；完整 K 线仍在本地归档。
     QUANT_HIST_RESPONSE_MAX_BARS: int = Field(default=48, ge=1, le=4000)
 
+    #: 调用 ``GET /quant/market/news`` 时是否请求 LLM 生成「新闻对股市影响」摘要（写入 ~/data/quant/news_market_impact_summary.txt）
+    QUANT_NEWS_SUMMARY_LLM_API_KEY: str | None = None
+    QUANT_NEWS_SUMMARY_LLM_BASE_URL: str = "https://api.minimaxi.com/anthropic"
+    QUANT_NEWS_SUMMARY_LLM_MODEL: str = "MiniMax-M2.7"
+
     @field_validator("CORS_ORIGINS")
     @classmethod
     def strip_cors_origins(cls, v: str) -> str:
