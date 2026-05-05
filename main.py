@@ -45,19 +45,20 @@ NEWS_IMPACT_SUMMARY_FILE = f"{DATA_DIR}/news_market_impact_summary.txt"
 
 # 供 LLM 解读行情 JSON：与后端 ``quant_endpoint`` 聚合结构一致，避免把人气榜/涨停池误写进「自选」。
 RAW_DATA_FIELD_GUIDE = """【接口 JSON 顶层字段说明（必须按键名区分，禁止混用）】
-「自选股」：唯一表示用户自选股的数组。只有该键下的标的才允许出现在正文里所有标题含「自选」的小节中。若该键为 [] 或不存在，对应小节只能写一句「无自选股」或「当前自选股为空」，不得用其他任何键里的股票名单顶替。
+「自选股」：唯一表示用户自选股的数组；元素可含「战法」字段（**涨停板战法** / **龙回头战法**，或由旧数据产生的未标注）。只有该键下的标的才允许出现在正文里所有标题含「自选」的小节中。若该键为 [] 或不存在，对应小节只能写一句「无自选股」或「当前自选股为空」，不得用其他任何键里的股票名单顶替。盘中买卖须与该标的「战法」一致，禁止混用两套战法逻辑。
 「持仓股」：用户持仓，凡标题含「持仓」的小节仅使用该键；若为空则写无持仓。
 「同花顺人气榜」：不是用户自选。涨停战法盘中判定「人气前十」请用「人气排名」≤10；禁止把该键写入「自选股」。
 「涨停统计」「概念板块」「大盘指数」「赚钱效应」「大盘资金流」「市场状态机」等：市场环境或榜单类数据，其中的个股/代码不得当作「自选股」列出。其中「概念板块」含「涨幅榜」「资金流入榜」各约前十条，行业名需与个股「所属概念」做模糊对应。
 「大盘资金流」与「个股资金流」：资金流明细中以「日期」「主力净流入-净额」等为准。
 「盘口」：包含「最新」「均价」（分时均价）、「量比」、五档买卖等字段。
 「盘中10分钟线」：仅返回**交易日当日**已存档 K 线。
-复盘正文末尾「自选更新」JSON（午间/晚间）：用于程序写入自选文件；须按 strategy「2.1」「2.2」与人气榜前20/前50筛选，面向下一交易日观察池，不得因当日已涨停而拒绝写入。"""
+复盘正文末尾「自选更新」JSON（午间/晚间出现）：按策略「2.1」「2.2」与人气榜前20/前50筛选，每条须含「战法」「加入自选原因」，作为下一交易日观察池；不得因当日已涨停而省略合格标的。"""
 
-# 「自选更新」：落盘前不再按 strategy 与接口做可核验性过滤，以模型返回为准；理由文本仍建议与引用的行情字段一致。
+# 自选更新：不以 strategy 做服务端过滤，以模型输出为准（解析逻辑见下文）。
 OPTIONAL_UPDATE_RULES_BLOCK = """
 【自选更新说明】
 「自选更新」JSON 以模型输出为准。若为 []，你必须在输出中单独一行写明「自选未更新原因：……」。
+每项须含「战法」（取值仅为「涨停板战法」或「龙回头战法」）、「加入自选原因」（须与战法一致，不得以另一套战法说理）。
 若填写「加入自选原因」，请尽量与当次业务 JSON 中的字段（如「同花顺人气榜」「涨停统计」「概念板块」「历史行情」等）描述一致，便于复盘。
 """
 
@@ -65,15 +66,34 @@ OPTIONAL_UPDATE_RULES_BLOCK = """
 TRADING_PHASE_WORKFLOW_BLOCK = """
 【交易闭环阶段分工（必须遵守，勿混淆）】
 1、盘前：依据开盘情况、接口 JSON「自选股」「持仓股」与 交易策略，制定**当日**可执行纲要；对符合策略条件的标的给出**挂单**要素（方向、委托价、时刻、仓位）。
-2、盘中（真实交易）：**买入**仅限来自**此前复盘已通过「自选更新」写入自选池**、且当前仍满足盘中追击/龙回头条件的标的；**卖出**仅限来自 JSON「持仓股」。禁止仅凭「同花顺人气榜」热度对未入池股票开仓。
+2、盘中（真实交易）：**买入**仅限来自**此前复盘「自选更新」已纳入、且体现在接口 JSON「自选股」中的标的**，且当前仍满足盘中追击/龙回头条件；**同一标的须按 JSON「自选股」内「战法」字段选用对应战法段落（涨停战法 / 龙回头），严禁交叉套用**；**卖出**仅限来自 JSON「持仓股」。禁止仅凭「同花顺人气榜」热度对未入池股票开仓。
 3、复盘（午间/晚间）：回顾**当日**行情与账户操作，总结盈亏与教训，并**为下一交易日储备自选**。涨停板战法按 strategy「2.1 涨停板战法 – 加入自选」从「同花顺人气榜」**前20条**内筛选；龙回头按「2.2 龙回头战法 – 加入自选」从**前50条**内筛选（若接口仅返回约20条轻量数据，则在该范围内按策略尽其所能筛选）。
 """
 
 OPTIONAL_UPDATE_RULES_REVIEW_BLOCK = """
 【复盘｜自选更新专项规则】
 「自选更新」表示按 2.1 / 2.2 **纳入下一交易日观察自选池**，与盘中此刻能否再买、是否已涨停**不是同一判断**。
-- 凡符合「2.1」或「2.2」加入自选条件的标的，**均应**写入「自选更新」JSON 并填写「加入自选原因」。**今日已涨停**常属于次日验证持续性/接力观察，**不得**以「已涨停无法买入」「仅一只标的」「等待明日验证」等为由输出空数组 []。
+- 凡符合「2.1」或「2.2」加入自选条件的标的，**均应**在「自选更新」中给出条目（含「战法」「加入自选原因」）。**今日已涨停**常属于次日验证持续性/接力观察，**不得**以「已涨停无法买入」「仅一只标的」「等待明日验证」等为由输出空数组 []。
 - 仅当按交易策略逐项核对后**确实无任何标的**满足 2.1/2.2 加入条件（例如人气榜缺失、或全场无任何条目满足硬条件）时，方可输出 []，并单独一行写「自选未更新原因：……」。
+"""
+
+# 自选 JSON 合法战法取值（与提示词、落盘字段一致）
+OPTIONAL_STRATEGY_ALLOWED = frozenset({"涨停板战法", "龙回头战法"})
+
+STRATEGY_ISOLATION_BLOCK = """
+【战法隔离（严禁混用、乱用）】
+- 「涨停板战法」仅遵循 strategy **2.1** 及人气榜前 **20**、人气排名≤10、板块对齐、涨停统计与盘口追击等口径；「龙回头战法」仅遵循 **2.2** 及人气榜前 **50**、均线/量比/回调与资金流等口径。**禁止**在同一标的的「加入自选原因」里混写两套逻辑（例如对龙回头标的大谈人气排名是否符合涨停前十）。
+- 「自选更新」JSON **每一条必须含「战法」**，取值只能是 **`涨停板战法`** 或 **`龙回头战法`**（与 2.1 / 2.2 一一对应）；「加入自选原因」须以 **`【涨停板战法】`** 或 **`【龙回头战法】`** 开头，后续论据只能使用该战法允许的字段。
+- **次日盘中**：执行涨停战法买入时，仅允许 JSON「自选股」中该标的 **`战法` 为「涨停板战法」**；执行龙回头买入时，仅允许 **`战法` 为「龙回头战法」**。禁止用龙回头均线逻辑操作标注为涨停战法的自选，反之亦然。（历史自选缺「战法」字段时，须在文中单独说明并按单一战法审慎处理，不得混判。）
+"""
+
+REVIEW_OUTPUT_SELF_CHECK_BLOCK = """
+【午间/晚间复盘｜输出自选 JSON 前自检（须逐项完成后再写 JSON，减少遗漏与摇摆）】
+① **涨停战法**：仅在「同花顺人气榜」前 **20** 条内，独立按 strategy **2.1** 筛一遍，记下合格代码（只用 2.1 口径）。
+② **龙回头**：仅在「同花顺人气榜」前 **50** 条内（接口不足则按实际条数），独立按 **2.2** 筛一遍，记下合格代码（只用 2.2 口径）。
+③ 同一代码可同时出现在两步，但输出 JSON 时**每条记录只能填一个「战法」**，且「加入自选原因」严禁混用两套说理。
+④ 每条对象必须含 **`战法`** + **`加入自选原因`**（原因前缀与战法一致）。
+⑤ 仅当①②均无合格标的时，才输出 []，并写「自选未更新原因」。
 """
 
 
@@ -154,7 +174,14 @@ def send_msg(content: str, token: str):
         raise Exception(f"发送失败: {result}")
 
 # ========== LLM调用（带重试）：项目根 .env 中 LLM_API_KEY / LLM_BASE_URL / LLM_MODEL（与 FastAPI 同源）==========
-def call_llm(system: str, user: str, max_tokens: int = 2500, retries: int = 3) -> str:
+def call_llm(
+    system: str,
+    user: str,
+    max_tokens: int = 2500,
+    retries: int = 3,
+    *,
+    temperature: float | None = None,
+) -> str:
     cfg = get_settings()
     api_key = (cfg.LLM_API_KEY or "").strip()
     if not api_key:
@@ -169,11 +196,12 @@ def call_llm(system: str, user: str, max_tokens: int = 2500, retries: int = 3) -
         "x-api-key": api_key,
         "anthropic-version": "2023-06-01",
     }
+    temp = 0.3 if temperature is None else float(temperature)
     payload = {
         "model": cfg.LLM_MODEL,
         "messages": [{"role": "user", "content": f"{system}\n\n{user}"}],
         "max_tokens": max_tokens,
-        "temperature": 0.3,
+        "temperature": temp,
     }
     for attempt in range(retries):
         try:
@@ -349,7 +377,7 @@ def analyze_pre_market(raw_data: dict, timestamp: str) -> str:
 - 必须写明加自选原因、买卖时点与价格；目标是组合净值大幅可持续增值，而非泛泛而谈。
 - 概率游戏 + 纪律执行 + 知行合一；宁可卖飞，不可被套。
 
-""" + TRADING_PHASE_WORKFLOW_BLOCK + """
+""" + TRADING_PHASE_WORKFLOW_BLOCK + STRATEGY_ISOLATION_BLOCK + """
 
 【交易策略】（必须严格遵守）
 """ + strategy + """
@@ -365,6 +393,7 @@ def analyze_pre_market(raw_data: dict, timestamp: str) -> str:
 - 市场情绪：{高/中/低}，{简要说明}
 
 二、自选股（仅根据 JSON 根键「自选股」数组；该数组为空则本小节只写「无自选股」一句，不得从人气榜、涨停池、板块等其它键借股票充填）
+若条目含「战法」，请按「涨停板战法」「龙回头战法」分列简述，勿混写判定逻辑。
 1、{股票名称}（{代码}）：{当前价}，{涨跌幅}，{异动/正常}
 2、……
 
@@ -373,17 +402,19 @@ def analyze_pre_market(raw_data: dict, timestamp: str) -> str:
 2、……
 
 四、涨停板战法（集合竞价与盘中）
+- 本段**仅**用于 JSON「自选股」中 **「战法」=「涨停板战法」** 的标的；缺「战法」的旧数据须在文中明确正按涨停战法核对后再给单，**禁止**用龙回头均线逻辑覆盖此类标的。
 - 集合竞价：仍可按策略评估高开区间与量比；若准备挂单须给出限价与 deadline。
 - 盘中追击（使用盘中接口 JSON）：标的「人气排名」须 ≤10（「同花顺人气榜」返回约 20 条轻量数据，以前十名为准）；个股「所属概念」须能与「概念板块」中「涨幅榜」前十或「资金流入榜」前十的行业名对应；盘口「均价」为分时均线，现价须站上均价方可买入；给出买入价、时刻与仓位。
 
 五、龙回头战法（定价与资金口径）
+- 本段**仅**用于 **「战法」=「龙回头战法」** 的自选标的；**禁止**用涨停战法的人气前十/板块对齐要求去套龙回头标的。
 - 买入区间须同时参照「5日线」「10日线」「20日线」或「技术指标」内均线；量能看盘口「量比」；资金看「个股资金流」最近一条的「主力净流入-净额」方向与规模。
 
 六、市场判断与当日执行纲要
 {深度分析结论}
 
-七、【持仓更新】（仅此一处输出 JSON 数组用于同步 ~/data/quant/holding.jsonl）
-规则：若有增删改持仓，输出非空 JSON，程序将写入磁盘；若本次无需变更，必须输出 []，且在随后单独一行写明「持仓未更新原因：……」（例如无新开平仓指令、与上次持仓一致、缺口数据无法下单等）。
+七、【持仓更新】（仅此一处输出持仓 JSON 数组）
+规则：若有增删改持仓，输出非空 JSON；若本次无需变更，输出 []，并在下一行单独写明「持仓未更新原因：……」（如无新开平仓指令、与上次持仓一致、缺口数据无法下单等）。
 格式：须含股票代码、名称、买入时间（yyyy-MM-dd HH:mm:ss）、买入价、买入原因；卖出补全卖出时间与卖出价。
 [{"股票代码":"600000","股票名称":"浦发银行","买入时间":"2026-05-03 09:31:00","买入价":11.2,"买入原因":"……","卖出时间":"","卖出价":"","卖出原因":""}]"""
 
@@ -392,7 +423,7 @@ def analyze_pre_market(raw_data: dict, timestamp: str) -> str:
         tail=f"\n\n【当前资金】：{fund:.2f} 元",
     )
 
-    return call_llm(system, user, max_tokens=140000)
+    return call_llm(system, user, max_tokens=140000, temperature=0.18)
 
 # ========== 盘中分析 ==========
 def analyze_during_market(raw_data: dict, timestamp: str) -> str:
@@ -406,7 +437,7 @@ def analyze_during_market(raw_data: dict, timestamp: str) -> str:
 - 禁止「建议」「仅供参考」；输出可执行的买卖挂单要素：代码、名称、方向、仓位比例、委托价、触发时刻（yyyy-MM-dd HH:mm:ss 或当日清晰时点）。
 - 必须交代加自选原因、买卖时间与价格；目标是净值大幅增值。
 
-""" + TRADING_PHASE_WORKFLOW_BLOCK + """
+""" + TRADING_PHASE_WORKFLOW_BLOCK + STRATEGY_ISOLATION_BLOCK + """
 
 【核心原则】
 - 热点就是印钞机，退潮前先手卖出；宁可卖飞，不可被套。
@@ -422,18 +453,18 @@ def analyze_during_market(raw_data: dict, timestamp: str) -> str:
 【总仓位限制】依策略第六章 | 当前持仓{x%}
 
 【涨停板战法｜盘中买入】
-条件自查：JSON「同花顺人气榜」含人气 **前 20 条**（轻量字段）；买卖判定仍以 **人气排名≤10** 为准；标的所属概念须对应「概念板块」之「涨幅榜」前十或「资金流入榜」前十；个股盘口请用「自选股」/「持仓股」或另行行情，勿假定人气榜条目含盘口。若标的仅在人气榜第11～20名，不按涨停战法盘中追击。盘口「最新」须高于「均价」（分时均线）方可买入。**买入标的须出自 JSON「自选股」**（复盘阶段已通过「自选更新」维护的池子）；不得仅凭人气榜排名对未在自选内的股票开仓。
+条件自查：仅当该标的在 JSON「自选股」中 **「战法」=「涨停板战法」**（或缺省但你在正文已明确仅按涨停战法处理）时，才适用本段。JSON「同花顺人气榜」含人气 **前 20 条**（轻量字段）；买卖判定仍以 **人气排名≤10** 为准；标的所属概念须对应「概念板块」之「涨幅榜」前十或「资金流入榜」前十；个股盘口请用「自选股」/「持仓股」或另行行情，勿假定人气榜条目含盘口。若标的仅在人气榜第11～20名，不按涨停战法盘中追击。盘口「最新」须高于「均价」（分时均线）方可买入。**禁止对「战法」=「龙回头战法」的标的套用本节追击逻辑。**
 输出：标的代码与名称，方向买入，仓位{x%}，委托价与时刻，止损与目标价。
 
 【龙回头战法｜盘中买入】
-条件自查：现价处于 5/10/20 日均线允许区间（见「5日线」「10日线」「20日线」或「技术指标」）；量能参考盘口「量比」；资金参考「个股资金流」当日记录的「主力净流入-净额」。**买入标的须出自 JSON「自选股」**（复盘按 2.2 已入池）；不得对未入池股票开仓。
+条件自查：仅当 **「战法」=「龙回头战法」** 时适用。现价处于 5/10/20 日均线允许区间（见「5日线」「10日线」「20日线」或「技术指标」）；量能参考盘口「量比」；资金参考「个股资金流」当日记录的「主力净流入-净额」。**禁止对「涨停板战法」标的套用本节均线/回调逻辑。**
 输出：委托价、时刻、仓位、止损。
 
 【涨停/龙回头｜持仓处理】
 - {股票名称}：浮盈/浮亏{x%}，{卖出或持有的明确价位与时间条件}
 
-【持仓更新】（仅此一处输出 JSON 数组用于同步持仓文件）
-规则：若非空 JSON，程序写入 ~/data/quant/holding.jsonl；若为 []，须在下一行写明「持仓未更新原因：……」。
+【持仓更新】（仅此一处输出持仓 JSON 数组）
+规则：若非空 JSON，列出完整持仓变更；若为 []，须在下一行写明「持仓未更新原因：……」。
 每条须含买入时间（yyyy-MM-dd HH:mm:ss）、买入价、买入原因；卖出须含卖出时间与卖出价。
 [{"股票代码":"600000","股票名称":"浦发银行","买入时间":"2026-05-03 10:30:00","买入价":11.2,"买入原因":"……","卖出时间":"","卖出价":"","卖出原因":""}]
 
@@ -449,7 +480,7 @@ def analyze_during_market(raw_data: dict, timestamp: str) -> str:
         ),
     )
 
-    return call_llm(system, user, max_tokens=140000)
+    return call_llm(system, user, max_tokens=140000, temperature=0.18)
 
 # ========== 午间复盘 ==========
 def analyze_lunch_market(raw_data: dict, timestamp: str) -> str:
@@ -465,7 +496,7 @@ def analyze_lunch_market(raw_data: dict, timestamp: str) -> str:
 - 宁可卖飞，不可被套
 - 有鱼捕鱼，无鱼织网，空仓等待不勉强
 
-""" + TRADING_PHASE_WORKFLOW_BLOCK + """
+""" + TRADING_PHASE_WORKFLOW_BLOCK + STRATEGY_ISOLATION_BLOCK + """
 
 【交易策略】（必须严格遵守）
 """ + strategy + """
@@ -494,11 +525,11 @@ def analyze_lunch_market(raw_data: dict, timestamp: str) -> str:
 五、下午操作策略调整
 - 原计划回顾：{是否按计划执行}
 - 下午修正：{具体买入/卖出/持有决策及理由}
-""" + OPTIONAL_UPDATE_RULES_BLOCK + OPTIONAL_UPDATE_RULES_REVIEW_BLOCK + """
+""" + REVIEW_OUTPUT_SELF_CHECK_BLOCK + OPTIONAL_UPDATE_RULES_BLOCK + OPTIONAL_UPDATE_RULES_REVIEW_BLOCK + """
 六、自选更新
-规则：若非空 JSON 数组直接返回；若为 []，须在下一行写明「自选未更新原因：……」（为空时才需要给出自选未更新原因）。
-【格式：JSON数组；每项必须含「加入自选原因」，缺一无效】
-[{"股票代码":"600000","股票名称":"浦发银行","加入自选原因":"符合策略的盘中观察标的"}]"""
+规则：输出自选 JSON 数组；若无须纳入观察池的标的，输出 []，并在下一行写明「自选未更新原因：……」。
+【格式：JSON数组；每项必须含「战法」「加入自选原因」。战法取值仅为「涨停板战法」或「龙回头战法」，且须与加入自选原因前缀一致】
+[{"股票代码":"600000","股票名称":"浦发银行","战法":"涨停板战法","加入自选原因":"【涨停板战法】人气排名与板块对齐……"}]"""
 
     user = _market_data_user_block(
         raw_data,
@@ -508,7 +539,7 @@ def analyze_lunch_market(raw_data: dict, timestamp: str) -> str:
         ),
     )
 
-    return call_llm(system, user, max_tokens=140000)
+    return call_llm(system, user, max_tokens=140000, temperature=0.08)
 
 # ========== 晚间复盘 ==========
 def analyze_evening_market(raw_data: dict, timestamp: str) -> str:
@@ -524,7 +555,7 @@ def analyze_evening_market(raw_data: dict, timestamp: str) -> str:
 - 宁可卖飞，不可被套
 - 有鱼捕鱼，无鱼织网，空仓等待不勉强
 
-""" + TRADING_PHASE_WORKFLOW_BLOCK + """
+""" + TRADING_PHASE_WORKFLOW_BLOCK + STRATEGY_ISOLATION_BLOCK + """
 
 【交易策略】（必须严格遵守）
 """ + strategy + """
@@ -567,11 +598,11 @@ def analyze_evening_market(raw_data: dict, timestamp: str) -> str:
 
 八、经验及教训总结
 {根据今日交易记录总结优点、失误与改进点，并形成初步的明日选股方向或关注标的}
-""" + OPTIONAL_UPDATE_RULES_BLOCK + OPTIONAL_UPDATE_RULES_REVIEW_BLOCK + """
+""" + REVIEW_OUTPUT_SELF_CHECK_BLOCK + OPTIONAL_UPDATE_RULES_BLOCK + OPTIONAL_UPDATE_RULES_REVIEW_BLOCK + """
 九、自选更新
-规则：若非空 JSON 数组，程序写入 ~/data/quant/optional.jsonl；若为 []，须在下一行写明「自选未更新原因：……」。
-【格式：JSON数组；每项必须含「加入自选原因」，缺一无效】
-[{"股票代码":"600000","股票名称":"浦发银行","加入自选原因":"策略内次日观察（示例占位，无则输出 []）"}]"""
+规则：输出自选 JSON 数组；若无须纳入观察池的标的，输出 []，并在下一行写明「自选未更新原因：……」。
+【格式：JSON数组；每项必须含「战法」「加入自选原因」。战法取值仅为「涨停板战法」或「龙回头战法」，且须与加入自选原因前缀一致】
+[{"股票代码":"600000","股票名称":"浦发银行","战法":"龙回头战法","加入自选原因":"【龙回头战法】均线与量比……"}]"""
 
     user = _market_data_user_block(
         raw_data,
@@ -583,7 +614,7 @@ def analyze_evening_market(raw_data: dict, timestamp: str) -> str:
         ),
     )
 
-    return call_llm(system, user, max_tokens=140000)
+    return call_llm(system, user, max_tokens=140000, temperature=0.08)
 
 # ========== 解析并更新 ==========
 def _match_bracket_span(s: str, start: int, open_ch: str = "[", close_ch: str = "]") -> tuple[int, int] | None:
@@ -724,6 +755,16 @@ def _extract_json_array_with_span(
     return [], None
 
 
+def _infer_optional_strategy_from_reason(reason: str) -> str | None:
+    """从「加入自选原因」前缀推断战法（与提示词「【涨停板战法】」「【龙回头战法】」对齐）。"""
+    s = (reason or "").strip()
+    if s.startswith("【涨停板战法】"):
+        return "涨停板战法"
+    if s.startswith("【龙回头战法】"):
+        return "龙回头战法"
+    return None
+
+
 def _normalize_optional_rows(rows: list) -> list:
     out: list = []
     for r in rows:
@@ -734,9 +775,16 @@ def _normalize_optional_rows(rows: list) -> list:
         )
         if not reason:
             reason = "未注明"
+        tag_raw = str(r.get("战法", "") or r.get("策略战法", "") or "").strip()
+        if tag_raw in OPTIONAL_STRATEGY_ALLOWED:
+            tag = tag_raw
+        else:
+            inferred = _infer_optional_strategy_from_reason(reason)
+            tag = inferred if inferred else "未标注"
         d = {
             "股票代码": str(r.get("股票代码", "") or "").strip(),
             "股票名称": str(r.get("股票名称", "") or "").strip(),
+            "战法": tag,
             "加入自选原因": reason,
         }
         if d["股票代码"] or d["股票名称"]:
@@ -791,6 +839,9 @@ def _optional_item_to_readable(o: dict) -> str:
     code = o.get("股票代码", "")
     name = o.get("股票名称", "")
     reason = o.get("加入自选原因", "")
+    tag = str(o.get("战法", "") or "").strip()
+    if tag and tag != "未标注":
+        return f"股票名称：{name}，股票代码：{code}，战法：{tag}，加入自选原因：{reason}"
     return f"股票名称：{name}，股票代码：{code}，加入自选原因：{reason}"
 
 
@@ -824,7 +875,7 @@ def replace_json_sections_for_feishu(
 
 def parse_and_update(content: str, mode: str, market_payload: dict | None = None) -> dict:
     """
-    解析正文中的 JSON 数组，写入持仓/自选文件，并返回飞书替换所需字段。
+    解析正文中的 JSON 数组并更新本地持仓/自选记录，返回飞书替换所需字段。
     返回 dict：holdings_text, optional_text, holdings_lines, optional_lines,
     holdings_span, optional_span, normalized_holdings, normalized_optional
     """
@@ -861,14 +912,14 @@ def parse_and_update(content: str, mode: str, market_payload: dict | None = None
         save_holdings(holdings)
         print(f"持仓已更新: {holdings}")
     elif mode in ("during_market", "pre_market") and h_span is not None and not holdings:
-        print("持仓更新 JSON 为 []，未写入 holding.jsonl；请确认正文已含「持仓未更新原因」")
+        print("持仓更新 JSON 为 []；请确认正文已含「持仓未更新原因」")
 
     if mode in ("post_market_lunch", "post_market_evening") and o_span is not None:
         if optional:
             save_optional(optional)
             print(f"自选股已更新（共 {len(optional)} 条）: {optional}")
         else:
-            print("自选更新 JSON 为 []，未改写 optional.jsonl；请确认正文已含「自选未更新原因」")
+            print("自选更新 JSON 为 []；请确认正文已含「自选未更新原因」")
 
     if profit is not None and mode in ("post_market_lunch", "post_market_evening"):
         update_fund(profit)
