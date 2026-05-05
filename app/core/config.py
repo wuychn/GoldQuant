@@ -13,6 +13,42 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _ENV_FILE = _PROJECT_ROOT / ".env"
 
 
+def _dotenv_get(env_path: Path, key: str) -> str | None:
+    """从项目根 ``.env`` 读取 ``KEY=value``（单行；去除引用号）。"""
+    if not env_path.is_file():
+        return None
+    try:
+        text = env_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    needle = f"{key}="
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith(needle):
+            val = line[len(needle) :].strip()
+            if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+                val = val[1:-1]
+            return val
+    return None
+
+
+def _env_plain_or_prefixed(plain: str, prefixed: str, *, env_file: Path) -> str | None:
+    """优先进程环境变量，其次 ``.env``；支持无前缀（``LLM_*``）与 ``GOLDQUANT_LLM_*``。"""
+    import os
+
+    for name in (plain, prefixed):
+        v = os.environ.get(name)
+        if v is not None and str(v).strip() != "":
+            return str(v).strip()
+    for name in (plain, prefixed):
+        dv = _dotenv_get(env_file, name)
+        if dv is not None and dv.strip() != "":
+            return dv.strip()
+    return None
+
+
 class Settings(BaseSettings):
     """全局配置，可通过环境变量覆盖（前缀 `GOLDQUANT_`）。"""
 
@@ -75,10 +111,26 @@ class Settings(BaseSettings):
     #: 盘前/盘中/盘后接口里「历史行情」日线最多返回条数（从最新往前截），减轻模型上下文；完整 K 线仍在本地归档。
     QUANT_HIST_RESPONSE_MAX_BARS: int = Field(default=48, ge=1, le=4000)
 
-    #: 调用 ``GET /quant/market/news`` 时是否请求 LLM 生成「新闻对股市影响」摘要（写入 ~/data/quant/news_market_impact_summary.txt）
-    QUANT_NEWS_SUMMARY_LLM_API_KEY: str | None = None
-    QUANT_NEWS_SUMMARY_LLM_BASE_URL: str = "https://api.minimaxi.com/anthropic"
-    QUANT_NEWS_SUMMARY_LLM_MODEL: str = "MiniMax-M2.7"
+    #: 全局 LLM：字段名为 ``LLM_*``；``.env`` 可直接写 ``LLM_API_KEY`` / ``LLM_BASE_URL`` / ``LLM_MODEL``（无前缀），亦可写 ``GOLDQUANT_LLM_*``（与旧习惯兼容）。``python main.py`` 与 FastAPI 共用。
+    LLM_API_KEY: str | None = None
+    LLM_BASE_URL: str = "https://api.minimaxi.com/anthropic"
+    LLM_MODEL: str = "MiniMax-M2.7"
+
+    @model_validator(mode="after")
+    def merge_llm_plain_env_names(self) -> Settings:
+        """兼容 ``.env`` 中无前缀的 ``LLM_*``（``env_prefix`` 无法自动映射到无前缀变量名）。"""
+        ak = self.LLM_API_KEY
+        if not ak:
+            ak = _env_plain_or_prefixed("LLM_API_KEY", "GOLDQUANT_LLM_API_KEY", env_file=_ENV_FILE)
+        bu_o = _env_plain_or_prefixed("LLM_BASE_URL", "GOLDQUANT_LLM_BASE_URL", env_file=_ENV_FILE)
+        bu = bu_o if bu_o else self.LLM_BASE_URL
+        md_o = _env_plain_or_prefixed("LLM_MODEL", "GOLDQUANT_LLM_MODEL", env_file=_ENV_FILE)
+        md = md_o if md_o else self.LLM_MODEL
+        # BaseSettings 经 ``__init__`` 校验时须返回 ``self``，不可返回 ``model_copy`` 新实例（会触发 UserWarning）
+        object.__setattr__(self, "LLM_API_KEY", ak)
+        object.__setattr__(self, "LLM_BASE_URL", bu)
+        object.__setattr__(self, "LLM_MODEL", md)
+        return self
 
     @field_validator("CORS_ORIGINS")
     @classmethod

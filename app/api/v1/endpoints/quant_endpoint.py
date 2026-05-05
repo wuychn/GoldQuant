@@ -693,7 +693,11 @@ def _combine_cls_publish_datetime(pub_date_val: object, pub_time_val: object) ->
 )
 async def news(settings: SettingsDep) -> Response:
     """
-    全球/同花顺/财联社资讯聚合；若配置了 ``QUANT_NEWS_SUMMARY_LLM_API_KEY``，同步生成不超过 500 字的「股市影响摘要」写入 ~/data/quant/news_market_impact_summary.txt。
+    全球/同花顺/财联社资讯聚合到 ``news`` 列表后，**每次请求**调用
+    ``refresh_news_market_summary_sync``：使用全局 LLM（``.env`` 中 ``LLM_API_KEY`` /
+    ``LLM_BASE_URL`` / ``LLM_MODEL``，或兼容 ``GOLDQUANT_LLM_*``）生成 **500 字以内** 当日影响摘要，
+    成功则 **覆盖** 写入 ``~/data/quant/news_market_impact_summary.txt``；
+    未配置密钥或 LLM 失败则不覆盖该文件。
     """
 
     news: list = []
@@ -913,7 +917,7 @@ async def post_market(settings: SettingsDep, background_tasks: BackgroundTasks) 
         hot_stock,
         more=True,
         list_context=f"{route} | ths.hot_stock",
-        hot_limit=50,
+        hot_limit=10,
         fund_flow_trade_days=3,
     )
 

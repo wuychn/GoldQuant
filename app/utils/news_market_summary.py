@@ -1,4 +1,4 @@
-"""新闻接口触发的「对股市有影响」短文摘要，写入 ~/data/quant/news_market_impact_summary.txt。"""
+"""与 ``GET /api/v1/quant/market/news`` 配套：每次请求后用**大模型**更新「当日新闻影响摘要」（不做机械拼接）。"""
 
 from __future__ import annotations
 
@@ -63,15 +63,26 @@ def _llm_minimax_summary(api_key: str, base_url: str, model: str, news_json: str
 
 
 def refresh_news_market_summary_sync(settings: Settings, news_items: list) -> None:
-    """同步调用；无密钥则跳过。"""
-    key = (settings.QUANT_NEWS_SUMMARY_LLM_API_KEY or "").strip()
+    """
+    **在每次** ``GET /quant/market/news`` 聚合出 ``news_items`` 之后调用。
+
+    仅使用 **大模型** 根据当次完整列表生成 **500 字以内** 摘要，成功则 **覆盖写入**
+    ``~/data/quant/news_market_impact_summary.txt``。
+
+    未配置全局 ``LLM_API_KEY``（环境变量 ``GOLDQUANT_LLM_API_KEY``）或 LLM 调用失败时：**不写入**（保留上次有效摘要，若有）。
+    """
+    key = (settings.LLM_API_KEY or "").strip()
     if not key:
+        logger.warning(
+            "未配置 GOLDQUANT_LLM_API_KEY（全局 LLM）；请在 .env 配置 LLM_API_KEY 或 GOLDQUANT_LLM_API_KEY",
+        )
         return
-    base = settings.QUANT_NEWS_SUMMARY_LLM_BASE_URL.strip()
-    model = settings.QUANT_NEWS_SUMMARY_LLM_MODEL.strip()
     raw = json.dumps(news_items, ensure_ascii=False)
+    base = settings.LLM_BASE_URL.strip()
+    model = settings.LLM_MODEL.strip()
     text = _llm_minimax_summary(key, base, model, raw)
     if not text:
+        logger.warning("大模型未返回有效摘要，不覆盖 news_market_impact_summary.txt")
         return
     out = _truncate_zh(text, _MAX_CHARS)
     path = news_market_summary_path()

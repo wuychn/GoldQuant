@@ -18,6 +18,7 @@ for k in list(os.environ.keys()):
     if 'proxy' in k.lower():
         del os.environ[k]
 
+from app.core.config import get_settings
 import requests
 import json
 from datetime import datetime
@@ -27,9 +28,6 @@ BASE_URL = "http://localhost:8085"
 FEISHU_APP_ID = "cli_a96dcfa5d3f91bd4"
 FEISHU_APP_SECRET = "eXhbDo1Ldh4sMGkBjVUjdhAiiBFZ6ld6"
 FEISHU_USER_ID = "ou_bc3cefb641bbc53148de964a637d8cfd"
-LLM_API_KEY = "sk-cp-hlnhKJEBNgidhd_VzCm8eFuxlBJcwLLKNxF8EoBHWMGyOYrov_lsflxjGabM5kWmGc4v1LQgn3nasdNk0qZhpRWyX5q-hwn0UIkozrnTyQVcJOZD7gOcj-Q"
-LLM_BASE_URL = "https://api.minimaxi.com/anthropic"
-LLM_MODEL = "MiniMax-M2.7"
 
 # 项目根目录（与本文件 main.py 同级）
 _PROJECT_ROOT = Path(__file__).resolve().parent
@@ -58,7 +56,8 @@ RAW_DATA_FIELD_GUIDE = """【接口 JSON 顶层字段说明（必须按键名区
 # 「自选更新」：落盘前不再按 strategy 与接口做可核验性过滤，以模型返回为准；理由文本仍建议与引用的行情字段一致。
 OPTIONAL_UPDATE_RULES_BLOCK = """
 【自选更新说明】
-加入自选原因，请尽量与当次业务 JSON 中的字段（如「同花顺人气榜」「涨停统计」「概念板块」「历史行情」等）描述一致，便于复盘。
+「自选更新」JSON 以模型输出为准。若为 []，你必须在输出中单独一行写明「自选未更新原因：……」。
+若填写「加入自选原因」，请尽量与当次业务 JSON 中的字段（如「同花顺人气榜」「涨停统计」「概念板块」「历史行情」等）描述一致，便于复盘。
 """
 
 
@@ -73,23 +72,34 @@ def _unwrap_quant_market_payload(raw: dict) -> dict:
 def read_news_market_impact_summary() -> str:
     """服务端新闻接口写入的 LLM 短文（~/data/quant/news_market_impact_summary.txt）。"""
     if not os.path.isfile(NEWS_IMPACT_SUMMARY_FILE):
-        return (
-            ""
-        )
+        return ""
     try:
         return _read_user_text(NEWS_IMPACT_SUMMARY_FILE).strip()
     except OSError:
         return ""
 
 
+def _daily_news_tail_for_prompt(*, max_chars: int = 500) -> str:
+    """仅注入「新闻接口」侧大模型写入的当日浓缩摘要，不包含任何原始资讯正文。"""
+    text = read_news_market_impact_summary().strip()
+    if not text:
+        text = (
+            "（尚无新闻摘要）"
+        )
+    elif len(text) > max_chars:
+        text = text[:max_chars]
+    return (
+        "\n\n【当日新闻摘要】\n"
+        + text
+    )
+
+
 def _market_data_user_block(raw_data: dict, *, tail: str) -> str:
-    """行情类分析：先字段说明，再 JSON（已去 API 包装层），再资金/交易等尾部文案。"""
-    impact = read_news_market_impact_summary()
+    """行情类分析：字段说明 → 当日新闻总结 → 接口 JSON → tail。"""
     payload = _unwrap_quant_market_payload(raw_data)
     return (
         RAW_DATA_FIELD_GUIDE
-        + "\n\n【当日新闻对股市影响摘要】（由最近一次新闻接口经 LLM 生成；与下文 JSON 配合阅读）\n"
-        + impact
+        + _daily_news_tail_for_prompt()
         + "\n\n【以下为接口业务数据 JSON（已去掉 code/message 外层；请仅按上文键名解读）】\n"
         + json.dumps(payload, ensure_ascii=False)[:140000]
         + tail
@@ -127,16 +137,28 @@ def send_msg(content: str, token: str):
     if result.get("code") != 0:
         raise Exception(f"发送失败: {result}")
 
-# ========== LLM调用（带重试）==========
+# ========== LLM调用（带重试）：项目根 .env 中 LLM_API_KEY / LLM_BASE_URL / LLM_MODEL（与 FastAPI 同源）==========
 def call_llm(system: str, user: str, max_tokens: int = 2500, retries: int = 3) -> str:
-    url = f"{LLM_BASE_URL}/v1/messages"
+    cfg = get_settings()
+    api_key = (cfg.LLM_API_KEY or "").strip()
+    if not api_key:
+        raise RuntimeError(
+            "未配置全局 LLM：请在项目根目录 .env 设置 LLM_API_KEY（亦可使用 GOLDQUANT_LLM_API_KEY，与 FastAPI 同源）",
+        )
+    base = cfg.LLM_BASE_URL.rstrip("/")
+    url = f"{base}/v1/messages"
     headers = {
-        "Authorization": f"Bearer {LLM_API_KEY}",
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
-        "x-api-key": LLM_API_KEY,
-        "anthropic-version": "2023-06-01"
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
     }
-    payload = {"model": LLM_MODEL, "messages": [{"role": "user", "content": f"{system}\n\n{user}"}], "max_tokens": max_tokens, "temperature": 0.3}
+    payload = {
+        "model": cfg.LLM_MODEL,
+        "messages": [{"role": "user", "content": f"{system}\n\n{user}"}],
+        "max_tokens": max_tokens,
+        "temperature": 0.3,
+    }
     for attempt in range(retries):
         try:
             resp = requests.post(url, headers=headers, json=payload, timeout=600)
@@ -264,19 +286,6 @@ def load_strategy() -> str:
     except OSError as e:
         return f"策略文件加载失败：{STRATEGY_FILE}（{e!r}）"
 
-def read_today_news(today: str) -> str:
-    news_dir = f"{DATA_DIR}/news/{today}"
-    if not os.path.exists(news_dir):
-        return "当日暂无新闻记录"
-    try:
-        files = sorted([f for f in os.listdir(news_dir) if f.endswith('.md')])
-        contents = []
-        for f in files:
-            contents.append(_read_user_text(os.path.join(news_dir, f)))
-        return "\n\n".join(contents) if contents else "当日暂无新闻记录"
-    except:
-        return "当日暂无新闻记录"
-
 # ========== 新闻处理 ==========
 def process_news(raw_data: dict, timestamp: str) -> str:
     today = datetime.now().strftime("%Y-%m-%d")
@@ -347,7 +356,7 @@ def analyze_pre_market(raw_data: dict, timestamp: str) -> str:
 
 四、涨停板战法（集合竞价与盘中）
 - 集合竞价：仍可按策略评估高开区间与量比；若准备挂单须给出限价与 deadline。
-- 盘中追击（使用盘中接口 JSON）：标的须落在「同花顺人气榜」前10（该键仅含前十）；个股「所属概念」须能与「概念板块」中「涨幅榜」前十或「资金流入榜」前十的行业名对应；盘口「均价」为分时均线，现价须站上均价方可买入；给出买入价、时刻与仓位。
+- 盘中追击（使用盘中接口 JSON）：标的「人气排名」须 ≤10（「同花顺人气榜」返回约 20 条轻量数据，以前十名为准）；个股「所属概念」须能与「概念板块」中「涨幅榜」前十或「资金流入榜」前十的行业名对应；盘口「均价」为分时均线，现价须站上均价方可买入；给出买入价、时刻与仓位。
 
 五、龙回头战法（定价与资金口径）
 - 买入区间须同时参照「5日线」「10日线」「20日线」或「技术指标」内均线；量能看盘口「量比」；资金看「个股资金流」最近一条的「主力净流入-净额」方向与规模。
@@ -355,8 +364,9 @@ def analyze_pre_market(raw_data: dict, timestamp: str) -> str:
 六、市场判断与当日执行纲要
 {深度分析结论}
 
-七、【持仓更新】（仅此一处输出 JSON 数组用于同步 ~/data/quant/holding.jsonl；无变化则输出 []）
-格式与盘中一致：须含股票代码、名称、买入时间（yyyy-MM-dd HH:mm:ss）、买入价、买入原因；卖出补全卖出时间与卖出价。
+七、【持仓更新】（仅此一处输出 JSON 数组用于同步 ~/data/quant/holding.jsonl）
+规则：若有增删改持仓，输出非空 JSON，程序将写入磁盘；若本次无需变更，必须输出 []，且在随后单独一行写明「持仓未更新原因：……」（例如无新开平仓指令、与上次持仓一致、缺口数据无法下单等）。
+格式：须含股票代码、名称、买入时间（yyyy-MM-dd HH:mm:ss）、买入价、买入原因；卖出补全卖出时间与卖出价。
 [{"股票代码":"600000","股票名称":"浦发银行","买入时间":"2026-05-03 09:31:00","买入价":11.2,"买入原因":"……","卖出时间":"","卖出价":"","卖出原因":""}]"""
 
     user = _market_data_user_block(
@@ -402,7 +412,8 @@ def analyze_during_market(raw_data: dict, timestamp: str) -> str:
 【涨停/龙回头｜持仓处理】
 - {股票名称}：浮盈/浮亏{x%}，{卖出或持有的明确价位与时间条件}
 
-【持仓更新】（仅此一处输出 JSON 数组用于同步持仓文件；无持仓则输出 []）
+【持仓更新】（仅此一处输出 JSON 数组用于同步持仓文件）
+规则：若非空 JSON，程序写入 ~/data/quant/holding.jsonl；若为 []，须在下一行写明「持仓未更新原因：……」。
 每条须含买入时间（yyyy-MM-dd HH:mm:ss）、买入价、买入原因；卖出须含卖出时间与卖出价。
 [{"股票代码":"600000","股票名称":"浦发银行","买入时间":"2026-05-03 10:30:00","买入价":11.2,"买入原因":"……","卖出时间":"","卖出价":"","卖出原因":""}]
 
@@ -463,7 +474,8 @@ def analyze_lunch_market(raw_data: dict, timestamp: str) -> str:
 - 下午修正：{具体买入/卖出/持有决策及理由}
 """ + OPTIONAL_UPDATE_RULES_BLOCK + """
 六、自选更新
-【格式：JSON数组；每项必须含「加入自选原因」，缺一无效；无新增则输出 []】
+规则：若非空 JSON 数组，程序写入 ~/data/quant/optional.jsonl；若为 []，须在下一行写明「自选未更新原因：……」。
+【格式：JSON数组；每项必须含「加入自选原因」，缺一无效】
 [{"股票代码":"600000","股票名称":"浦发银行","加入自选原因":"符合策略的盘中观察标的（示例占位，无则输出 []）"}]"""
 
     user = _market_data_user_block(
@@ -533,7 +545,8 @@ def analyze_evening_market(raw_data: dict, timestamp: str) -> str:
 {根据今日交易记录总结优点、失误与改进点，并形成初步的明日选股方向或关注标的}
 """ + OPTIONAL_UPDATE_RULES_BLOCK + """
 九、自选更新
-【格式：JSON数组；每项必须含「加入自选原因」，缺一无效；无新增则输出 []】
+规则：若非空 JSON 数组，程序写入 ~/data/quant/optional.jsonl；若为 []，须在下一行写明「自选未更新原因：……」。
+【格式：JSON数组；每项必须含「加入自选原因」，缺一无效】
 [{"股票代码":"600000","股票名称":"浦发银行","加入自选原因":"策略内次日观察（示例占位，无则输出 []）"}]"""
 
     user = _market_data_user_block(
@@ -823,10 +836,15 @@ def parse_and_update(content: str, mode: str, market_payload: dict | None = None
     if holdings and mode in ("during_market", "pre_market") and h_span is not None:
         save_holdings(holdings)
         print(f"持仓已更新: {holdings}")
+    elif mode in ("during_market", "pre_market") and h_span is not None and not holdings:
+        print("持仓更新 JSON 为 []，未写入 holding.jsonl；请确认正文已含「持仓未更新原因」")
 
     if mode in ("post_market_lunch", "post_market_evening") and o_span is not None:
-        save_optional(optional)
-        print(f"自选股已更新（共 {len(optional)} 条）: {optional}")
+        if optional:
+            save_optional(optional)
+            print(f"自选股已更新（共 {len(optional)} 条）: {optional}")
+        else:
+            print("自选更新 JSON 为 []，未改写 optional.jsonl；请确认正文已含「自选未更新原因」")
 
     if profit is not None and mode in ("post_market_lunch", "post_market_evening"):
         update_fund(profit)
