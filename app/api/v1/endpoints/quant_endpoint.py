@@ -7,9 +7,11 @@ import json
 import logging
 import re
 from collections.abc import Awaitable, Callable
+from datetime import datetime
 from numbers import Integral, Real
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import akshare as ak
 from fastapi import APIRouter, BackgroundTasks
@@ -32,6 +34,7 @@ from app.utils.quant_archive import (
     daily_hist_fetch_start_date,
     load_computed_metrics_zh,
     load_merge_write_daily_bars,
+    quant_archive_base,
 )
 from app.utils.quant_market_enrich import (
     build_market_state_machine_zh,
@@ -50,8 +53,112 @@ _INDEX_SERIAL_WHITELIST = (1, 2, 4)
 QUANT_OPTIONAL_FILENAME = "optional.jsonl"
 QUANT_HOLDING_FILENAME = "holding.jsonl"
 
-# 东财五档经 ``pk`` 转写后键名多为「买1量…」「买一…」等形式；排除「买10」误匹配买1。
-_PK_TIER_RE = re.compile(r"买[1-5](?![0-9])|买[一二三四五]|卖[1-5](?![0-9])|卖[一二三四五]")
+_SH_TZ = ZoneInfo("Asia/Shanghai")
+
+
+def _parse_price_scalar(v: Any) -> float | None:
+    if v is None or v == "":
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    s = str(v).strip().replace(",", "")
+    m = re.search(r"(-?\d+(?:\.\d+)?)", s)
+    if not m:
+        return None
+    try:
+        return float(m.group(1))
+    except ValueError:
+        return None
+
+
+def _spot_price_from_pk_for_10m(pk: dict[str, Any] | None) -> float | None:
+    """从东财 ``pk(list_to_dict)`` 中解析现价，供 10 分钟线落盘。"""
+    if not isinstance(pk, dict) or not pk:
+        return None
+    for key in ("最新价", "最新", "现价", "成交价", "最新成交价"):
+        if key in pk:
+            p = _parse_price_scalar(pk[key])
+            if p is not None and p > 0:
+                return p
+    b1 = _parse_price_scalar(pk.get("买一")) or _parse_price_scalar(pk.get("买1"))
+    s1 = _parse_price_scalar(pk.get("卖一")) or _parse_price_scalar(pk.get("卖1"))
+    if b1 is not None and s1 is not None and b1 > 0 and s1 > 0:
+        return round((b1 + s1) / 2.0, 4)
+    if b1 is not None and b1 > 0:
+        return b1
+    if s1 is not None and s1 > 0:
+        return s1
+    return None
+
+
+def _bars_10m_dir(settings: Settings) -> Path:
+    d = quant_archive_base(settings) / "bars_10m"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _intraday_10m_last_bucket_key(jl_path: Path) -> str | None:
+    if not jl_path.is_file():
+        return None
+    try:
+        lines = jl_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    for line in reversed(lines):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            o = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        b = o.get("bucket_start")
+        if isinstance(b, str):
+            return b
+    return None
+
+
+def append_intraday_10m_bar_on_request(settings: Settings, symbol: str, price: float) -> None:
+    """在 ``during_market`` 被调用时追加一根 10 分钟 K；约定调用间隔约 10 分钟，同 ``bucket_start`` 不重复写入。"""
+    symbol = str(symbol).strip()
+    if not symbol or price <= 0:
+        return
+    now = datetime.now(_SH_TZ)
+    floored = (now.minute // 10) * 10
+    start = now.replace(minute=floored, second=0, microsecond=0)
+    bucket_key = start.strftime("%Y%m%dT%H%M")
+    jl_path = _bars_10m_dir(settings) / f"{symbol}.jsonl"
+    if _intraday_10m_last_bucket_key(jl_path) == bucket_key:
+        return
+    line = {
+        "bucket_start": bucket_key,
+        "open": price,
+        "high": price,
+        "low": price,
+        "close": price,
+        "saved_at": start.isoformat(),
+    }
+    try:
+        with open(jl_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(line, ensure_ascii=False) + "\n")
+    except OSError as e:
+        logger.warning("写入 10m 线失败 symbol=%s path=%s: %s", symbol, jl_path, e)
+
+
+def load_intraday_10m_bars_tail(settings: Settings, symbol: str, *, max_bars: int = 48) -> list[dict[str, Any]]:
+    symbol = str(symbol).strip()
+    jl_path = _bars_10m_dir(settings) / f"{symbol}.jsonl"
+    rows: list[dict[str, Any]] = []
+    if jl_path.is_file():
+        try:
+            for ln in jl_path.read_text(encoding="utf-8").splitlines():
+                ln = ln.strip()
+                if not ln:
+                    continue
+                rows.append(json.loads(ln))
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning("读取 10m 线失败 path=%s: %s", jl_path, e)
+    return rows[-max_bars:] if len(rows) > max_bars else rows
 
 
 def _yyyymmdd_to_iso(d8: str) -> str | None:
@@ -121,18 +228,6 @@ def _round_floats_for_api(obj: Any, *, ndigits: int = 2) -> Any:
     if isinstance(obj, tuple):
         return tuple(_round_floats_for_api(v, ndigits=ndigits) for v in obj)
     return obj
-
-
-def _slim_pk_bid_ask(pk: object) -> dict[str, Any] | None:
-    """仅保留买一至买五、卖一至卖五相关键（兼容「买1」「买一」等东财转写）。"""
-    if not isinstance(pk, dict) or not pk:
-        return None
-    out: dict[str, Any] = {}
-    for k, v in pk.items():
-        ks = str(k)
-        if _PK_TIER_RE.search(ks):
-            out[ks] = v
-    return out if out else dict(list(pk.items())[:10])
 
 
 def _slim_xw_list(xw: object, *, limit: int = 3) -> list[dict[str, Any]]:
@@ -262,6 +357,7 @@ async def _enrich_ths_stock_list(
         list_context: str,
         include_pre_snapshot: bool = False,
         hot_limit: int = 20,
+        record_and_attach_10m_bars: bool = False,
 ) -> list:
     out: list = []
     try:
@@ -335,11 +431,16 @@ async def _enrich_ths_stock_list(
             if hist_10 and len(hist_10) >= 10:
                 avg_10 = cal_avg(hist_10, "收盘")
 
+            avg_20: float | None = None
+            hist_20 = hist_[-20:]
+            if hist_20 and len(hist_20) >= 20:
+                avg_20 = cal_avg(hist_20, "收盘")
+
             hist_out = _rows_last_n_trade_days(hist_, n=30)
 
-            item["盘口"] = _slim_pk_bid_ask(pk_raw)
+            item["盘口"] = pk_raw if isinstance(pk_raw, dict) else {}
             zj_list = zj_raw if isinstance(zj_raw, list) else []
-            item["资金流入流出"] = _rows_last_n_trade_days(zj_list, n=3)
+            item["个股资金流"] = _rows_last_n_trade_days(zj_list, n=3)
             item["历史行情"] = hist_out
 
             tzh: dict[str, Any] | None = None
@@ -352,6 +453,18 @@ async def _enrich_ths_stock_list(
                 item["5日线"] = avg_5
             if not (isinstance(tzh, dict) and tzh.get("均线10日") is not None) and avg_10 is not None:
                 item["10日线"] = avg_10
+            if not (isinstance(tzh, dict) and tzh.get("均线20日") is not None) and avg_20 is not None:
+                item["20日线"] = avg_20
+
+            if record_and_attach_10m_bars:
+                px = _spot_price_from_pk_for_10m(item["盘口"])
+                if px is not None:
+                    await run_in_threadpool(
+                        lambda s=settings, sym=symbol, p=px: append_intraday_10m_bar_on_request(s, sym, p),
+                    )
+                item["盘中10分钟线"] = await run_in_threadpool(
+                    lambda s=settings, sym=symbol: load_intraday_10m_bars_tail(s, sym, max_bars=48),
+                )
 
             if include_pre_snapshot:
                 pm = pre_auction_minute_zh(f"{list_context}|集合竞价分钟", symbol)
@@ -598,7 +711,7 @@ async def during_market(settings: SettingsDep, background_tasks: BackgroundTasks
     2、大盘资金流
     3、概念板块
     4、概念资金流
-    5、自选/持仓、涨停统计、概念板块及个股资金流（人气榜接口默认关闭以降低负载）
+    5、自选/持仓（全量盘口；每次请求为 10 分钟线追加一根 K 并回读「盘中10分钟线」）、涨停统计、市场状态机
     """
     # if (blocked := await _guard_real_workday_or_non_trading_response()) is not None:
     #     return blocked
@@ -635,20 +748,22 @@ async def during_market(settings: SettingsDep, background_tasks: BackgroundTasks
     #     list_context=f"{route} | ths.stock_skyrocket",
     # )
 
-    # 从 ~/data/quant/optional.jsonl 获取自选股（每行 {"股票代码","股票名称",...}）
+    # 从 ~/data/quant/optional.jsonl 获取自选股；全量盘口；每次 during_market 调用追加一根 10 分钟 K 并返回「盘中10分钟线」
     zxg = await _enrich_ths_stock_list(
         settings,
         _zx,
         more=False,
         list_context=f"{route} | _zx",
+        record_and_attach_10m_bars=True,
     )
 
-    # 从 ~/data/quant/holding.jsonl 获取持仓股（每行一条 JSON，含 股票代码、买入时间 等）
+    # 从 ~/data/quant/holding.jsonl 获取持仓股（同上）
     ccg = await _enrich_ths_stock_list(
         settings,
         _cc,
         more=False,
         list_context=f"{route} | _cc",
+        record_and_attach_10m_bars=True,
     )
 
     bundle = await _market_bundle_zh(route)
@@ -659,7 +774,7 @@ async def during_market(settings: SettingsDep, background_tasks: BackgroundTasks
         # "沪深港通资金流向": hsgtzjlx,
         "概念板块": gn_bk,
         "涨停统计": zttj,
-        # "同花顺人气股": thsrqg,
+        # "同花顺人气榜": thsrqg,
         # "人气飙升榜": thsrqbsb,
         "自选股": zxg,
         "持仓股": ccg,
@@ -732,7 +847,7 @@ async def post_market(settings: SettingsDep, background_tasks: BackgroundTasks) 
         # "沪深港通资金流向": hsgtzjlx,
         "概念板块": gn_bk,
         "涨停统计": zttj,
-        "同花顺人气股": thsrqg,
+        "同花顺人气榜": thsrqg,
         # "人气飙升榜": thsrqbsb,
         "自选股": zxg,
         "持仓股": ccg,

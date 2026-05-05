@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 Phase = Literal["pre", "during", "post"]
 
-_STOCK_LIST_KEYS = ("自选股", "持仓股", "同花顺人气股")
+_STOCK_LIST_KEYS = ("自选股", "持仓股", "同花顺人气榜")
 
 
 def quant_archive_base(settings: Settings) -> Path:

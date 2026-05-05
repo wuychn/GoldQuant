@@ -50,7 +50,7 @@ async def stock_fund_flow_individual(symbol, type_):
 
 async def hot_stock(settings):
     """
-    同花顺人气股
+    同花顺人气榜
     """
     r = await call_ths_api(
         settings,

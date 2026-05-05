@@ -47,14 +47,14 @@ INITIAL_CAPITAL = 10000
 RAW_DATA_FIELD_GUIDE = """【接口 JSON 顶层字段说明（必须按键名区分，禁止混用）】
 「自选股」：唯一表示用户自选股的数组，数据来自本机 ~/data/quant/optional.jsonl。只有该键下的标的才允许出现在正文里所有标题含「自选」的小节中。若该键为 [] 或不存在，对应小节只能写一句「无自选股」或「当前自选股为空」，不得用其他任何键里的股票名单顶替。
 「持仓股」：用户持仓，来自 ~/data/quant/holding.jsonl；凡标题含「持仓」的小节仅使用该键；若为空则写无持仓。
-「同花顺人气股」：仅盘后 ``GET /quant/market/post_market`` 等接口会出现，为同花顺人气榜标的（聚合侧默认 enrichment **前50名**，内含「人气排名」≤20 的子集），不是用户自选；禁止写入「自选股」相关小节；仅在明确要求写人气股的小节中使用该键数据。盘中 ``during_market`` **不含**该键。
+「同花顺人气榜」：仅盘后 ``GET /quant/market/post_market`` 等接口会出现，为同花顺人气榜标的（聚合侧默认 enrichment **前50名**，内含「人气排名」≤20 的子集），不是用户自选；禁止写入「自选股」相关小节；仅在明确要求写人气股的小节中使用该键数据。盘中 ``during_market`` **不含**该键。
 「涨停统计」「概念板块」「大盘指数」「赚钱效应」「大盘资金流」「市场状态机」等：市场环境或榜单类数据，其中的个股/代码不得当作「自选股」列出。"""
 
 # 「自选更新」：落盘前不再按 strategy 与接口做可核验性过滤，以模型返回为准；理由文本仍建议与引用的行情字段一致。
 OPTIONAL_UPDATE_RULES_BLOCK = """
 【自选更新说明（与落盘行为一致）】
 「自选更新」JSON 数组在写入 ~/data/quant/optional.jsonl 前，**不再由程序做策略或接口可核验性校验**，以模型输出为准。
-若填写「加入自选原因」，请仍尽量与当次业务 JSON 中的字段（如「同花顺人气股」「涨停统计」「概念板块」「历史行情」等）描述一致，便于复盘。
+若填写「加入自选原因」，请仍尽量与当次业务 JSON 中的字段（如「同花顺人气榜」「涨停统计」「概念板块」「历史行情」等）描述一致，便于复盘。
 """
 
 
@@ -72,7 +72,7 @@ def _market_data_user_block(raw_data: dict, *, tail: str) -> str:
     return (
         RAW_DATA_FIELD_GUIDE
         + "\n\n【以下为接口业务数据 JSON（已去掉 code/message 外层；请仅按上文键名解读）】\n"
-        + json.dumps(payload, ensure_ascii=False)[:100000]
+        + json.dumps(payload, ensure_ascii=False)[:140000]
         + tail
     )
 
@@ -282,7 +282,7 @@ def process_news(raw_data: dict, timestamp: str) -> str:
 
 解读：{综合解读，说明对大盘/板块/情绪的可能影响，以及短线交易需注意的方向}"""
 
-    user = f"原始新闻：\n{json.dumps(raw_data, ensure_ascii=False)[:100000]}"
+    user = f"原始新闻：\n{json.dumps(raw_data, ensure_ascii=False)[:140000]}"
     summary = call_llm(system, user)
 
     # 保存原始数据（UTF-8）
@@ -298,7 +298,7 @@ def analyze_pre_market(raw_data: dict, timestamp: str) -> str:
     fund = get_fund()
     strategy = load_strategy()
 
-    system = """【角色】你是一位顶尖A股短线交易员，身经百战，起始资金1万元目标财富自由，操作风格比肩赵老哥、欢乐海岸、章盟主。你正在实盘操作，不是辅助工具。
+    system = """【角色】你是一位顶尖A股短线交易员，身经百战，操作风格比肩赵老哥、章盟主。你正在实盘操作，不是辅助工具。
 
 【核心原则】
 - 概率游戏 + 纪律执行 + 知行合一
@@ -339,7 +339,7 @@ def analyze_pre_market(raw_data: dict, timestamp: str) -> str:
         tail=f"\n\n【当前资金】：{fund:.2f} 元",
     )
 
-    return call_llm(system, user, max_tokens=100000)
+    return call_llm(system, user, max_tokens=140000)
 
 # ========== 盘中分析 ==========
 def analyze_during_market(raw_data: dict, timestamp: str) -> str:
@@ -347,7 +347,7 @@ def analyze_during_market(raw_data: dict, timestamp: str) -> str:
     trades = read_trades(datetime.now().strftime("%Y-%m-%d"))
     strategy = load_strategy()
 
-    system = """【角色】你是一位顶尖A股短线交易员，身经百战，起始资金1万元目标财富自由，操作风格比肩赵老哥、欢乐海岸、章盟主。你正在实盘操作，不是辅助工具。
+    system = """【角色】你是一位顶尖A股短线交易员，身经百战，操作风格比肩赵老哥、章盟主。你正在实盘操作，不是辅助工具。
 
 【核心原则】
 - 概率游戏 + 纪律执行 + 知行合一
@@ -393,7 +393,7 @@ def analyze_during_market(raw_data: dict, timestamp: str) -> str:
         ),
     )
 
-    return call_llm(system, user, max_tokens=100000)
+    return call_llm(system, user, max_tokens=140000)
 
 # ========== 午间复盘 ==========
 def analyze_lunch_market(raw_data: dict, timestamp: str) -> str:
@@ -401,7 +401,7 @@ def analyze_lunch_market(raw_data: dict, timestamp: str) -> str:
     trades = read_trades(datetime.now().strftime("%Y-%m-%d"))
     strategy = load_strategy()
 
-    system = """【角色】你是一位顶尖A股短线交易员，身经百战，起始资金1万元目标财富自由，操作风格比肩赵老哥、欢乐海岸、章盟主。你正在实盘操作，不是辅助工具。
+    system = """【角色】你是一位顶尖A股短线交易员，身经百战，操作风格比肩赵老哥、章盟主。你正在实盘操作，不是辅助工具。
 
 【核心原则】
 - 概率游戏 + 纪律执行 + 知行合一
@@ -449,7 +449,7 @@ def analyze_lunch_market(raw_data: dict, timestamp: str) -> str:
         ),
     )
 
-    return call_llm(system, user, max_tokens=100000)
+    return call_llm(system, user, max_tokens=140000)
 
 # ========== 晚间复盘 ==========
 def analyze_evening_market(raw_data: dict, timestamp: str) -> str:
@@ -457,7 +457,7 @@ def analyze_evening_market(raw_data: dict, timestamp: str) -> str:
     trades = read_trades(datetime.now().strftime("%Y-%m-%d"))
     strategy = load_strategy()
 
-    system = """【角色】你是一位顶尖A股短线交易员，身经百战，起始资金1万元目标财富自由，操作风格比肩赵老哥、欢乐海岸、章盟主。你正在实盘操作，不是辅助工具。
+    system = """【角色】你是一位顶尖A股短线交易员，身经百战，操作风格比肩赵老哥、章盟主。你正在实盘操作，不是辅助工具。
 
 【核心原则】
 - 概率游戏 + 纪律执行 + 知行合一
@@ -491,7 +491,7 @@ def analyze_evening_market(raw_data: dict, timestamp: str) -> str:
 1、{名称}（{代码}）：收盘{价格}（{涨跌幅}），浮盈亏{y%}，{操作评价}
 2、……
 
-五、同花顺人气股（仅 JSON「同花顺人气股」；若该键缺失或为空则写「本节无数据」；不得与第三节混写）
+五、同花顺人气榜（仅 JSON「同花顺人气榜」；若该键缺失或为空则写「本节无数据」；不得与第三节混写）
 1、{名称}（{代码}）：所属板块{板块}，上榜原因{原因}，连板情况{连板数}，收盘涨跌幅{x%}
 2、……
 
@@ -521,7 +521,7 @@ def analyze_evening_market(raw_data: dict, timestamp: str) -> str:
         ),
     )
 
-    return call_llm(system, user, max_tokens=100000)
+    return call_llm(system, user, max_tokens=140000)
 
 # ========== 解析并更新 ==========
 def _match_bracket_span(s: str, start: int, open_ch: str = "[", close_ch: str = "]") -> tuple[int, int] | None:

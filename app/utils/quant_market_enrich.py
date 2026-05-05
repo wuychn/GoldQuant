@@ -222,7 +222,7 @@ def build_market_state_machine_zh(
     return {
         "上证指数": idx,
         "两市成交额近似": amt,
-        "昨日涨停股池表现": ztp,
+        "昨日涨停表现": ztp,
         "今日涨停统计": {
             "涨停家数": ztc.get("涨停家数") if ztc else None,
             "市场最高连板数": ztc.get("市场最高连板数") if ztc else None,
