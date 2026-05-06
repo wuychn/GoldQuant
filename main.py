@@ -11,6 +11,7 @@ A股短线交易机器人 - 自主决策版
 import os
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 # 禁用代理
@@ -21,7 +22,9 @@ for k in list(os.environ.keys()):
 from app.core.config import get_settings
 import requests
 import json
+import time
 from datetime import datetime
+from typing import Callable
 
 # ========== 配置 ==========
 BASE_URL = "http://localhost:8085"
@@ -43,57 +46,38 @@ INITIAL_CAPITAL = 10000
 # 与聚合接口 `GET /api/v1/quant/market/news` 写入路径一致
 NEWS_IMPACT_SUMMARY_FILE = f"{DATA_DIR}/news_market_impact_summary.txt"
 
-# 供 LLM 解读行情 JSON：与后端 ``quant_endpoint`` 聚合结构一致，避免把人气榜/涨停池误写进「自选」。
-RAW_DATA_FIELD_GUIDE = """【接口 JSON 顶层字段说明（必须按键名区分，禁止混用）】
-「自选股」：唯一表示用户自选股的数组；元素可含「战法」字段（**涨停板战法** / **龙回头战法**，或由旧数据产生的未标注）。只有该键下的标的才允许出现在正文里所有标题含「自选」的小节中。若该键为 [] 或不存在，对应小节只能写一句「无自选股」或「当前自选股为空」，不得用其他任何键里的股票名单顶替。盘中买卖须与该标的「战法」一致，禁止混用两套战法逻辑。
-「持仓股」：用户持仓，凡标题含「持仓」的小节仅使用该键；若为空则写无持仓。
-「同花顺人气榜」：不是用户自选。涨停战法盘中判定「人气前十」请用「人气排名」≤10；禁止把该键写入「自选股」。
-「涨停统计」「概念板块」「大盘指数」「赚钱效应」「大盘资金流」「市场状态机」等：市场环境或榜单类数据，其中的个股/代码不得当作「自选股」列出。其中「概念板块」含「涨幅榜」「资金流入榜」各约前十条，行业名需与个股「所属概念」做模糊对应。
-「大盘资金流」与「个股资金流」：资金流明细中以「日期」「主力净流入-净额」等为准。
-「盘口」：包含「最新」「均价」（分时均价）、「量比」、五档买卖等字段。
-「盘中10分钟线」：仅返回**交易日当日**已存档 K 线。
-复盘正文末尾「自选更新」JSON（午间/晚间出现）：按策略「2.1」「2.2」与人气榜前20/前50筛选，每条须含「战法」「加入自选原因」，作为下一交易日观察池；不得因当日已涨停而省略合格标的。"""
-
-# 自选更新：不以 strategy 做服务端过滤，以模型输出为准（解析逻辑见下文）。
-OPTIONAL_UPDATE_RULES_BLOCK = """
-【自选更新说明】
-「自选更新」JSON 以模型输出为准。若为 []，你必须在输出中单独一行写明「自选未更新原因：……」。
-每项须含「战法」（取值仅为「涨停板战法」或「龙回头战法」）、「加入自选原因」（须与战法一致，不得以另一套战法说理）。
-若填写「加入自选原因」，请尽量与当次业务 JSON 中的字段（如「同花顺人气榜」「涨停统计」「概念板块」「历史行情」等）描述一致，便于复盘。
+# 供 LLM 解读行情 JSON：与后端 ``quant_endpoint`` 聚合结构一致。
+# 按任务拆分：单任务提示词只注入与本节条文相关的字段说明，避免无关战法表述。
+RAW_DATA_FIELD_GUIDE_COMMON = """【接口 JSON 顶层字段说明（必须按键名区分，禁止混用）】
+「自选股」：用户自选观察池；元素含「战法」时，正文与指令须与该字段所指条文一致，不得交叉套用其他条文。
+「持仓股」：用户持仓；标题含「持仓」的小节仅使用该键。
+「同花顺人气榜」「涨停统计」「概念板块」等：环境或榜单数据，其中的个股代码不得替代「自选股」列出。
+「大盘资金流」「个股资金流」「盘口」「历史行情」「盘中10分钟线」等：按当次任务条文使用对应路径。
 """
 
-# 各阶段职责：避免模型把「复盘补自选」当成「盘中能否追涨」或把「今日涨停」误判为无需加入自选。
-TRADING_PHASE_WORKFLOW_BLOCK = """
-【交易闭环阶段分工（必须遵守，勿混淆）】
-1、盘前：依据开盘情况、接口 JSON「自选股」「持仓股」与 交易策略，制定**当日**可执行纲要；对符合策略条件的标的给出**挂单**要素（方向、委托价、时刻、仓位）。
-2、盘中（真实交易）：**买入**仅限来自**此前复盘「自选更新」已纳入、且体现在接口 JSON「自选股」中的标的**，且当前仍满足盘中追击/龙回头条件；**同一标的须按 JSON「自选股」内「战法」字段选用对应战法段落（涨停战法 / 龙回头），严禁交叉套用**；**卖出**仅限来自 JSON「持仓股」。禁止仅凭「同花顺人气榜」热度对未入池股票开仓。
-3、复盘（午间/晚间）：回顾**当日**行情与账户操作，总结盈亏与教训，并**为下一交易日储备自选**。涨停板战法按 strategy「2.1 涨停板战法 – 加入自选」从「同花顺人气榜」**前20条**内筛选；龙回头按「2.2 龙回头战法 – 加入自选」从**前50条**内筛选（若接口仅返回约20条轻量数据，则在该范围内按策略尽其所能筛选）。
-"""
+RAW_DATA_FIELD_GUIDE_ZT = (
+    RAW_DATA_FIELD_GUIDE_COMMON
+    + "【本节条文相关】盘中追击时「人气排名」取自「同花顺人气榜」内字段，阈值为 **≤10**；加自选筛选用人气榜前 **20** 条；「涨停统计」「概念板块」用于本节口径。\n"
+)
 
-OPTIONAL_UPDATE_RULES_REVIEW_BLOCK = """
-【复盘｜自选更新专项规则】
-「自选更新」表示按 2.1 / 2.2 **纳入下一交易日观察自选池**，与盘中此刻能否再买、是否已涨停**不是同一判断**。
-- 凡符合「2.1」或「2.2」加入自选条件的标的，**均应**在「自选更新」中给出条目（含「战法」「加入自选原因」）。**今日已涨停**常属于次日验证持续性/接力观察，**不得**以「已涨停无法买入」「仅一只标的」「等待明日验证」等为由输出空数组 []。
-- 仅当按交易策略逐项核对后**确实无任何标的**满足 2.1/2.2 加入条件（例如人气榜缺失、或全场无任何条目满足硬条件）时，方可输出 []，并单独一行写「自选未更新原因：……」。
-"""
+RAW_DATA_FIELD_GUIDE_LHT = (
+    RAW_DATA_FIELD_GUIDE_COMMON
+    + "【本节条文相关】加自选筛选用人气榜前 **50** 条（接口不足则按实际条数）；「历史行情」「技术指标」均线与 MACD、「盘口」量比、「个股资金流」用于本节口径。\n"
+)
+
+RAW_DATA_FIELD_GUIDE_NARRATIVE = (
+    RAW_DATA_FIELD_GUIDE_COMMON
+    + "【复盘正文】涉及多只自选时，按 JSON「战法」分列叙述，勿混写理由。\n"
+)
 
 # 自选 JSON 合法战法取值（与提示词、落盘字段一致）
 OPTIONAL_STRATEGY_ALLOWED = frozenset({"涨停板战法", "龙回头战法"})
 
-STRATEGY_ISOLATION_BLOCK = """
-【战法隔离（严禁混用、乱用）】
-- 「涨停板战法」仅遵循 strategy **2.1** 及人气榜前 **20**、人气排名≤10、板块对齐、涨停统计与盘口追击等口径；「龙回头战法」仅遵循 **2.2** 及人气榜前 **50**、均线/量比/回调与资金流等口径。**禁止**在同一标的的「加入自选原因」里混写两套逻辑（例如对龙回头标的大谈人气排名是否符合涨停前十）。
-- 「自选更新」JSON **每一条必须含「战法」**，取值只能是 **`涨停板战法`** 或 **`龙回头战法`**（与 2.1 / 2.2 一一对应）；「加入自选原因」须以 **`【涨停板战法】`** 或 **`【龙回头战法】`** 开头，后续论据只能使用该战法允许的字段。
-- **次日盘中**：执行涨停战法买入时，仅允许 JSON「自选股」中该标的 **`战法` 为「涨停板战法」**；执行龙回头买入时，仅允许 **`战法` 为「龙回头战法」**。禁止用龙回头均线逻辑操作标注为涨停战法的自选，反之亦然。（历史自选缺「战法」字段时，须在文中单独说明并按单一战法审慎处理，不得混判。）
-"""
-
-REVIEW_OUTPUT_SELF_CHECK_BLOCK = """
-【午间/晚间复盘｜输出自选 JSON 前自检（须逐项完成后再写 JSON，减少遗漏与摇摆）】
-① **涨停战法**：仅在「同花顺人气榜」前 **20** 条内，独立按 strategy **2.1** 筛一遍，记下合格代码（只用 2.1 口径）。
-② **龙回头**：仅在「同花顺人气榜」前 **50** 条内（接口不足则按实际条数），独立按 **2.2** 筛一遍，记下合格代码（只用 2.2 口径）。
-③ 同一代码可同时出现在两步，但输出 JSON 时**每条记录只能填一个「战法」**，且「加入自选原因」严禁混用两套说理。
-④ 每条对象必须含 **`战法`** + **`加入自选原因`**（原因前缀与战法一致）。
-⑤ 仅当①②均无合格标的时，才输出 []，并写「自选未更新原因」。
+TRADING_PHASE_WORKFLOW_BLOCK = """
+【交易闭环阶段分工】
+1、盘前：依据接口 JSON「自选股」「持仓股」与策略条文，输出当日可执行纲要及挂单要素。
+2、盘中：买入仅允许出现在 JSON「自选股」中的标的，且须满足该条「战法」对应条文；卖出仅允许「持仓股」。禁止用榜单代替自选池开仓。
+3、复盘：总结当日并储备下一交易日观察池时，按各条文独立筛选；每条记录单一战法、单一说理。
 """
 
 
@@ -130,13 +114,14 @@ def _daily_news_tail_for_prompt(*, max_chars: int = 1000) -> str:
     )
 
 
-def _market_data_user_block(raw_data: dict, *, tail: str) -> str:
+def _market_data_user_block(raw_data: dict, *, tail: str, guide: str | None = None) -> str:
     """行情类分析：字段说明 → 当日新闻总结 → 接口 JSON → tail。"""
     payload = _unwrap_quant_market_payload(raw_data)
+    field_guide = guide if guide is not None else RAW_DATA_FIELD_GUIDE_COMMON
     return (
-        RAW_DATA_FIELD_GUIDE
+        field_guide
         + _daily_news_tail_for_prompt()
-        + "\n\n【以下为接口业务数据 JSON（已去掉 code/message 外层；请仅按上文键名解读）】\n"
+        + "\n\n【以下为接口业务数据 JSON】\n"
         + json.dumps(payload, ensure_ascii=False)[:140000]
         + tail
     )
@@ -208,7 +193,7 @@ def call_llm(
             resp = requests.post(url, headers=headers, json=payload, timeout=600)
             if resp.status_code == 529:
                 print(f"LLM限流，重试({attempt+1}/{retries})...")
-                import time; time.sleep(5)
+                time.sleep(5)
                 continue
             resp.raise_for_status()
             result = resp.json()
@@ -219,7 +204,7 @@ def call_llm(
         except Exception as e:
             print(f"LLM异常: {e}")
             if attempt < retries - 1:
-                import time; time.sleep(5)
+                time.sleep(5)
     raise Exception("LLM调用失败")
 
 # ========== 数据拉取 ==========
@@ -237,7 +222,7 @@ def fetch_post_market(): return fetch_data("/api/v1/quant/market/post_market")
 def get_fund() -> float:
     try:
         return float(_read_user_text(FUND_FILE).strip())
-    except:
+    except (OSError, ValueError, TypeError):
         return INITIAL_CAPITAL
 
 def update_fund(profit: float):
@@ -316,13 +301,44 @@ def save_optional(optional: list):
 def read_trades(today: str) -> list:
     try:
         return json.loads(_read_user_text(f"{DATA_DIR}/trade/{today}/trades.md"))
-    except:
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
         return []
+
 
 def save_trades(today: str, trades: list):
     os.makedirs(f"{DATA_DIR}/trade/{today}", exist_ok=True)
     with open(f"{DATA_DIR}/trade/{today}/trades.md", "w", encoding="utf-8") as f:
         f.write(json.dumps(trades, ensure_ascii=False, indent=2))
+
+
+def _tail_fund_only() -> str:
+    return f"\n\n【当前资金】：{get_fund():.2f} 元"
+
+
+def _tail_during_market_user() -> str:
+    td = datetime.now().strftime("%Y-%m-%d")
+    tr = read_trades(td)
+    tr_s = json.dumps(tr, ensure_ascii=False) if tr else "无"
+    return f"\n\n【当前资金】：{get_fund():.2f} 元\n【今日交易记录】：{tr_s}"
+
+
+def _tail_lunch_review() -> str:
+    td = datetime.now().strftime("%Y-%m-%d")
+    tr = read_trades(td)
+    tr_s = json.dumps(tr, ensure_ascii=False) if tr else "无"
+    return f"\n\n【当前资金】：{get_fund():.2f} 元\n【上午交易记录】：{tr_s}"
+
+
+def _tail_evening_review() -> str:
+    td = datetime.now().strftime("%Y-%m-%d")
+    tr = read_trades(td)
+    tr_s = json.dumps(tr, ensure_ascii=False) if tr else "无交易"
+    return (
+        f"\n\n【当前资金】：{get_fund():.2f} 元\n"
+        f"【初始本金】：{INITIAL_CAPITAL}元\n"
+        f"【今日实际交易记录】：\n"
+        f"{tr_s}"
+    )
 
 def load_strategy() -> str:
     try:
@@ -330,293 +346,182 @@ def load_strategy() -> str:
     except OSError as e:
         return f"策略文件加载失败：{STRATEGY_FILE}（{e!r}）"
 
-# ========== 新闻处理 ==========
-def process_news(raw_data: dict, timestamp: str) -> str:
-    today = datetime.now().strftime("%Y-%m-%d")
-    time_str = datetime.now().strftime("%H_%M_%S")
-    os.makedirs(f"{DATA_DIR}/news/{today}", exist_ok=True)
-    news_file = f"{DATA_DIR}/news/{today}/{time_str}.md"
-
-    system = """你是一个专业的财经资讯处理助手。请根据以下多渠道获取的新闻原文（可能包含重复、噪音），完成去噪、去重、提炼。
 
-【输入新闻数据】
-{粘贴多条新闻，每条可标注来源}
+# strategy.md 顶级章节锚点（与仓库内 strategy.md 标题一致，用于按阶段切片加载）
+_STRATEGY_CHAPTER_MARKERS: tuple[tuple[str, str], ...] = (
+    ("第零章", "## 第零章"),
+    ("第一章", "## 第一章"),
+    ("第二章", "## 第二章"),
+    ("第三章", "## 第三章"),
+    ("第四章", "## 第四章"),
+    ("第五章", "## 第五章"),
+    ("第六章", "## 第六章"),
+    ("附录", "## 附录"),
+)
+
+def _strategy_split_chapters(full: str) -> dict[str, str]:
+    """按顶级 ``##`` 章节切片（不含文件首行标题 ``## A股…`` 之前的片段）。"""
+    positions: list[tuple[int, str]] = []
+    for key, marker in _STRATEGY_CHAPTER_MARKERS:
+        idx = full.find(marker)
+        if idx >= 0:
+            positions.append((idx, key))
+    positions.sort(key=lambda x: x[0])
+    out: dict[str, str] = {}
+    for i, (pos, key) in enumerate(positions):
+        end = positions[i + 1][0] if i + 1 < len(positions) else len(full)
+        out[key] = full[pos : end].strip()
+    return out
+
+
+def load_strategy_for_phase(phase: str) -> str:
+    """
+    按运行阶段加载 strategy.md 的子集（代码侧编排；不向模型暴露章节清单）。
+    ``phase``: ``pre_market`` | ``during_market`` | ``post_market_review``。
+    切片失败时静默回退全文。
+    """
+    full = load_strategy()
+    if full.startswith("策略文件加载失败"):
+        return full
+    ch = _strategy_split_chapters(full)
+    wanted_lists: dict[str, list[str]] = {
+        "post_market_review": ["第零章", "第一章", "第二章"],
+        "pre_market": ["第零章", "第一章", "第三章", "第五章", "第六章", "附录"],
+        "during_market": ["第零章", "第一章", "第三章", "第四章", "第五章", "第六章", "附录"],
+    }
+    wanted = wanted_lists.get(phase)
+    if not wanted:
+        return full
+    parts = [(ch.get(k) or "").strip() for k in wanted]
+    if not all(parts):
+        return full
+    return "\n\n---\n\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# 统一人设 + 任务级策略切片（多路 LLM 并行时每个子任务只注入相关条文）
+# ---------------------------------------------------------------------------
+LLM_PERSONA_CORE = """【人设】你是顶尖 A 股短线交易员，手法比肩章盟主、赵老哥，纪律严明，知行合一。
+"""
+LLM_OUTPUT_FORMAT = """
+【输出格式要求】纯文本，禁止使用 markdown 的 #、*、- 等排版符号。
+"""
+
+
+def _extract_subsection(text: str, start_m: str, end_m: str | None) -> str:
+    i = text.find(start_m)
+    if i < 0:
+        return ""
+    if not end_m:
+        return text[i:].strip()
+    j = text.find(end_m, i + len(start_m))
+    if j < 0:
+        return text[i:].strip()
+    return text[i:j].strip()
+
+
+def _chapter_six_for_overview_and_narrative(c6: str) -> str:
+    """第六章：状态机 + 组合层上限 + 共有纪律 + 每日亏损限额（不含各战法单票分表）。"""
+    head = _extract_subsection(c6, "## 第六章", "#### 涨停板战法")
+    bullet = ""
+    i = c6.find("- 若盘中状态由强势转为弱势")
+    if i >= 0:
+        j = c6.find("### 6.2", i)
+        if j > i:
+            bullet = c6[i:j].strip()
+    tail = _extract_subsection(c6, "### 6.2", None)
+    parts = [p.strip() for p in (head, bullet, tail) if p and p.strip()]
+    return "\n\n".join(parts)
+
+
+def load_strategy_snippet(snippet_id: str) -> str:
+    """从 strategy.md 抽取单任务所需条文；未知 id 返回空串。"""
+    full = load_strategy()
+    if full.startswith("策略文件加载失败"):
+        return full
+    ch = _strategy_split_chapters(full)
+    c6 = (ch.get("第六章", "") or "").strip()
+    if snippet_id == "review_narrative":
+        z0 = ch.get("第零章", "")
+        z01 = _extract_subsection(z0, "### 0.1", "### 0.2")
+        parts = [
+            z01.strip(),
+            (ch.get("第一章", "") or "").strip(),
+            _chapter_six_for_overview_and_narrative(c6),
+        ]
+        return "\n\n---\n\n".join(p for p in parts if p)
+    if snippet_id == "optional_zt":
+        c2 = ch.get("第二章", "")
+        return _extract_subsection(c2, "### 2.1", "### 2.2").strip()
+    if snippet_id == "optional_lht":
+        c2 = ch.get("第二章", "")
+        return (_extract_subsection(c2, "### 2.2", None) or "").strip()
+    if snippet_id == "buy_zt":
+        c3 = ch.get("第三章", "")
+        return _extract_subsection(c3, "### 3.1", "### 3.2").strip()
+    if snippet_id == "buy_lht":
+        c3 = ch.get("第三章", "")
+        r = _extract_subsection(c3, "### 3.2", "## 第四章")
+        return (r or _extract_subsection(c3, "### 3.2", None) or "").strip()
+    if snippet_id == "pre_market_narrative":
+        return "\n\n---\n\n".join(
+            [
+                (ch.get("第一章", "") or "").strip(),
+                _chapter_six_for_overview_and_narrative(c6),
+            ]
+        ).strip()
+    if snippet_id == "during_overview":
+        return _chapter_six_for_overview_and_narrative(c6).strip()
+    if snippet_id == "during_hold_zt":
+        c4 = (ch.get("第四章", "") or "").strip()
+        c5 = (ch.get("第五章", "") or "").strip()
+        zt_pos = _extract_subsection(c6, "#### 涨停板战法", "#### 龙回头战法")
+        bullet = ""
+        i = c6.find("- 若盘中状态由强势转为弱势")
+        if i >= 0:
+            j = c6.find("### 6.2", i)
+            if j > i:
+                bullet = c6[i:j].strip()
+        common = "\n\n".join(
+            [
+                _extract_subsection(c4, "### 4.1", "### 4.2").strip(),
+                _extract_subsection(c5, "### 5.1", "### 5.2").strip(),
+                zt_pos.strip(),
+                bullet,
+            ]
+        )
+        return common.strip()
+    if snippet_id == "during_hold_lht":
+        c4 = (ch.get("第四章", "") or "").strip()
+        c5 = (ch.get("第五章", "") or "").strip()
+        lh_pos = _extract_subsection(c6, "#### 龙回头战法", "### 6.2")
+        common = "\n\n".join(
+            [
+                _extract_subsection(c4, "### 4.2", "## 第五章").strip(),
+                _extract_subsection(c5, "### 5.2", "## 第六章").strip(),
+                lh_pos.strip(),
+            ]
+        )
+        return common.strip()
+    if snippet_id == "during_positions_policy":
+        loss = _extract_subsection(c6, "### 6.2", None)
+        return (loss or "").strip()
+    return ""
+
+
+_LLM_PARALLEL_WORKERS = max(2, min(8, (os.cpu_count() or 4)))
+
+
+def _parallel_map_call_str(*fns: Callable[[], str]) -> list[str]:
+    """并行执行多个无参、返回 str 的 LLM 子任务。"""
+    if not fns:
+        return []
+    n = min(_LLM_PARALLEL_WORKERS, len(fns))
+    with ThreadPoolExecutor(max_workers=n) as ex:
+        futs = [ex.submit(fn) for fn in fns]
+        return [fu.result() for fu in futs]
 
-【输出要求】
-1. 按重要度降序排列，输出前20条。
-2. 生成一段"解读"，站在短线交易者角度，分析这些新闻对大盘、板块、市场情绪可能产生的影响，并指出短线操作需要关注的方向。
-3. 【重要】禁止使用markdown格式，纯文本输出，避免任何#、*、-等markdown符号。
-4. 严格按以下纯文本格式输出：
 
-1、{新闻标题或核心内容}
-2、{新闻标题或核心内容}
-……
-
-解读：{综合解读，说明对大盘/板块/情绪的可能影响，以及短线交易需注意的方向}"""
-
-    user = f"原始新闻：\n{json.dumps(raw_data, ensure_ascii=False)[:140000]}"
-    summary = call_llm(system, user)
-
-    # 保存原始数据（UTF-8）
-    with open(news_file.replace('.md', '-origin.json'), "w", encoding="utf-8") as f:
-        json.dump(raw_data, f, ensure_ascii=False, indent=2)
-    # 保存处理后的数据
-    with open(news_file, "w", encoding="utf-8") as f:
-        f.write(f"# 新闻 {timestamp}\n\n{summary}\n")
-    return summary
-
-# ========== 盘前分析 ==========
-def analyze_pre_market(raw_data: dict, timestamp: str) -> str:
-    fund = get_fund()
-    strategy = load_strategy()
-
-    system = """【角色】你是一位顶尖A股短线交易员，身经百战，操作风格比肩赵老哥、章盟主。你正在执行真实资金账户的当日决策，须对盈亏负责。
-
-【实盘契约】
-- 禁止「建议」「可参考」「观察为主」等推脱表述；输出必须是可执行的挂单指令（方向、仓位、委托价、时间点），使用具体时间格式 yyyy-MM-dd HH:mm:ss 或当日 HH:mm:ss。
-- 必须写明加自选原因、买卖时点与价格；目标是组合净值大幅可持续增值，而非泛泛而谈。
-- 概率游戏 + 纪律执行 + 知行合一；宁可卖飞，不可被套。
-
-""" + TRADING_PHASE_WORKFLOW_BLOCK + STRATEGY_ISOLATION_BLOCK + """
-
-【交易策略】（必须严格遵守）
-""" + strategy + """
-
-【重要】禁止使用markdown格式，纯文本输出，避免任何#、*、-等符号。
-
-请严格按以下格式输出：
-
-一、市场整体概览
-- 上证指数：{当前点位}（{涨跌幅}）
-- 深证成指：{当前点位}（{涨跌幅}）
-- 创业板指：{当前点位}（{涨跌幅}）
-- 市场情绪：{高/中/低}，{简要说明}
-
-二、自选股（仅根据 JSON 根键「自选股」数组；该数组为空则本小节只写「无自选股」一句，不得从人气榜、涨停池、板块等其它键借股票充填）
-若条目含「战法」，请按「涨停板战法」「龙回头战法」分列简述，勿混写判定逻辑。
-1、{股票名称}（{代码}）：{当前价}，{涨跌幅}，{异动/正常}
-2、……
-
-三、持仓股（仅根据 JSON 根键「持仓股」数组；为空则本小节只写「无持仓」一句）
-1、{股票名称}（{代码}）：{当前价}，{涨跌幅}，{成本价}，{浮盈亏}，{明确处置意向：持有/减仓/清仓及价位时间}
-2、……
-
-四、涨停板战法（集合竞价与盘中）
-- 本段**仅**用于 JSON「自选股」中 **「战法」=「涨停板战法」** 的标的；缺「战法」的旧数据须在文中明确正按涨停战法核对后再给单，**禁止**用龙回头均线逻辑覆盖此类标的。
-- 集合竞价：仍可按策略评估高开区间与量比；若准备挂单须给出限价与 deadline。
-- 盘中追击（使用盘中接口 JSON）：标的「人气排名」须 ≤10（「同花顺人气榜」返回约 20 条轻量数据，以前十名为准）；个股「所属概念」须能与「概念板块」中「涨幅榜」前十或「资金流入榜」前十的行业名对应；盘口「均价」为分时均线，现价须站上均价方可买入；给出买入价、时刻与仓位。
-
-五、龙回头战法（定价与资金口径）
-- 本段**仅**用于 **「战法」=「龙回头战法」** 的自选标的；**禁止**用涨停战法的人气前十/板块对齐要求去套龙回头标的。
-- 买入区间须同时参照「5日线」「10日线」「20日线」或「技术指标」内均线；量能看盘口「量比」；资金看「个股资金流」最近一条的「主力净流入-净额」方向与规模。
-
-六、市场判断与当日执行纲要
-{深度分析结论}
-
-七、【持仓更新】（仅此一处输出持仓 JSON 数组）
-规则：若有增删改持仓，输出非空 JSON；若本次无需变更，输出 []，并在下一行单独写明「持仓未更新原因：……」（如无新开平仓指令、与上次持仓一致、缺口数据无法下单等）。
-格式：须含股票代码、名称、买入时间（yyyy-MM-dd HH:mm:ss）、买入价、买入原因；卖出补全卖出时间与卖出价。
-[{"股票代码":"600000","股票名称":"浦发银行","买入时间":"2026-05-03 09:31:00","买入价":11.2,"买入原因":"……","卖出时间":"","卖出价":"","卖出原因":""}]"""
-
-    user = _market_data_user_block(
-        raw_data,
-        tail=f"\n\n【当前资金】：{fund:.2f} 元",
-    )
-
-    return call_llm(system, user, max_tokens=140000, temperature=0.18)
-
-# ========== 盘中分析 ==========
-def analyze_during_market(raw_data: dict, timestamp: str) -> str:
-    fund = get_fund()
-    trades = read_trades(datetime.now().strftime("%Y-%m-%d"))
-    strategy = load_strategy()
-
-    system = """【角色】你是一位顶尖A股短线交易员。你正在执行真实资金账户，须对每一笔指令负责。
-
-【实盘契约】
-- 禁止「建议」「仅供参考」；输出可执行的买卖挂单要素：代码、名称、方向、仓位比例、委托价、触发时刻（yyyy-MM-dd HH:mm:ss 或当日清晰时点）。
-- 必须交代加自选原因、买卖时间与价格；目标是净值大幅增值。
-
-""" + TRADING_PHASE_WORKFLOW_BLOCK + STRATEGY_ISOLATION_BLOCK + """
-
-【核心原则】
-- 热点就是印钞机，退潮前先手卖出；宁可卖飞，不可被套。
-
-【交易策略】（必须严格遵守）
-""" + strategy + """
-
-【重要】禁止使用markdown格式，纯文本输出，避免任何#、*、-等符号。
-
-请严格按以下格式输出：
-
-【市场状态】{强势/震荡/弱势}（{综合描述：上证位置、昨日涨停指数、成交额、连板高度}）
-【总仓位限制】依策略第六章 | 当前持仓{x%}
-
-【涨停板战法｜盘中买入】
-条件自查：仅当该标的在 JSON「自选股」中 **「战法」=「涨停板战法」**（或缺省但你在正文已明确仅按涨停战法处理）时，才适用本段。JSON「同花顺人气榜」含人气 **前 20 条**（轻量字段）；买卖判定仍以 **人气排名≤10** 为准；标的所属概念须对应「概念板块」之「涨幅榜」前十或「资金流入榜」前十；个股盘口请用「自选股」/「持仓股」或另行行情，勿假定人气榜条目含盘口。若标的仅在人气榜第11～20名，不按涨停战法盘中追击。盘口「最新」须高于「均价」（分时均线）方可买入。**禁止对「战法」=「龙回头战法」的标的套用本节追击逻辑。**
-输出：标的代码与名称，方向买入，仓位{x%}，委托价与时刻，止损与目标价。
-
-【龙回头战法｜盘中买入】
-条件自查：仅当 **「战法」=「龙回头战法」** 时适用。现价处于 5/10/20 日均线允许区间（见「5日线」「10日线」「20日线」或「技术指标」）；量能参考盘口「量比」；资金参考「个股资金流」当日记录的「主力净流入-净额」。**禁止对「涨停板战法」标的套用本节均线/回调逻辑。**
-输出：委托价、时刻、仓位、止损。
-
-【涨停/龙回头｜持仓处理】
-- {股票名称}：浮盈/浮亏{x%}，{卖出或持有的明确价位与时间条件}
-
-【持仓更新】（仅此一处输出持仓 JSON 数组）
-规则：若非空 JSON，列出完整持仓变更；若为 []，须在下一行写明「持仓未更新原因：……」。
-每条须含买入时间（yyyy-MM-dd HH:mm:ss）、买入价、买入原因；卖出须含卖出时间与卖出价。
-[{"股票代码":"600000","股票名称":"浦发银行","买入时间":"2026-05-03 10:30:00","买入价":11.2,"买入原因":"……","卖出时间":"","卖出价":"","卖出原因":""}]
-
-【风控】{触发状态描述}
-
-【数据纪律】提及「自选股」仅能引用 JSON「自选股」数组；该键为空不得编造。"""
-
-    user = _market_data_user_block(
-        raw_data,
-        tail=(
-            f"\n\n【当前资金】：{fund:.2f} 元\n"
-            f"【今日交易记录】：{json.dumps(trades, ensure_ascii=False) if trades else '无'}"
-        ),
-    )
-
-    return call_llm(system, user, max_tokens=140000, temperature=0.18)
-
-# ========== 午间复盘 ==========
-def analyze_lunch_market(raw_data: dict, timestamp: str) -> str:
-    fund = get_fund()
-    trades = read_trades(datetime.now().strftime("%Y-%m-%d"))
-    strategy = load_strategy()
-
-    system = """【角色】你是一位顶尖A股短线交易员，身经百战。你正在执行真实资金账户，须对输出负责，禁止空泛建议。
-
-【核心原则】
-- 概率游戏 + 纪律执行 + 知行合一
-- 热点就是印钞机，退潮前先手卖出
-- 宁可卖飞，不可被套
-- 有鱼捕鱼，无鱼织网，空仓等待不勉强
-
-""" + TRADING_PHASE_WORKFLOW_BLOCK + STRATEGY_ISOLATION_BLOCK + """
-
-【交易策略】（必须严格遵守）
-""" + strategy + """
-
-【重要】禁止使用markdown格式，纯文本输出，避免任何#、*、-等符号。
-
-请严格按以下格式输出：
-
-一、上午大盘回顾
-- 上证：{开盘价} → {午间收盘价}（{涨跌幅}）
-- 深证：{开盘价} → {午间收盘价}（{涨跌幅}）
-- 创业板：{开盘价} → {午间收盘价}（{涨跌幅}）
-- 半日成交量：{亿元}，较昨日{放量/缩量}{%}
-
-二、上午关键事件
-{根据新闻和走势总结的重要消息或异动}
-
-三、自选股表现（仅 JSON「自选股」；若为空则本小节只写「无自选股」）
-1、{名称}（{代码}）：半日涨跌幅{x%}，最高/最低{价格}，{点评}
-2、……
-
-四、持仓股表现（仅 JSON「持仓股」；若为空则本小节只写「无持仓」）
-1、{名称}（{代码}）：半日涨跌幅{x%}，浮盈亏{y%}，{点评}
-2、……
-
-五、下午操作策略调整
-- 原计划回顾：{是否按计划执行}
-- 下午修正：{具体买入/卖出/持有决策及理由}
-""" + REVIEW_OUTPUT_SELF_CHECK_BLOCK + OPTIONAL_UPDATE_RULES_BLOCK + OPTIONAL_UPDATE_RULES_REVIEW_BLOCK + """
-六、自选更新
-规则：输出自选 JSON 数组；若无须纳入观察池的标的，输出 []，并在下一行写明「自选未更新原因：……」。
-【格式：JSON数组；每项必须含「战法」「加入自选原因」。战法取值仅为「涨停板战法」或「龙回头战法」，且须与加入自选原因前缀一致】
-[{"股票代码":"600000","股票名称":"浦发银行","战法":"涨停板战法","加入自选原因":"【涨停板战法】人气排名与板块对齐……"}]"""
-
-    user = _market_data_user_block(
-        raw_data,
-        tail=(
-            f"\n\n【当前资金】：{fund:.2f} 元\n"
-            f"【上午交易记录】：{json.dumps(trades, ensure_ascii=False) if trades else '无'}"
-        ),
-    )
-
-    return call_llm(system, user, max_tokens=140000, temperature=0.08)
-
-# ========== 晚间复盘 ==========
-def analyze_evening_market(raw_data: dict, timestamp: str) -> str:
-    fund = get_fund()
-    trades = read_trades(datetime.now().strftime("%Y-%m-%d"))
-    strategy = load_strategy()
-
-    system = """【角色】你是一位顶尖A股短线交易员，身经百战。你正在执行真实资金账户，须对输出负责，禁止空泛建议。
-
-【核心原则】
-- 概率游戏 + 纪律执行 + 知行合一
-- 热点就是印钞机，退潮前先手卖出
-- 宁可卖飞，不可被套
-- 有鱼捕鱼，无鱼织网，空仓等待不勉强
-
-""" + TRADING_PHASE_WORKFLOW_BLOCK + STRATEGY_ISOLATION_BLOCK + """
-
-【交易策略】（必须严格遵守）
-""" + strategy + """
-
-【重要】禁止使用markdown格式，纯文本输出，避免任何#、*、-等符号。
-
-请严格按以下格式输出：
-
-一、今日大盘概况
-- 上证指数：{收盘点位}（{涨跌幅}），最高{点位}，最低{点位}
-- 深证成指：{收盘点位}（{涨跌幅}），最高{点位}，最低{点位}
-- 创业板指：{收盘点位}（{涨跌幅}），最高{点位}，最低{点位}
-- 两市成交额：{亿元}（较昨日{±%}）
-- 上涨家数 / 下跌家数 / 平盘家数：{a}/{b}/{c}
-- 涨停家数 / 跌停家数：{x}/{y}
-
-二、今日市场分析
-{综述：关键事件、领涨领跌板块、资金流向、情绪变化、连板高度等}
-
-三、自选股全天表现（仅 JSON「自选股」；若为空则本小节只写「无自选股」）
-1、{名称}（{代码}）：收盘{价格}（{涨跌幅}），振幅{x%}，{亮点/问题}
-2、……
-
-四、持仓股全天表现（仅 JSON「持仓股」；若为空则本小节只写「无持仓」）
-1、{名称}（{代码}）：收盘{价格}（{涨跌幅}），浮盈亏{y%}，{操作评价}
-2、……
-
-五、同花顺人气榜（仅 JSON「同花顺人气榜」；若该键缺失或为空则写「本节无数据」；不得与第三节混写）
-1、{名称}（{代码}）：所属板块{板块}，上榜原因{原因}，连板情况{连板数}，收盘涨跌幅{x%}
-2、……
-
-六、今日实际操作
-1、卖出 {名称}（{代码}）：时间{HH:MM}，价格{价格}，仓位{比例}，原因{理由}
-2、买入 {名称}（{代码}）：时间{HH:MM}，价格{价格}，仓位{比例}，原因{理由}
-3、无操作
-
-七、今日盈亏
-- 当日总盈亏：{±金额}元（{±%}）
-- 当前总资产：{金额}元（初始本金{金额}元）
-
-八、经验及教训总结
-{根据今日交易记录总结优点、失误与改进点，并形成初步的明日选股方向或关注标的}
-""" + REVIEW_OUTPUT_SELF_CHECK_BLOCK + OPTIONAL_UPDATE_RULES_BLOCK + OPTIONAL_UPDATE_RULES_REVIEW_BLOCK + """
-九、自选更新
-规则：输出自选 JSON 数组；若无须纳入观察池的标的，输出 []，并在下一行写明「自选未更新原因：……」。
-【格式：JSON数组；每项必须含「战法」「加入自选原因」。战法取值仅为「涨停板战法」或「龙回头战法」，且须与加入自选原因前缀一致】
-[{"股票代码":"600000","股票名称":"浦发银行","战法":"龙回头战法","加入自选原因":"【龙回头战法】均线与量比……"}]"""
-
-    user = _market_data_user_block(
-        raw_data,
-        tail=(
-            f"\n\n【当前资金】：{fund:.2f} 元\n"
-            f"【初始本金】：{INITIAL_CAPITAL}元\n"
-            f"【今日实际交易记录】：\n"
-            f"{json.dumps(trades, ensure_ascii=False) if trades else '无交易'}"
-        ),
-    )
-
-    return call_llm(system, user, max_tokens=140000, temperature=0.08)
-
-# ========== 解析并更新 ==========
 def _match_bracket_span(s: str, start: int, open_ch: str = "[", close_ch: str = "]") -> tuple[int, int] | None:
     """自 start（指向 open_ch）起配对括号，返回 [start, end) end 为紧随 ] 之后下标。"""
     if start >= len(s) or s[start] != open_ch:
@@ -664,6 +569,359 @@ def _json_loads_array_relaxed(raw: str) -> list | None:
         return None
 
 
+def _parse_first_json_array_from_text(text: str) -> tuple[list, str]:
+    """从模型回复中抽出首个 JSON 数组。"""
+    i = text.find("[")
+    if i < 0:
+        return [], text.strip()
+    depth = 0
+    for j in range(i, len(text)):
+        c = text[j]
+        if c == "[":
+            depth += 1
+        elif c == "]":
+            depth -= 1
+            if depth == 0:
+                raw = text[i : j + 1].replace("［", "[").replace("］", "]")
+                arr = _json_loads_array_relaxed(raw.strip())
+                tail = text[j + 1 :].strip()
+                if not isinstance(arr, list):
+                    return [], text.strip()
+                return arr, tail
+    return [], text.strip()
+
+
+def _system_review_optional_zt() -> str:
+    return (
+        LLM_PERSONA_CORE
+        + "\n\n【当前任务】复盘·仅完成 **涨停板战法 · 加入自选**。\n"
+        + "仅从接口 JSON 按下列条文筛选下一交易日观察标的；论据仅使用条文允许的字段。\n\n"
+        + "【策略条文】\n"
+        + load_strategy_snippet("optional_zt")
+        + "\n\n【输出】仅输出：先输出 **一个** JSON 数组；每项含 股票代码、股票名称、战法（固定填「涨停板战法」）、"
+        + "加入自选原因（必须以【涨停板战法】开头）。若无合格标的：输出 []，下一行写：涨停板战法自选未更新原因：……\n"
+        + "不要输出数组以外的正文。"
+    )
+
+
+def _system_review_optional_lht() -> str:
+    return (
+        LLM_PERSONA_CORE
+        + "\n\n【当前任务】复盘·仅完成 **龙回头战法 · 加入自选**。\n"
+        + "仅从接口 JSON 按下列条文筛选；论据仅使用条文允许的字段。\n\n"
+        + "【策略条文】\n"
+        + load_strategy_snippet("optional_lht")
+        + "\n\n【输出】仅输出：先输出 **一个** JSON 数组；每项含 股票代码、股票名称、战法（固定填「龙回头战法」）、"
+        + "加入自选原因（必须以【龙回头战法】开头）。若无合格标的：输出 []，下一行写：龙回头战法自选未更新原因：……\n"
+        + "不要输出数组以外的正文。"
+    )
+
+
+def _system_pre_market_main() -> str:
+    return (
+        LLM_PERSONA_CORE
+        + "\n\n【当前任务】盘前决策——撰写 **一～三、六、七**（不写四、五）。七含持仓 JSON。\n"
+        + TRADING_PHASE_WORKFLOW_BLOCK
+        + "\n\n【策略条文】\n"
+        + load_strategy_snippet("pre_market_narrative")
+        + "\n\n【实盘契约】输出可执行挂单要素（方向、仓位、委托价、时间点 yyyy-MM-dd HH:mm:ss）。\n"
+        + "【重要】禁止使用markdown格式。\n\n"
+        + "请严格按下列小节输出：\n\n"
+        + "一、市场整体概览\n"
+        + "- 上证指数：{当前点位}（{涨跌幅}）\n"
+        + "- 深证成指：{当前点位}（{涨跌幅}）\n"
+        + "- 创业板指：{当前点位}（{涨跌幅}）\n"
+        + "- 市场情绪：{高/中/低}，{简要说明}\n\n"
+        + "二、自选股（仅 JSON「自选股」；为空则只写一句无自选股）\n"
+        + "若含战法字段请分列叙述；勿与人气榜混写。\n\n"
+        + "三、持仓股（仅 JSON「持仓股」；为空则只写无持仓）\n\n"
+        + "六、市场判断与当日执行纲要\n"
+        + "{深度分析结论}\n\n"
+        + "七、【持仓更新】（仅此一处输出持仓 JSON 数组）\n"
+        + "规则：若有变更输出非空 JSON；无需变更输出 []，下一行写「持仓未更新原因：……」。\n"
+        + "格式须含股票代码、名称、买入时间（yyyy-MM-dd HH:mm:ss）、买入价、买入原因；卖出补全卖出时间与卖出价。\n"
+        + '[{"股票代码":"600000","股票名称":"浦发银行","买入时间":"2026-05-03 09:31:00","买入价":11.2,"买入原因":"……","卖出时间":"","卖出价":"","卖出原因":""}]\n'
+        + LLM_OUTPUT_FORMAT
+    )
+
+
+def _system_pre_market_zt() -> str:
+    return (
+        LLM_PERSONA_CORE
+        + "\n\n【当前任务】盘前——仅撰写 **四、涨停板战法（集合竞价与盘中）** 小节。\n"
+        + "仅针对 JSON「自选股」中战法为涨停板战法（或未标注且本节明确按该条文处理）的标的。\n\n"
+        + "【策略条文】\n"
+        + load_strategy_snippet("buy_zt")
+        + "\n\n【输出】仅输出「四、涨停板战法」及其内容，不要输出其他小节。\n"
+        + LLM_OUTPUT_FORMAT
+    )
+
+
+def _system_pre_market_lht() -> str:
+    return (
+        LLM_PERSONA_CORE
+        + "\n\n【当前任务】盘前——仅撰写 **五、龙回头战法（定价与资金口径）** 小节。\n"
+        + "仅针对 JSON「自选股」中战法为龙回头战法的标的。\n\n"
+        + "【策略条文】\n"
+        + load_strategy_snippet("buy_lht")
+        + "\n\n【输出】仅输出「五、龙回头战法」及其内容，不要输出其他小节。\n"
+        + LLM_OUTPUT_FORMAT
+    )
+
+
+def _system_during_overview() -> str:
+    return (
+        LLM_PERSONA_CORE
+        + "\n\n【当前任务】盘中——仅输出 **【市场状态】** 与 **【总仓位限制】** 两行段（不写买卖细则）。\n"
+        + TRADING_PHASE_WORKFLOW_BLOCK
+        + "\n\n【风控与仓位口径】\n"
+        + load_strategy_snippet("during_overview")
+        + "\n\n【输出格式】\n"
+        + "【市场状态】{强势/震荡/弱势}（{简述：上证、成交额、连板高度等}）\n"
+        + "【总仓位限制】按下文市场强弱判定与仓位联动表 | 当前持仓{x%}\n"
+        + LLM_OUTPUT_FORMAT
+    )
+
+
+def _system_during_buy_zt() -> str:
+    return (
+        LLM_PERSONA_CORE
+        + "\n\n【当前任务】盘中——仅输出 **【涨停板战法｜盘中买入】** 整段。\n"
+        + "仅适用于 JSON「自选股」中战法为涨停板战法的标的。\n\n"
+        + "【策略条文】\n"
+        + load_strategy_snippet("buy_zt")
+        + "\n\n【输出】一段以「【涨停板战法｜盘中买入】」开头的完整指令说明。\n"
+        + LLM_OUTPUT_FORMAT
+    )
+
+
+def _system_during_buy_lht() -> str:
+    return (
+        LLM_PERSONA_CORE
+        + "\n\n【当前任务】盘中——仅输出 **【龙回头战法｜盘中买入】** 整段。\n"
+        + "仅适用于 JSON「自选股」中战法为龙回头战法的标的。\n\n"
+        + "【策略条文】\n"
+        + load_strategy_snippet("buy_lht")
+        + "\n\n【输出】一段以「【龙回头战法｜盘中买入】」开头的完整指令说明。\n"
+        + LLM_OUTPUT_FORMAT
+    )
+
+
+def _system_during_hold_zt() -> str:
+    return (
+        LLM_PERSONA_CORE
+        + "\n\n【当前任务】盘中——仅输出 **【涨停板战法｜持仓与卖出】** 整段。\n"
+        + "仅针对持仓或当日决策中与下列条文相关的标的。\n\n"
+        + "【策略条文】\n"
+        + load_strategy_snippet("during_hold_zt")
+        + "\n\n【输出】以「【涨停板战法｜持仓与卖出】」开头；勿写买入开立仓细则。\n"
+        + LLM_OUTPUT_FORMAT
+    )
+
+
+def _system_during_hold_lht() -> str:
+    return (
+        LLM_PERSONA_CORE
+        + "\n\n【当前任务】盘中——仅输出 **【龙回头战法｜持仓与卖出】** 整段。\n"
+        + "仅针对适用下列条文的标的。\n\n"
+        + "【策略条文】\n"
+        + load_strategy_snippet("during_hold_lht")
+        + "\n\n【输出】以「【龙回头战法｜持仓与卖出】」开头；仅写持仓监控与卖出，勿重复输出买入章已述的进场条件。\n"
+        + LLM_OUTPUT_FORMAT
+    )
+
+
+def _system_during_positions() -> str:
+    return (
+        LLM_PERSONA_CORE
+        + "\n\n【当前任务】盘中——输出 **【持仓更新】JSON**、**【账户风控底线】**、**【数据纪律】**。\n"
+        + "【策略条文】\n"
+        + load_strategy_snippet("during_positions_policy")
+        + "\n\n【持仓更新】规则：有变更则输出非空 JSON；无变更则 [] 及一行「持仓未更新原因」。\n"
+        + "格式须含股票代码、名称、买入时间、买入价、买入原因；卖出补全卖出时间与卖出价。\n"
+        + "【数据纪律】持仓与委托仅引用 JSON「自选股」「持仓股」及本节条文；勿复述上文战法细则。\n"
+        + LLM_OUTPUT_FORMAT
+    )
+
+
+def _system_evening_narrative() -> str:
+    return (
+        LLM_PERSONA_CORE
+        + "\n\n【当前任务】晚间复盘正文（一至八）：概括大盘、市场分析、自选与持仓表现、人气榜、实际操作、盈亏、经验教训。\n"
+        + "**不要输出「自选更新」或任何自选 JSON**。\n"
+        + TRADING_PHASE_WORKFLOW_BLOCK
+        + "\n\n【策略条文】\n"
+        + load_strategy_snippet("review_narrative") + "\n"
+        + "请严格按下列小节输出：\n\n"
+        + "一、今日大盘概况\n"
+        + "- 上证指数：{收盘点位}（{涨跌幅}），最高{点位}，最低{点位}\n"
+        + "- 深证成指：{收盘点位}（{涨跌幅}），最高{点位}，最低{点位}\n"
+        + "- 创业板指：{收盘点位}（{涨跌幅}），最高{点位}，最低{点位}\n"
+        + "- 两市成交额：{亿元}（较昨日{±%}）\n"
+        + "- 上涨家数 / 下跌家数 / 平盘家数：{a}/{b}/{c}\n"
+        + "- 涨停家数 / 跌停家数：{x}/{y}\n\n"
+        + "二、今日市场分析\n"
+        + "{综述}\n\n"
+        + "三、自选股全天表现（仅 JSON「自选股」；若为空则只写无自选股）\n\n"
+        + "四、持仓股全天表现（仅 JSON「持仓股」；若为空则只写无持仓）\n\n"
+        + "五、同花顺人气榜（仅 JSON「同花顺人气榜」；缺失则写本节无数据）\n\n"
+        + "六、今日实际操作\n"
+        + "（卖出/买入/无操作）\n\n"
+        + "七、今日盈亏\n"
+        + "- 当日总盈亏：{±金额}元（{±%}）\n"
+        + "- 当前总资产：{金额}元（初始本金见用户数据）\n\n"
+        + "八、经验及教训总结\n"
+        + "{总结}\n"
+        + LLM_OUTPUT_FORMAT
+    )
+
+
+def _system_lunch_narrative() -> str:
+    return (
+        LLM_PERSONA_CORE
+        + "\n\n【当前任务】午间复盘正文（一至五）：上午盘面、关键事件、自选与持仓半日表现、下午策略调整。\n"
+        + "**不要输出「自选更新」或自选 JSON**。\n"
+        + TRADING_PHASE_WORKFLOW_BLOCK
+        + "\n\n【策略条文】\n"
+        + load_strategy_snippet("review_narrative") + "\n"
+        + "请严格按下列小节输出：\n\n"
+        + "一、上午大盘回顾\n"
+        + "二、上午关键事件\n"
+        + "三、自选股表现（仅 JSON「自选股」）\n"
+        + "四、持仓股表现（仅 JSON「持仓股」）\n"
+        + "五、下午操作策略调整\n"
+        + LLM_OUTPUT_FORMAT
+    )
+
+
+def _stitch_review_optional_section(
+    label: str, arr_zt: list, arr_lht: list, tail_zt: str, tail_lht: str
+) -> str:
+    """合并两路自选 JSON + 原因行；label 如「六、自选更新」「九、自选更新」。"""
+    merged_in = _normalize_optional_rows(arr_zt) + _normalize_optional_rows(arr_lht)
+    merged = []
+    seen: set = set()
+    for row in merged_in:
+        k = (row.get("股票代码", ""), row.get("战法", ""))
+        if k in seen:
+            continue
+        seen.add(k)
+        merged.append(row)
+    lines = [label, json.dumps(merged, ensure_ascii=False)]
+    for piece in (tail_zt, tail_lht):
+        for ln in piece.splitlines():
+            t = ln.strip()
+            if t and ("原因" in t or "未更新" in t):
+                lines.append(t)
+    return "\n".join(lines)
+
+
+def _run_review_optional_parallel(raw_data: dict, tail: str, *, lunch: bool) -> str:
+    """午间/晚间：正文一路 + 涨停自选 + 龙回头自选，三路并行；各任务独立字段说明与条文。"""
+    u_n = _market_data_user_block(raw_data, tail=tail, guide=RAW_DATA_FIELD_GUIDE_NARRATIVE)
+    u_zt = _market_data_user_block(raw_data, tail=tail, guide=RAW_DATA_FIELD_GUIDE_ZT)
+    u_lh = _market_data_user_block(raw_data, tail=tail, guide=RAW_DATA_FIELD_GUIDE_LHT)
+    sys_n = _system_lunch_narrative() if lunch else _system_evening_narrative()
+    narrative, tz, lh = _parallel_map_call_str(
+        lambda: call_llm(sys_n, u_n, max_tokens=120000, temperature=0.1),
+        lambda: call_llm(_system_review_optional_zt(), u_zt, max_tokens=120000, temperature=0.06),
+        lambda: call_llm(_system_review_optional_lht(), u_lh, max_tokens=120000, temperature=0.06),
+    )
+    arr_zt, tail_zt = _parse_first_json_array_from_text(tz)
+    arr_lh, tail_lh = _parse_first_json_array_from_text(lh)
+    opt_block = _stitch_review_optional_section(
+        "六、自选更新" if lunch else "九、自选更新",
+        arr_zt,
+        arr_lh,
+        tail_zt,
+        tail_lh,
+    )
+    return narrative.rstrip() + "\n\n" + opt_block
+
+
+def _run_pre_market_parallel(raw_data: dict, tail: str) -> str:
+    u_m = _market_data_user_block(raw_data, tail=tail, guide=RAW_DATA_FIELD_GUIDE_NARRATIVE)
+    u_zt = _market_data_user_block(raw_data, tail=tail, guide=RAW_DATA_FIELD_GUIDE_ZT)
+    u_lh = _market_data_user_block(raw_data, tail=tail, guide=RAW_DATA_FIELD_GUIDE_LHT)
+    m, zt, lht = _parallel_map_call_str(
+        lambda: call_llm(_system_pre_market_main(), u_m, max_tokens=120000, temperature=0.16),
+        lambda: call_llm(_system_pre_market_zt(), u_zt, max_tokens=120000, temperature=0.16),
+        lambda: call_llm(_system_pre_market_lht(), u_lh, max_tokens=120000, temperature=0.16),
+    )
+    return m.rstrip() + "\n\n" + zt.strip() + "\n\n" + lht.strip()
+
+
+def _run_during_market_parallel(raw_data: dict, tail: str) -> str:
+    u_o = _market_data_user_block(raw_data, tail=tail, guide=RAW_DATA_FIELD_GUIDE_COMMON)
+    u_zt = _market_data_user_block(raw_data, tail=tail, guide=RAW_DATA_FIELD_GUIDE_ZT)
+    u_lh = _market_data_user_block(raw_data, tail=tail, guide=RAW_DATA_FIELD_GUIDE_LHT)
+    u_pos = _market_data_user_block(raw_data, tail=tail, guide=RAW_DATA_FIELD_GUIDE_COMMON)
+    p1, p2, p3, p4, p5, p6 = _parallel_map_call_str(
+        lambda: call_llm(_system_during_overview(), u_o, max_tokens=120000, temperature=0.16),
+        lambda: call_llm(_system_during_buy_zt(), u_zt, max_tokens=12000, temperature=0.16),
+        lambda: call_llm(_system_during_buy_lht(), u_lh, max_tokens=12000, temperature=0.16),
+        lambda: call_llm(_system_during_hold_zt(), u_zt, max_tokens=12000, temperature=0.16),
+        lambda: call_llm(_system_during_hold_lht(), u_lh, max_tokens=12000, temperature=0.16),
+        lambda: call_llm(_system_during_positions(), u_pos, max_tokens=120000, temperature=0.16),
+    )
+    return "\n\n".join(x.strip() for x in (p1, p2, p3, p4, p5, p6) if x.strip())
+
+
+# ========== 新闻处理 ==========
+def process_news(raw_data: dict, timestamp: str) -> str:
+    today = datetime.now().strftime("%Y-%m-%d")
+    time_str = datetime.now().strftime("%H_%M_%S")
+    os.makedirs(f"{DATA_DIR}/news/{today}", exist_ok=True)
+    news_file = f"{DATA_DIR}/news/{today}/{time_str}.md"
+
+    system = """你是一个专业的财经资讯处理助手。请根据以下多渠道获取的新闻原文（可能包含重复、噪音），完成去噪、去重、提炼。
+
+【输入新闻数据】
+{粘贴多条新闻，每条可标注来源}
+
+【输出要求】
+1. 按重要度降序排列，输出前20条。
+2. 生成一段"解读"，站在短线交易者角度，分析这些新闻对大盘、板块、市场情绪可能产生的影响，并指出短线操作需要关注的方向。
+3. 【重要】禁止使用markdown格式，纯文本输出，避免任何#、*、-等markdown符号。
+4. 严格按以下纯文本格式输出：
+
+1、{新闻标题或核心内容}
+2、{新闻标题或核心内容}
+……
+
+解读：{综合解读，说明对大盘/板块/情绪的可能影响，以及短线交易需注意的方向}"""
+
+    user = f"原始新闻：\n{json.dumps(raw_data, ensure_ascii=False)[:140000]}"
+    summary = call_llm(system, user)
+
+    # 保存原始数据（UTF-8）
+    with open(news_file.replace('.md', '-origin.json'), "w", encoding="utf-8") as f:
+        json.dump(raw_data, f, ensure_ascii=False, indent=2)
+    # 保存处理后的数据
+    with open(news_file, "w", encoding="utf-8") as f:
+        f.write(f"# 新闻 {timestamp}\n\n{summary}\n")
+    return summary
+
+# ========== 盘前分析 ==========
+def analyze_pre_market(raw_data: dict, timestamp: str) -> str:
+    return _run_pre_market_parallel(raw_data, _tail_fund_only())
+
+
+# ========== 盘中分析 ==========
+def analyze_during_market(raw_data: dict, timestamp: str) -> str:
+    return _run_during_market_parallel(raw_data, _tail_during_market_user())
+
+
+# ========== 午间复盘 ==========
+def analyze_lunch_market(raw_data: dict, timestamp: str) -> str:
+    return _run_review_optional_parallel(raw_data, _tail_lunch_review(), lunch=True)
+
+
+# ========== 晚间复盘 ==========
+def analyze_evening_market(raw_data: dict, timestamp: str) -> str:
+    return _run_review_optional_parallel(raw_data, _tail_evening_review(), lunch=False)
+
+# ========== 解析并更新 ==========
 def _section_heading_regex(keyword: str) -> list[str]:
     """匹配「序号、关键词」「【关键词】」或单独一行关键词。"""
     kw = re.escape(keyword)
@@ -972,7 +1230,7 @@ def save_raw_data(mode: str, raw_data: dict):
     """保存各模式的原始数据到磁盘"""
     today = datetime.now().strftime("%Y-%m-%d")
     time_str = datetime.now().strftime("%H_%M_%S")
-    
+
     if mode == "news":
         # 新闻：保存到 news/{today}/{time_str}-origin.json
         os.makedirs(f"{DATA_DIR}/news/{today}", exist_ok=True)
@@ -985,7 +1243,7 @@ def save_raw_data(mode: str, raw_data: dict):
         raw_file = f"{DATA_DIR}/trade/{today}/during_market-{time_str}-origin.json"
     else:
         return  # 其他模式走save_review
-    
+
     if raw_data:
         with open(raw_file, "w", encoding="utf-8") as f:
             json.dump(raw_data, f, ensure_ascii=False, indent=2)
@@ -1043,7 +1301,9 @@ def main():
         sys.exit(1)
 
     try:
-        data = fetch_map[mode]()
+        # data = fetch_map[mode]()
+        # 测试，直接读文件获取数据 TODO
+        data = json.loads(_read_user_text(_PROJECT_ROOT / 'data' / mode))
         print(f"数据拉取成功")
     except Exception as e:
         print(f"数据拉取失败: {e}")
