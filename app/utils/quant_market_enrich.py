@@ -217,7 +217,7 @@ def build_market_state_machine_zh(
     pool_full = zt_pool_full if zt_pool_full is not None else today_zt_pool_full_zh(context)
     idx = _index_ma20_vs_close_pct(context)
     amt = _two_market_amount_ratio_vs_ma5(context)
-    # 数据原始
+    # 数据有延迟，需确认 TODO
     ztp = _yesterday_zt_pool_performance_zh(context, prev_td)
     ztc = _zt_height_and_count_zh(context, pool_full)
     return {
