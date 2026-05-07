@@ -555,11 +555,13 @@ def _prompt_news_system() -> str:
         _persona()
         + f"当前日期：{today}。你正在进行每日新闻研读。请对以下多渠道新闻去噪、去重、提炼。\n\n"
         + "【输出要求】\n"
-        + "1. 按重要度降序排列，输出前20条。\n"
-        + "2. 生成「解读」，站在短线交易者角度分析对大盘/板块/情绪的影响及操作方向。\n"
-        + "3. 严格纯文本格式：\n\n"
-        + "1、{新闻标题或核心内容}\n2、{标题}……\n\n"
-        + "解读：{综合解读}\n"
+        + "1. 按重要度降序排列，输出前20条，每条仅写标题或核心内容（一句话）。\n"
+        + "2. 列完全部条目后，最后统一输出一段「综合解读」，站在短线交易者角度分析对大盘/板块/情绪的影响及操作方向。\n"
+        + "3. 禁止对每一条新闻单独写解读，只在最后给一个整体解读。\n"
+        + "4. 严格纯文本格式：\n\n"
+        + "1、{新闻标题或核心内容}\n2、{标题}\n……\n20、{标题}\n\n"
+        + "综合解读：{从宏观政策、行业板块、市场情绪三个维度，结合上述新闻进行整体研判，"
+        + "给出对今日盘面的影响预判和短线操作方向建议，150字以内}\n"
         + LLM_OUTPUT_FORMAT
     )
 
@@ -571,14 +573,14 @@ def _prompt_pre_market_main() -> str:
         + "【当前任务】盘前决策——撰写一至三、六、七（不写四、五）。七含持仓 JSON。\n"
         + "【数据说明】JSON 含大盘指数、自选股（仅元数据：代码/名称/战法/原因）、持仓股（仅元数据）、市场状态机。\n\n"
         + "【策略条文】\n" + _load_sections("共用约束", "市场状态机", "仓位联动") + "\n\n"
-        + "请严格按下列小节输出：\n\n"
+        + "请严格按下列小节输出（各节紧凑、要点明确）：\n\n"
         + "一、市场整体概览\n"
-        + "（上证/深证/创业板指数点位与涨跌幅、市场情绪高中低）\n\n"
-        + "二、自选股（仅 JSON「自选股」；为空则只写无自选股。按战法分列叙述）\n\n"
-        + "三、持仓股（仅 JSON「持仓股」；为空则只写无持仓）\n\n"
+        + "（上证/深证/创业板指数点位与涨跌幅、市场情绪判定、成交额水平）\n\n"
+        + "二、自选股（仅 JSON「自选股」；为空则写「当前无自选股」并说明原因）\n\n"
+        + "三、持仓股（仅 JSON「持仓股」；为空则写「当前无持仓」）\n\n"
         + "六、市场判断与当日执行纲要\n\n"
         + "七、【持仓更新】（仅此处输出持仓 JSON 数组）\n"
-        + "规则：有变更输出非空 JSON；无需变更输出 []，下一行写「持仓未更新原因：……」。\n"
+        + "规则：有变更输出非空 JSON；无需变更输出 []，下一行写「持仓未更新原因：{具体原因}」。\n"
         + '格式：[{"股票代码":"600000","股票名称":"浦发银行","买入时间":"2026-05-03 09:31:00","买入价":11.2,"买入原因":"……","卖出时间":"","卖出价":"","卖出原因":""}]\n'
         + LLM_OUTPUT_FORMAT
     )
@@ -593,6 +595,8 @@ def _prompt_pre_market_zt() -> str:
         + "【数据说明】JSON 含涨停板战法自选股（含盘口、历史行情、集合竞价分钟行情）。"
         + "注意：盘前无人气榜/概念板块/涨停统计，集合竞价判断仅用盘口和集合竞价分钟行情。\n\n"
         + "【策略条文】\n" + _load_sections("涨停板战法-买入") + "\n\n"
+        + "【空数据处理】若自选股列表为空或无涨停板战法标的，必须明确说明原因（如：当前无涨停板战法自选股，"
+        + "需在复盘时从人气榜筛选加入），不可省略本小节。\n"
         + "【输出】仅输出「四、涨停板战法」及其内容。\n"
         + LLM_OUTPUT_FORMAT
     )
@@ -606,6 +610,8 @@ def _prompt_pre_market_lht() -> str:
         + "仅针对 JSON「自选股」中战法为龙回头战法的标的。\n"
         + "【数据说明】JSON 含龙回头战法自选股（含历史行情、技术指标、盘口、个股资金流）。盘前无大盘资金流。\n\n"
         + "【策略条文】\n" + _load_sections("龙回头战法-买入") + "\n\n"
+        + "【空数据处理】若自选股列表为空或无龙回头战法标的，必须明确说明原因（如：当前无龙回头战法自选股，"
+        + "需在复盘时从人气榜筛选加入），不可省略本小节。\n"
         + "【输出】仅输出「五、龙回头战法」及其内容。\n"
         + LLM_OUTPUT_FORMAT
     )
@@ -633,6 +639,8 @@ def _prompt_during_buy_zt() -> str:
         + "仅适用于 JSON「自选股」中战法为涨停板战法的标的。\n"
         + "【数据说明】JSON 含涨停板战法自选股（含盘口）、同花顺人气榜前10（扁平：排名/所属概念）、概念板块、涨停统计。\n\n"
         + "【策略条文】\n" + _load_sections("涨停板战法-买入") + "\n\n"
+        + "【空数据处理】若自选股为空，输出：【涨停板战法｜盘中买入】当前无涨停板战法自选标的，无法执行买入扫描。"
+        + "原因：{说明为何为空，如复盘未筛出合格标的、数据不完整等}。不可省略本段。\n"
         + "【输出】以「【涨停板战法｜盘中买入】」开头的完整指令。\n"
         + LLM_OUTPUT_FORMAT
     )
@@ -646,6 +654,8 @@ def _prompt_during_buy_lht() -> str:
         + "仅适用于 JSON「自选股」中战法为龙回头战法的标的。\n"
         + "【数据说明】JSON 含龙回头战法自选股（含历史行情、技术指标、盘口、个股资金流、盘中10分钟线）、大盘资金流。\n\n"
         + "【策略条文】\n" + _load_sections("龙回头战法-买入") + "\n\n"
+        + "【空数据处理】若自选股为空，输出：【龙回头战法｜盘中买入】当前无龙回头战法自选标的，无法执行买入扫描。"
+        + "原因：{说明为何为空，如复盘未筛出合格标的、数据不完整等}。不可省略本段。\n"
         + "【输出】以「【龙回头战法｜盘中买入】」开头的完整指令。\n"
         + LLM_OUTPUT_FORMAT
     )
@@ -659,6 +669,8 @@ def _prompt_during_hold_zt() -> str:
         + "仅针对持仓中与涨停板战法相关的标的。\n"
         + "【数据说明】JSON 含涨停板战法持仓股（含盘口、历史行情、个股资金流）、概念板块。\n\n"
         + "【策略条文】\n" + _load_sections("涨停板战法-持股监控", "涨停板战法-卖出", "仓位联动") + "\n\n"
+        + "【空数据处理】若持仓股为空（无涨停板战法持仓），输出：【涨停板战法｜持仓与卖出】当前无涨停板战法持仓。"
+        + "不可省略本段。\n"
         + "【输出】以「【涨停板战法｜持仓与卖出】」开头；仅写持仓监控与卖出信号。\n"
         + LLM_OUTPUT_FORMAT
     )
@@ -672,6 +684,8 @@ def _prompt_during_hold_lht() -> str:
         + "仅针对持仓中与龙回头战法相关的标的。\n"
         + "【数据说明】JSON 含龙回头战法持仓股（含历史行情、技术指标、盘口、个股资金流、盘中10分钟线）。\n\n"
         + "【策略条文】\n" + _load_sections("龙回头战法-持股监控", "龙回头战法-卖出", "仓位联动") + "\n\n"
+        + "【空数据处理】若持仓股为空（无龙回头战法持仓），输出：【龙回头战法｜持仓与卖出】当前无龙回头战法持仓。"
+        + "不可省略本段。\n"
         + "【输出】以「【龙回头战法｜持仓与卖出】」开头；仅写持仓监控与卖出。\n"
         + LLM_OUTPUT_FORMAT
     )
@@ -721,10 +735,14 @@ def _prompt_review_optional_zt() -> str:
         + "【数据说明】JSON 含同花顺人气榜前20（含历史行情最近5条、所属概念）、涨停统计（含连板数）、概念板块（含涨幅榜/资金流入榜前十）。\n\n"
         + "【策略条文】\n" + _load_sections("涨停板战法-加自选") + "\n"
         + _ZT_OPTIONAL_EXAMPLE + "\n"
-        + "【输出】仅输出一个 JSON 数组；每项含 股票代码、股票名称、战法（固定填「涨停板战法」）、"
-        + "加入自选原因（必须以【涨停板战法】开头，逐条列出4个条件的判定结果）。\n"
-        + "若无合格标的：输出 []，下一行写：涨停板战法自选未更新原因：……\n"
-        + "不要输出数组以外的正文。"
+        + "【输出格式（严格遵守，缺少原因视为输出不合格）】\n"
+        + "情况A - 有合格标的：输出 JSON 数组，每项含 股票代码、股票名称、战法（固定「涨停板战法」）、"
+        + "加入自选原因（必须以【涨停板战法】开头，逐条列出4个条件判定）。\n"
+        + "情况B - 无合格标的：先输出 []，紧接下一行必须输出：\n"
+        + "涨停板战法自选未更新原因：{逐只列出人气榜前20被排除标的的关键不达标条件}\n"
+        + "示例：涨停板战法自选未更新原因：永杉锂业(603399)股价21.3元超20元上限；中科信息(300678)非涨停股；金杯电工(002533)概念未与当日主线共振\n"
+        + "【强制要求】输出 [] 时下一行的原因说明不可省略、不可只写「均不满足」，必须点名具体标的+具体不达标条件。\n"
+        + "不要输出数组以外的其他正文。"
     )
 
 
@@ -737,10 +755,14 @@ def _prompt_review_optional_lht() -> str:
         + "【数据说明】JSON 含同花顺人气榜（含历史行情30d、技术指标含MACD和均线、个股资金流）、概念板块。\n\n"
         + "【策略条文】\n" + _load_sections("龙回头战法-加自选") + "\n"
         + _LHT_OPTIONAL_EXAMPLE + "\n"
-        + "【输出】仅输出一个 JSON 数组；每项含 股票代码、股票名称、战法（固定填「龙回头战法」）、"
-        + "加入自选原因（必须以【龙回头战法】开头，逐条列出6个条件的判定结果）。\n"
-        + "若无合格标的：输出 []，下一行写：龙回头战法自选未更新原因：……\n"
-        + "不要输出数组以外的正文。"
+        + "【输出格式（严格遵守，缺少原因视为输出不合格）】\n"
+        + "情况A - 有合格标的：输出 JSON 数组，每项含 股票代码、股票名称、战法（固定「龙回头战法」）、"
+        + "加入自选原因（必须以【龙回头战法】开头，逐条列出6个条件判定）。\n"
+        + "情况B - 无合格标的：先输出 []，紧接下一行必须输出：\n"
+        + "龙回头战法自选未更新原因：{逐只列出主要被排除标的的关键不达标条件}\n"
+        + "示例：龙回头战法自选未更新原因：某某股(000123)近30日无涨停经历；另一股(600456)MACD死叉不满足；第三股(300789)量能倍率4.2超上限3.0\n"
+        + "【强制要求】输出 [] 时下一行的原因说明不可省略、不可只写「均不满足」，必须点名具体标的+具体不达标条件。\n"
+        + "不要输出数组以外的其他正文。"
     )
 
 
@@ -751,12 +773,13 @@ def _prompt_evening_narrative() -> str:
         + "【数据说明】JSON 含大盘指数、赚钱效应、大盘资金流(3日)、概念板块、涨停统计、"
         + "同花顺人气榜(精简排名)、自选股(全量)、持仓股(全量)、市场状态机。\n\n"
         + "【策略条文】\n" + _load_sections("共用约束", "市场状态机", "仓位联动", "每日亏损限额") + "\n\n"
-        + "请严格按下列小节输出：\n\n"
+        + "请严格按下列小节输出（各节紧凑精炼，数据支撑结论）：\n\n"
         + "一、今日大盘概况\n"
         + "（上证/深证/创业板收盘点位涨跌幅、最高最低、成交额、涨跌停家数）\n\n"
-        + "二、今日市场分析\n\n"
-        + "三、自选股全天表现（仅 JSON「自选股」；为空则只写无自选股）\n\n"
-        + "四、持仓股全天表现（仅 JSON「持仓股」；为空则只写无持仓）\n\n"
+        + "二、今日市场分析\n"
+        + "（赚钱效应、板块轮动、资金流向、市场情绪判定）\n\n"
+        + "三、自选股全天表现（仅 JSON「自选股」；为空则写「当前无自选股」并说明原因）\n\n"
+        + "四、持仓股全天表现（仅 JSON「持仓股」；为空则写「当前无持仓」）\n\n"
         + "五、同花顺人气榜（仅 JSON「同花顺人气榜」；缺失则写无数据）\n\n"
         + "六、今日实际操作\n\n"
         + "七、今日盈亏\n"
@@ -773,12 +796,15 @@ def _prompt_lunch_narrative() -> str:
         + "【数据说明】JSON 含大盘指数、赚钱效应、大盘资金流、概念板块、涨停统计、"
         + "同花顺人气榜(精简排名)、自选股(全量)、持仓股(全量)、市场状态机。\n\n"
         + "【策略条文】\n" + _load_sections("共用约束", "市场状态机", "仓位联动") + "\n\n"
-        + "请严格按下列小节输出：\n\n"
-        + "一、上午大盘回顾\n\n"
-        + "二、上午关键事件\n\n"
-        + "三、自选股表现（仅 JSON「自选股」）\n\n"
-        + "四、持仓股表现（仅 JSON「持仓股」）\n\n"
+        + "请严格按下列小节输出（各节紧凑精炼，数据支撑结论）：\n\n"
+        + "一、上午大盘回顾\n"
+        + "（指数表现、成交额、涨跌停数据、市场情绪）\n\n"
+        + "二、上午关键事件\n"
+        + "（板块异动、资金流向、重要消息面变化）\n\n"
+        + "三、自选股表现（仅 JSON「自选股」；为空则写「当前无自选股」并说明原因）\n\n"
+        + "四、持仓股表现（仅 JSON「持仓股」；为空则写「当前无持仓」）\n\n"
         + "五、下午操作策略调整\n"
+        + "（基于上午走势，明确下午的操作方向和注意事项）\n"
         + LLM_OUTPUT_FORMAT
     )
 
@@ -1098,7 +1124,9 @@ def _build_readable_block(lines: list[str]) -> str:
 
 
 def _stitch_optional_section(label: str, arr_zt: list, arr_lht: list, tail_zt: str, tail_lht: str) -> str:
-    merged_in = _normalize_optional_rows(arr_zt) + _normalize_optional_rows(arr_lht)
+    norm_zt = _normalize_optional_rows(arr_zt)
+    norm_lht = _normalize_optional_rows(arr_lht)
+    merged_in = norm_zt + norm_lht
     merged = []
     seen: set = set()
     for row in merged_in:
@@ -1107,18 +1135,61 @@ def _stitch_optional_section(label: str, arr_zt: list, arr_lht: list, tail_zt: s
             continue
         seen.add(k)
         merged.append(row)
-    lines = [label, json.dumps(merged, ensure_ascii=False)]
-    for piece in (tail_zt, tail_lht):
-        for ln in piece.splitlines():
+    lines = [label]
+    if merged:
+        lines.append(json.dumps(merged, ensure_ascii=False))
+    else:
+        lines.append("[]")
+
+    # 分别收集涨停板和龙回头的未更新原因
+    def _collect_reason(tail_text: str) -> list[str]:
+        out = []
+        for ln in tail_text.splitlines():
             t = ln.strip()
-            if t and ("原因" in t or "未更新" in t):
-                lines.append(t)
+            if t and ("原因" in t or "未更新" in t or "不达标" in t
+                      or "不满足" in t or "排除" in t or "无合格" in t
+                      or "不通过" in t or "超" in t or "不符" in t):
+                out.append(t)
+        # 如果按关键词没匹配到，但 tail 有实质内容，直接作为原因
+        if not out and tail_text.strip():
+            out.append(tail_text.strip()[:200])
+        return out
+
+    # 涨停板战法：若无合格标的，收集原因
+    if not norm_zt:
+        zt_reasons = _collect_reason(tail_zt)
+        if zt_reasons:
+            lines.extend(zt_reasons)
+        else:
+            lines.append("涨停板战法自选未更新原因：无符合条件的标的（LLM未给出详细原因）")
+
+    # 龙回头战法：若无合格标的，收集原因
+    if not norm_lht:
+        lht_reasons = _collect_reason(tail_lht)
+        if lht_reasons:
+            lines.extend(lht_reasons)
+        else:
+            lines.append("龙回头战法自选未更新原因：无符合条件的标的（LLM未给出详细原因）")
+
     return "\n".join(lines)
 
 
 # =====================================================================
 # 12. POST-PROCESSING
 # =====================================================================
+def _extract_reason_from_content(content: str, keyword: str) -> str:
+    """从 LLM 输出正文中提取指定关键字后的原因文本。"""
+    patterns = [
+        rf"{re.escape(keyword)}[：:\s]*(.+?)(?:\n|$)",
+        rf"{re.escape(keyword.replace('原因', ''))}.*?原因[：:\s]*(.+?)(?:\n|$)",
+    ]
+    for pat in patterns:
+        m = re.search(pat, content)
+        if m:
+            return m.group(1).strip()
+    return "未给出具体原因"
+
+
 def replace_json_for_feishu(
     content: str,
     *,
@@ -1174,14 +1245,25 @@ def parse_and_update(content: str, mode: str, market_payload: dict | None = None
         save_holdings(holdings)
         print(f"持仓已更新: {holdings}")
     elif mode in ("during_market", "pre_market") and h_span is not None and not holdings:
-        print("持仓更新 JSON 为 []；请确认正文已含「持仓未更新原因」")
+        # 提取持仓未更新原因
+        reason = _extract_reason_from_content(content, "持仓未更新原因")
+        print(f"持仓未更新。原因：{reason}")
 
     if mode in ("post_market_lunch", "post_market_evening") and o_span is not None:
         if optional:
             save_optional(optional)
             print(f"自选股已更新（共 {len(optional)} 条）: {optional}")
         else:
-            print("自选更新 JSON 为 []；请确认正文已含「自选未更新原因」")
+            # 提取自选未更新原因
+            reason_zt = _extract_reason_from_content(content, "涨停板战法自选未更新原因")
+            reason_lht = _extract_reason_from_content(content, "龙回头战法自选未更新原因")
+            reasons = []
+            if reason_zt:
+                reasons.append(f"涨停板：{reason_zt}")
+            if reason_lht:
+                reasons.append(f"龙回头：{reason_lht}")
+            reason_str = "；".join(reasons) if reasons else "LLM未给出具体原因"
+            print(f"自选未更新。原因：{reason_str}")
 
     if profit is not None and mode in ("post_market_lunch", "post_market_evening"):
         update_fund(profit)
@@ -1267,7 +1349,31 @@ def is_trading_day() -> bool:
 
 
 # =====================================================================
-# 14. MAIN
+# 14. PUSH FORMAT
+# =====================================================================
+_PUSH_FOCUS = {
+    "news": "关注点：宏观政策、行业热点、外围市场、情绪风向",
+    "pre_market": "关注点：集合竞价表现、自选标的信号、持仓风控、当日执行计划",
+    "during_market": "关注点：市场状态、买卖信号、持仓监控、仓位风控",
+    "post_market_lunch": "关注点：上午行情回顾、自选表现、持仓跟踪、下午策略调整",
+    "post_market_evening": "关注点：全天复盘、盈亏总结、自选更新、经验教训",
+}
+
+
+def _format_push_message(label: str, timestamp: str, body: str, mode: str) -> str:
+    """组装专业推送格式：标题行 + 关注点 + 分隔 + 正文。"""
+    focus = _PUSH_FOCUS.get(mode, "")
+    header = f"【{label}】{timestamp}"
+    parts = [header]
+    if focus:
+        parts.append(focus)
+    parts.append("=" * 36)
+    parts.append(body.strip())
+    return "\n".join(parts)
+
+
+# =====================================================================
+# 15. MAIN
 # =====================================================================
 def main():
     if len(sys.argv) < 2:
@@ -1317,19 +1423,19 @@ def main():
     try:
         if mode == "news":
             summary = process_news(data, timestamp)
-            analysis = f"【{label}】{timestamp}\n\n{summary}"
+            analysis = _format_push_message("新闻聚焦", timestamp, summary, mode)
             save_raw_data(mode, data)
         elif mode == "pre_market":
-            analysis = f"【{label}】{timestamp}\n\n{analyze_pre_market(data, timestamp)}"
+            analysis = _format_push_message("盘前分析", timestamp, analyze_pre_market(data, timestamp), mode)
             save_raw_data(mode, data)
         elif mode == "during_market":
-            analysis = f"【{label}】{timestamp}\n\n{analyze_during_market(data, timestamp)}"
+            analysis = _format_push_message("盘中实时", timestamp, analyze_during_market(data, timestamp), mode)
             save_raw_data(mode, data)
         elif mode == "post_market_lunch":
-            analysis = f"【{label}】{timestamp}\n\n{analyze_lunch_market(data, timestamp)}"
+            analysis = _format_push_message("午间复盘", timestamp, analyze_lunch_market(data, timestamp), mode)
             save_review(timestamp, analysis, mode, data)
         elif mode == "post_market_evening":
-            analysis = f"【{label}】{timestamp}\n\n{analyze_evening_market(data, timestamp)}"
+            analysis = _format_push_message("晚间复盘", timestamp, analyze_evening_market(data, timestamp), mode)
             save_review(timestamp, analysis, mode, data)
         print("分析完成")
     except Exception as e:
