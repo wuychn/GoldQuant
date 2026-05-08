@@ -44,6 +44,8 @@ OPTIONAL_FILE = f"{DATA_DIR}/optional.jsonl"
 HOLDING_FILE = f"{DATA_DIR}/holding.jsonl"
 STOPLOSS_FILE = f"{DATA_DIR}/stoploss.jsonl"
 INITIAL_CAPITAL = 10000
+OPTIONAL_HISTORY_FILE = f"{DATA_DIR}/optional_history.jsonl"
+POPULARITY_FILE = f"{DATA_DIR}/popularity_history.md"
 NEWS_IMPACT_SUMMARY_FILE = f"{DATA_DIR}/news_market_impact_summary.txt"
 
 OPTIONAL_STRATEGY_ALLOWED = frozenset({"涨停板战法", "龙回头战法"})
@@ -63,7 +65,7 @@ _RE_THINKING = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL)
 def _persona(fund: float | None = None) -> str:
     f = fund if fund is not None else get_fund()
     return (
-        f"你是一名 A 股实盘短线交易员（纸盘模拟），操盘资金 {f:.0f} 元。"
+        f"你是一名 A 股实盘短线交易员，操盘资金 {f:.0f} 元。"
         "你严格执行策略条文，纪律严明、知行合一，目标是资产大幅增值。\n"
     )
 
@@ -357,11 +359,9 @@ def save_trades(today: str, trades: list):
 def _tail_fund_only() -> str:
     sl = _read_recent_stoploss()
     sl_s = json.dumps(sl, ensure_ascii=False) if sl else "无"
-    decisions = _read_decisions()
     memory = _read_memory()
-    dec_part = f"\n【今日决策记录】：\n{decisions}" if decisions else ""
     mem_part = f"\n【历史经验教训】：\n{memory}" if memory else ""
-    return f"\n\n【当前资金】：{get_fund():.2f} 元\n【近期止损记录】：{sl_s}{dec_part}{mem_part}"
+    return f"\n\n【当前资金】：{get_fund():.2f} 元\n【近期止损记录】：{sl_s}{mem_part}"
 
 
 def _tail_during_market() -> str:
@@ -370,11 +370,11 @@ def _tail_during_market() -> str:
     tr_s = json.dumps(tr, ensure_ascii=False) if tr else "无"
     sl = _read_recent_stoploss()
     sl_s = json.dumps(sl, ensure_ascii=False) if sl else "无"
-    decisions = _read_decisions()
+    trade_log = _read_trade_log()
     memory = _read_memory()
-    dec_part = f"\n【今日决策记录】：\n{decisions}" if decisions else ""
+    log_part = f"\n【今日操作记录】：\n{trade_log}" if trade_log else ""
     mem_part = f"\n【历史经验教训】：\n{memory}" if memory else ""
-    return f"\n\n【当前资金】：{get_fund():.2f} 元\n【今日交易记录】：{tr_s}\n【近期止损记录】：{sl_s}{dec_part}{mem_part}"
+    return f"\n\n【当前资金】：{get_fund():.2f} 元\n【今日交易记录】：{tr_s}\n【近期止损记录】：{sl_s}{log_part}{mem_part}"
 
 
 def _tail_lunch_review() -> str:
@@ -383,11 +383,11 @@ def _tail_lunch_review() -> str:
     tr_s = json.dumps(tr, ensure_ascii=False) if tr else "无"
     sl = _read_recent_stoploss()
     sl_s = json.dumps(sl, ensure_ascii=False) if sl else "无"
-    decisions = _read_decisions()
+    trade_log = _read_trade_log()
     memory = _read_memory()
-    dec_part = f"\n【今日决策记录】：\n{decisions}" if decisions else ""
+    log_part = f"\n【今日操作记录】：\n{trade_log}" if trade_log else ""
     mem_part = f"\n【历史经验教训】：\n{memory}" if memory else ""
-    return f"\n\n【当前资金】：{get_fund():.2f} 元\n【上午交易记录】：{tr_s}\n【近期止损记录】：{sl_s}{dec_part}{mem_part}"
+    return f"\n\n【当前资金】：{get_fund():.2f} 元\n【上午交易记录】：{tr_s}\n【近期止损记录】：{sl_s}{log_part}{mem_part}"
 
 
 def _tail_evening_review() -> str:
@@ -396,29 +396,31 @@ def _tail_evening_review() -> str:
     tr_s = json.dumps(tr, ensure_ascii=False) if tr else "无交易"
     sl = _read_recent_stoploss()
     sl_s = json.dumps(sl, ensure_ascii=False) if sl else "无"
-    decisions = _read_decisions()
+    trade_log = _read_trade_log()
     memory = _read_memory()
-    dec_part = f"\n【今日决策记录】：\n{decisions}" if decisions else ""
+    stats = _calc_trade_stats()
+    log_part = f"\n【今日操作记录】：\n{trade_log}" if trade_log else ""
     mem_part = f"\n【历史经验教训】：\n{memory}" if memory else ""
+    stats_part = f"\n【近期交易统计】：\n{stats}" if stats else ""
     return (
         f"\n\n【当前资金】：{get_fund():.2f} 元\n"
         f"【初始本金】：{INITIAL_CAPITAL}元\n"
         f"【今日实际交易记录】：\n{tr_s}\n"
-        f"【近期止损记录】：{sl_s}{dec_part}{mem_part}"
+        f"【近期止损记录】：{sl_s}{log_part}{stats_part}{mem_part}"
     )
 
 
 # =====================================================================
-# 6B. DECISION JOURNAL & MEMORY
+# 6B. TRADE LOG & MEMORY
 # =====================================================================
-def _decisions_file_path() -> str:
+def _trade_log_file_path() -> str:
     today = datetime.now().strftime("%Y-%m-%d")
-    return f"{DATA_DIR}/trade/{today}/decisions.md"
+    return f"{DATA_DIR}/trade/{today}/trade_log.md"
 
 
-def _read_decisions() -> str:
-    """读取当天已有决策日志（供注入到后续 LLM 调用）。"""
-    path = _decisions_file_path()
+def _read_trade_log() -> str:
+    """读取当天操作日志（加自选/买入/卖出等实际操作记录）。"""
+    path = _trade_log_file_path()
     if not os.path.isfile(path):
         return ""
     try:
@@ -427,46 +429,51 @@ def _read_decisions() -> str:
         return ""
 
 
-def _append_decision(mode: str, content: str):
-    """从 LLM 输出中提取关键决策，追加到当日 decisions.md。"""
-    decision = _extract_decision_summary(content, mode)
-    if not decision:
-        return
-    path = _decisions_file_path()
+def _append_trade_log(action: str, detail: str):
+    """追加一条操作记录到当日 trade_log.md。
+    action: 加自选/移除自选/买入/卖出/加仓/减仓
+    detail: 股票名称(代码) + 关键信息
+    """
+    path = _trade_log_file_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
     time_str = datetime.now().strftime("%H:%M")
-    mode_labels = {
-        "news": "新闻",
-        "pre_market": "盘前",
-        "during_market": "盘中",
-        "post_market_lunch": "午间复盘",
-        "post_market_evening": "晚间复盘",
-    }
-    label = mode_labels.get(mode, mode)
-    line = f"[{time_str}] {label}: {decision}\n"
+    line = f"[{time_str}] {action}: {detail}\n"
     with open(path, "a", encoding="utf-8") as f:
         f.write(line)
 
 
-def _extract_decision_summary(content: str, mode: str) -> str:
-    """从 LLM 输出中提取 1 句核心决策摘要（≤100字）。"""
-    action_keywords = ["买入", "卖出", "关注", "放弃", "加仓", "减仓", "清仓",
-                       "挂单", "止损", "观望", "持有", "开仓", "不开新仓", "空仓"]
-    for line in content.split("\n"):
-        line = line.strip()
-        if not line or len(line) < 5:
-            continue
-        if any(kw in line for kw in action_keywords):
-            cleaned = re.sub(r"^[一二三四五六七八九十\d]+[、.．]\s*", "", line)
-            if len(cleaned) > 100:
-                cleaned = cleaned[:100] + "…"
-            return cleaned
-    # fallback: 第一句有实质内容的话
-    for line in content.split("\n"):
-        line = line.strip()
-        if len(line) > 10 and not line.startswith("【") and not line.startswith("="):
-            return line[:100] + ("…" if len(line) > 100 else "")
-    return ""
+def _archive_optional(new_list: list):
+    """对比新旧自选列表，将变更记录追加到 optional_history.jsonl。"""
+    old_list = get_optional()
+    old_codes = {r.get("股票代码", "") for r in old_list}
+    new_codes = {r.get("股票代码", "") for r in new_list}
+    today = datetime.now().strftime("%Y-%m-%d")
+    records = []
+    # 新增的
+    for r in new_list:
+        code = r.get("股票代码", "")
+        if code and code not in old_codes:
+            records.append({
+                "日期": today, "操作": "新增", "股票代码": code,
+                "股票名称": r.get("股票名称", ""),
+                "战法": r.get("战法", ""),
+                "原因": r.get("加入自选原因", ""),
+            })
+    # 移除的
+    old_map = {r.get("股票代码", ""): r for r in old_list}
+    for code in old_codes - new_codes:
+        r = old_map.get(code, {})
+        records.append({
+            "日期": today, "操作": "移除", "股票代码": code,
+            "股票名称": r.get("股票名称", ""),
+            "战法": r.get("战法", ""),
+            "原因": "被新一轮筛选替换",
+        })
+    if records:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(OPTIONAL_HISTORY_FILE, "a", encoding="utf-8") as f:
+            for rec in records:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
 
 def _read_memory(*, max_chars: int = MEMORY_MAX_INJECT_CHARS) -> str:
@@ -567,6 +574,123 @@ def _extract_and_save_memory(content: str, *, lunch: bool):
         f.write("\n" + entry)
     print(f"MEMORY.md 已更新: {entry.strip()[:60]}...")
     _compress_memory()
+
+
+def _calc_trade_stats(days: int = 30) -> str:
+    """从 trade/ 目录读取近N日 profit.md，计算胜率/盈亏比/连胜连亏。"""
+    from datetime import timedelta
+    today = datetime.now()
+    profits: list[tuple[str, float]] = []
+    for d in range(days):
+        date = (today - timedelta(days=d)).strftime("%Y-%m-%d")
+        path = f"{DATA_DIR}/trade/{date}/profit.md"
+        if os.path.isfile(path):
+            try:
+                val = float(_read_user_text(path).strip())
+                profits.append((date, val))
+            except (OSError, ValueError):
+                pass
+    if not profits:
+        return ""
+    profits.reverse()  # 按时间正序
+    total = len(profits)
+    wins = sum(1 for _, v in profits if v > 0)
+    losses = sum(1 for _, v in profits if v < 0)
+    flat = total - wins - losses
+    win_rate = wins / total * 100 if total else 0
+    # 盈亏比
+    avg_win = sum(v for _, v in profits if v > 0) / wins if wins else 0
+    avg_loss = abs(sum(v for _, v in profits if v < 0) / losses) if losses else 0
+    pnl_ratio = avg_win / avg_loss if avg_loss > 0 else float("inf") if avg_win > 0 else 0
+    # 连胜/连亏
+    streak = 0
+    streak_type = ""
+    for _, v in reversed(profits):
+        if v > 0:
+            if streak_type == "win" or not streak_type:
+                streak += 1
+                streak_type = "win"
+            else:
+                break
+        elif v < 0:
+            if streak_type == "loss" or not streak_type:
+                streak += 1
+                streak_type = "loss"
+            else:
+                break
+        else:
+            break
+    streak_desc = f"连胜{streak}天" if streak_type == "win" else f"连亏{streak}天" if streak_type == "loss" else "无"
+    total_pnl = sum(v for _, v in profits)
+    # 近7日统计
+    recent_7 = profits[-7:] if len(profits) >= 7 else profits
+    r7_wins = sum(1 for _, v in recent_7 if v > 0)
+    r7_rate = r7_wins / len(recent_7) * 100 if recent_7 else 0
+    return (
+        f"近{total}个交易日：胜率{win_rate:.0f}%（{wins}胜{losses}负{flat}平），"
+        f"盈亏比{pnl_ratio:.1f}:1，累计盈亏{total_pnl:+.0f}元，{streak_desc}\n"
+        f"近{len(recent_7)}日胜率：{r7_rate:.0f}%"
+    )
+
+
+def _update_popularity_history(hot_list: list):
+    """将人气榜数据追加到 popularity_history.md（每日一批）。"""
+    if not hot_list:
+        return
+    today = datetime.now().strftime("%Y-%m-%d")
+    os.makedirs(DATA_DIR, exist_ok=True)
+    # 检查文件是否存在，不存在则写表头
+    need_header = not os.path.isfile(POPULARITY_FILE)
+    with open(POPULARITY_FILE, "a", encoding="utf-8") as f:
+        if need_header:
+            f.write("| 日期 | 代码 | 名称 | 排名 | 变化 | 连板 |\n")
+            f.write("|------|------|------|------|------|------|\n")
+        for item in hot_list:
+            code = item.get("股票代码", "")
+            name = item.get("股票名称", "")
+            rank = item.get("人气排名", "")
+            change = item.get("人气排名变化", "")
+            lb = item.get("连板情况", "")
+            if code:
+                f.write(f"| {today} | {code} | {name} | {rank} | {change} | {lb} |\n")
+
+
+def _read_popularity_summary(min_days: int = 3) -> str:
+    """读取 popularity_history.md，统计上榜≥min_days天的个股。"""
+    if not os.path.isfile(POPULARITY_FILE):
+        return ""
+    try:
+        text = _read_user_text(POPULARITY_FILE)
+    except OSError:
+        return ""
+    # 统计每只股票的上榜天数和最近排名
+    from collections import defaultdict
+    stock_days: dict[str, set[str]] = defaultdict(set)
+    stock_info: dict[str, dict] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line.startswith("|") or line.startswith("| 日期") or line.startswith("|--"):
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) < 7:
+            continue
+        date, code, name, rank = parts[1], parts[2], parts[3], parts[4]
+        if code and date:
+            stock_days[code].add(date)
+            stock_info[code] = {"名称": name, "最近排名": rank}
+    # 筛选上榜天数≥min_days的
+    hot_stocks = []
+    for code, days_set in stock_days.items():
+        if len(days_set) >= min_days:
+            info = stock_info.get(code, {})
+            hot_stocks.append((code, info.get("名称", ""), len(days_set), info.get("最近排名", "")))
+    if not hot_stocks:
+        return ""
+    hot_stocks.sort(key=lambda x: x[2], reverse=True)
+    lines = []
+    for code, name, count, rank in hot_stocks[:10]:
+        lines.append(f"{name}({code})累计上榜{count}天，最近排名{rank}")
+    return "重点关注个股（长期上榜）：" + "；".join(lines)
 
 
 # =====================================================================
@@ -953,22 +1077,46 @@ def _prompt_during_positions() -> str:
 # --- 复盘（午间/晚间共用） ---
 _ZT_OPTIONAL_EXAMPLE = (
     "\n【筛选示范（仅供理解流程，不可照搬结论）】\n"
+    "示例A - 有合格标的：\n"
     "假设人气榜第3名「永杉锂业(603399)」：\n"
     "1) 人气排名=3 ≤20 → 通过\n"
-    "2) 历史行情末行收盘=21.33 → ≥20元 → 不通过 → 排除\n"
-    "结论：股价不达标，不加入自选。\n"
+    "2) 在涨停统计中流通市值=50亿 ≤200亿 → 通过\n"
+    "3) 涨停统计中连板数=3 ≥2 → 通过（非首板）\n"
+    "4) 所属概念[锂电池]匹配涨幅榜前十「锂电池」→ 通过\n"
+    "结论：4条全满足，加入自选。\n\n"
+    "示例B - 无合格标的：\n"
+    "人气榜前20逐只检查（排除ST/科创/北交/新股后剩3只）：\n"
+    "1) 金杯电工(002533)：排名8≤20通过 → 流通市值80亿≤200亿通过 → 连板数2≥2通过"
+    " → 所属概念[电力设备]不在涨幅榜/资金流入榜前十，不合格\n"
+    "2) 中科信息(300678)：排名12≤20通过 → 不在涨停统计中（今日未涨停），非首板不满足，不合格\n"
+    "3) 博汇股份(300839)：排名15≤20通过 → 流通市值350亿>200亿，不合格\n"
+    "输出：[]\n"
+    "涨停板战法自选未更新原因：金杯电工(002533)概念未与主线共振；"
+    "中科信息(300678)今日未涨停非首板不满足；博汇股份(300839)流通市值超200亿\n"
 )
 
 _LHT_OPTIONAL_EXAMPLE = (
     "\n【筛选示范（仅供理解流程，不可照搬结论）】\n"
+    "示例A - 有合格标的：\n"
     "假设人气榜第15名「某某股(000123)」：\n"
     "1) 人气排名=15 ≤50 → 通过\n"
     "2) 历史行情30日内存在涨跌幅=10.02% → 曾涨停 → 通过\n"
-    "3) 最新收盘价8.5 ≥ 均线5日8.3×0.98=8.13 → 回踩不破 → 通过\n"
-    "4) 最后两日收盘>开盘 → 连续收阳 → 通过\n"
-    "5) 最新成交额1.2亿 / 前5日均值0.9亿 = 1.33倍，在[1.0,3.0] → 通过\n"
-    "6) MACD差离值0.05 > 信号线0.02 → 通过\n"
-    "结论：6条全满足，加入自选。\n"
+    "3) 近30日最高收盘12.0，最新9.8，回落幅度=(12.0-9.8)/12.0=18.3%≥10% → 通过\n"
+    "4) 最新收盘价9.8，均线5日9.5，9.8/9.5=103%在[98%,110%]区间；均线5日9.5≥均线10日9.3 → 多头排列通过\n"
+    "5) 最后两日收盘>开盘 → 连续收阳 → 通过\n"
+    "6) 最新成交额1.2亿 / 前5日均值0.9亿 = 1.33倍，在[1.0,3.0] → 通过\n"
+    "7) MACD差离值0.05 > 信号线0.02且>0 → 通过\n"
+    "结论：7条全满足，加入自选。\n\n"
+    "示例B - 无合格标的：\n"
+    "人气榜逐只检查（排除ST/科创/北交/新股后剩3只）：\n"
+    "1) 某某股(000456)：排名20≤50通过 → 30日内无涨停经历，不合格\n"
+    "2) 另一股(600789)：排名8≤50通过 → 曾涨停通过 → 近30日最高15.0最新14.2，"
+    "回落(15.0-14.2)/15.0=5.3%<10%未充分回调，不合格\n"
+    "3) 第三股(300456)：排名30≤50通过 → 曾涨停通过 → 回落12%≥10%通过"
+    " → 最新收盘6.2/均线5日5.5=112.7%>110%偏离均线过远，不合格\n"
+    "输出：[]\n"
+    "龙回头战法自选未更新原因：某某股(000456)近30日无涨停；"
+    "另一股(600789)回落幅度仅5.3%未充分回调；第三股(300456)偏离5日均线12.7%过远\n"
 )
 
 
@@ -988,6 +1136,7 @@ def _prompt_review_optional_zt() -> str:
         + "涨停板战法自选未更新原因：{逐只列出人气榜前20被排除标的的关键不达标条件}\n"
         + "示例：涨停板战法自选未更新原因：永杉锂业(603399)股价21.3元超20元上限；中科信息(300678)非涨停股；金杯电工(002533)概念未与当日主线共振\n"
         + "【强制要求】输出 [] 时下一行的原因说明不可省略、不可只写「均不满足」，必须点名具体标的+具体不达标条件。\n"
+        + "【上榜跟踪】若数据中附带【上榜跟踪】信息，对长期上榜个股在同等条件下优先考虑加入自选。\n"
         + "不要输出数组以外的其他正文。"
     )
 
@@ -997,17 +1146,18 @@ def _prompt_review_optional_lht() -> str:
         _persona()
         + _LHT_ISOLATION
         + "【当前任务】复盘·仅完成龙回头战法加入自选。\n"
-        + "从 JSON「同花顺人气榜」逐只按下列条文筛选，6个条件全满足才可加入。\n"
+        + "从 JSON「同花顺人气榜」逐只按下列条文筛选，7个条件全满足才可加入。\n"
         + "【数据说明】JSON 含同花顺人气榜（含历史行情30d、技术指标含MACD和均线、个股资金流）、概念板块。\n\n"
         + "【策略条文】\n" + _load_sections("龙回头战法-加自选") + "\n"
         + _LHT_OPTIONAL_EXAMPLE + "\n"
         + "【输出格式（严格遵守，缺少原因视为输出不合格）】\n"
         + "情况A - 有合格标的：输出 JSON 数组，每项含 股票代码、股票名称、战法（固定「龙回头战法」）、"
-        + "加入自选原因（必须以【龙回头战法】开头，逐条列出6个条件判定）。\n"
+        + "加入自选原因（必须以【龙回头战法】开头，逐条列出7个条件判定）。\n"
         + "情况B - 无合格标的：先输出 []，紧接下一行必须输出：\n"
         + "龙回头战法自选未更新原因：{逐只列出主要被排除标的的关键不达标条件}\n"
         + "示例：龙回头战法自选未更新原因：某某股(000123)近30日无涨停经历；另一股(600456)MACD死叉不满足；第三股(300789)量能倍率4.2超上限3.0\n"
         + "【强制要求】输出 [] 时下一行的原因说明不可省略、不可只写「均不满足」，必须点名具体标的+具体不达标条件。\n"
+        + "【上榜跟踪】若数据中附带【上榜跟踪】信息，对长期上榜个股在同等条件下优先考虑加入自选。\n"
         + "不要输出数组以外的其他正文。"
     )
 
@@ -1031,6 +1181,8 @@ def _prompt_evening_narrative() -> str:
         + "七、今日盈亏\n"
         + "（当日总盈亏：{±金额}元、当前总资产）\n\n"
         + "八、经验及教训总结\n"
+        + "（结合【近期交易统计】和【历史经验教训】反思：近期策略执行有无偏差？哪些经验被验证有效？哪些需要调整？"
+        + "若连亏超2天，分析共性原因并提出具体改进方向。）\n"
         + LLM_OUTPUT_FORMAT
     )
 
@@ -1174,9 +1326,18 @@ def _run_review(raw_data: dict, tail: str, *, lunch: bool) -> str:
     """午间/晚间复盘：叙事 + 涨停板自选 + 龙回头自选，三路并行。"""
     payload = _unwrap_payload(raw_data)
 
+    # 更新上榜记录
+    hot = payload.get("同花顺人气榜", [])
+    if hot:
+        _update_popularity_history(hot)
+
+    # 上榜摘要注入到 optional prompt 的 user msg
+    pop_summary = _read_popularity_summary()
+    pop_tail = f"\n\n【上榜跟踪】{pop_summary}" if pop_summary else ""
+
     u_narrative = _build_user_msg(filter_payload(payload, "narrative"), tail=tail)
-    u_zt = _build_user_msg(filter_payload(payload, "zt_optional"), tail=tail, include_news=False)
-    u_lht = _build_user_msg(filter_payload(payload, "lht_optional"), tail=tail, include_news=False)
+    u_zt = _build_user_msg(filter_payload(payload, "zt_optional"), tail=pop_tail, include_news=False)
+    u_lht = _build_user_msg(filter_payload(payload, "lht_optional"), tail=pop_tail, include_news=False)
 
     sys_n = _prompt_lunch_narrative() if lunch else _prompt_evening_narrative()
     narrative, tz, lh = _parallel_call(
@@ -1549,14 +1710,22 @@ def parse_and_update(content: str, mode: str, market_payload: dict | None = None
         for h in holdings:
             sell_reason = str(h.get("卖出原因", "") or "").strip()
             sell_time = str(h.get("卖出时间", "") or "").strip()
-            if sell_reason and sell_time and "止损" in sell_reason:
-                _append_stoploss_record(
-                    h.get("股票代码", ""),
-                    h.get("股票名称", ""),
-                    sell_time,
-                    sell_reason,
-                )
-                print(f"止损记录已追加: {h.get('股票名称', '')} {sell_time}")
+            if sell_reason and sell_time:
+                action = "止损卖出" if "止损" in sell_reason else "卖出"
+                _append_trade_log(action, f"{h.get('股票名称', '')}({h.get('股票代码', '')}) {sell_reason}")
+                if "止损" in sell_reason:
+                    _append_stoploss_record(
+                        h.get("股票代码", ""),
+                        h.get("股票名称", ""),
+                        sell_time,
+                        sell_reason,
+                    )
+                    print(f"止损记录已追加: {h.get('股票名称', '')} {sell_time}")
+            elif h.get("买入时间") and not sell_time:
+                # 新买入的记录
+                buy_reason = str(h.get("买入原因", "") or "").strip()
+                if buy_reason:
+                    _append_trade_log("买入", f"{h.get('股票名称', '')}({h.get('股票代码', '')}) {buy_reason}")
         # 仅保存仍在持仓的（未卖出的）
         active = [h for h in holdings if not str(h.get("卖出时间", "") or "").strip()]
         save_holdings(active if active else holdings)
@@ -1568,7 +1737,12 @@ def parse_and_update(content: str, mode: str, market_payload: dict | None = None
 
     if mode in ("post_market_lunch", "post_market_evening") and o_span is not None:
         if optional:
+            _archive_optional(optional)
             save_optional(optional)
+            # 记录加自选操作到操作日志
+            for o in optional:
+                tag = o.get("战法", "")
+                _append_trade_log("加自选", f"{o.get('股票名称', '')}({o.get('股票代码', '')}) [{tag}]")
             print(f"自选股已更新（共 {len(optional)} 条）: {optional}")
         else:
             # 提取自选未更新原因
@@ -1757,7 +1931,6 @@ def main():
             save_review(timestamp, analysis, mode, data)
             _extract_and_save_memory(analysis, lunch=False)
         print("分析完成")
-        _append_decision(mode, analysis)
     except Exception as e:
         print(f"分析失败: {e}")
         analysis = f"【{label}】{timestamp}\n\n服务异常，请稍后重试。"
