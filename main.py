@@ -42,6 +42,7 @@ DATA_DIR = os.path.expanduser("~/data/quant")
 FUND_FILE = f"{DATA_DIR}/fund.md"
 OPTIONAL_FILE = f"{DATA_DIR}/optional.jsonl"
 HOLDING_FILE = f"{DATA_DIR}/holding.jsonl"
+STOPLOSS_FILE = f"{DATA_DIR}/stoploss.jsonl"
 INITIAL_CAPITAL = 10000
 NEWS_IMPACT_SUMMARY_FILE = f"{DATA_DIR}/news_market_impact_summary.txt"
 
@@ -50,6 +51,13 @@ OPTIONAL_STRATEGY_ALLOWED = frozenset({"涨停板战法", "龙回头战法"})
 LLM_OUTPUT_FORMAT = "\n【输出格式要求】纯文本，禁止使用 markdown 的 #、*、- 等排版符号。\n"
 
 _LLM_PARALLEL_WORKERS = max(2, min(8, (os.cpu_count() or 4)))
+
+MEMORY_FILE = f"{DATA_DIR}/MEMORY.md"
+MEMORY_MAX_INJECT_CHARS = 2000
+MEMORY_COMPRESS_THRESHOLD_ENTRIES = 30
+MEMORY_COMPRESS_THRESHOLD_CHARS = 3000
+
+_RE_THINKING = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL)
 
 
 def _persona(fund: float | None = None) -> str:
@@ -113,7 +121,7 @@ def send_msg(content: str, token: str):
 def call_llm(
     system: str,
     user: str,
-    max_tokens: int = 2500,
+    max_tokens: int = 16000,
     retries: int = 3,
     *,
     temperature: float | None = None,
@@ -146,12 +154,22 @@ def call_llm(
                 continue
             resp.raise_for_status()
             result = resp.json()
+            # 提取 text 类型的 content block
             for c in result.get("content", []):
                 if c.get("type") == "text":
-                    return c["text"]
-            return str(result)
-        except Exception as e:
-            print(f"LLM异常: {e}")
+                    text = _RE_THINKING.sub("", c["text"]).strip()
+                    if text:
+                        return text
+            # 没有 text block：thinking 占满了 max_tokens 或模型异常
+            stop = result.get("stop_reason", "")
+            if attempt < retries - 1:
+                print(f"LLM输出无文本(stop_reason={stop})，重试({attempt+1}/{retries})...")
+                time.sleep(3)
+                continue
+            print(f"LLM响应无text内容 stop_reason={stop} model={cfg.LLM_MODEL}")
+            raise Exception(f"LLM响应无有效文本(stop_reason={stop})")
+        except requests.exceptions.RequestException as e:
+            print(f"LLM请求异常: {e}")
             if attempt < retries - 1:
                 time.sleep(5)
     raise Exception("LLM调用失败")
@@ -280,6 +298,48 @@ def save_optional(optional: list):
     _write_jsonl_stock_file(OPTIONAL_FILE, optional)
 
 
+def _append_stoploss_record(code: str, name: str, sell_time: str, reason: str):
+    """追加一条止损记录到 stoploss.jsonl（用于冷却期判断）。"""
+    os.makedirs(DATA_DIR, exist_ok=True)
+    record = {
+        "股票代码": code,
+        "股票名称": name,
+        "止损时间": sell_time,
+        "止损原因": reason,
+    }
+    with open(STOPLOSS_FILE, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def _read_recent_stoploss(days: int = 5) -> list[dict]:
+    """读取近 N 自然日内的止损记录（供冷却期判断）。"""
+    if not os.path.isfile(STOPLOSS_FILE):
+        return []
+    from datetime import timedelta
+    cutoff = datetime.now() - timedelta(days=days)
+    records = []
+    try:
+        text = _read_user_text(STOPLOSS_FILE)
+    except OSError:
+        return []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        t = obj.get("止损时间", "")
+        try:
+            dt = datetime.strptime(t[:10], "%Y-%m-%d") if len(t) >= 10 else None
+        except ValueError:
+            dt = None
+        if dt and dt >= cutoff:
+            records.append(obj)
+    return records
+
+
 def read_trades(today: str) -> list:
     try:
         return json.loads(_read_user_text(f"{DATA_DIR}/trade/{today}/trades.md"))
@@ -295,32 +355,218 @@ def save_trades(today: str, trades: list):
 
 
 def _tail_fund_only() -> str:
-    return f"\n\n【当前资金】：{get_fund():.2f} 元"
+    sl = _read_recent_stoploss()
+    sl_s = json.dumps(sl, ensure_ascii=False) if sl else "无"
+    decisions = _read_decisions()
+    memory = _read_memory()
+    dec_part = f"\n【今日决策记录】：\n{decisions}" if decisions else ""
+    mem_part = f"\n【历史经验教训】：\n{memory}" if memory else ""
+    return f"\n\n【当前资金】：{get_fund():.2f} 元\n【近期止损记录】：{sl_s}{dec_part}{mem_part}"
 
 
 def _tail_during_market() -> str:
     td = datetime.now().strftime("%Y-%m-%d")
     tr = read_trades(td)
     tr_s = json.dumps(tr, ensure_ascii=False) if tr else "无"
-    return f"\n\n【当前资金】：{get_fund():.2f} 元\n【今日交易记录】：{tr_s}"
+    sl = _read_recent_stoploss()
+    sl_s = json.dumps(sl, ensure_ascii=False) if sl else "无"
+    decisions = _read_decisions()
+    memory = _read_memory()
+    dec_part = f"\n【今日决策记录】：\n{decisions}" if decisions else ""
+    mem_part = f"\n【历史经验教训】：\n{memory}" if memory else ""
+    return f"\n\n【当前资金】：{get_fund():.2f} 元\n【今日交易记录】：{tr_s}\n【近期止损记录】：{sl_s}{dec_part}{mem_part}"
 
 
 def _tail_lunch_review() -> str:
     td = datetime.now().strftime("%Y-%m-%d")
     tr = read_trades(td)
     tr_s = json.dumps(tr, ensure_ascii=False) if tr else "无"
-    return f"\n\n【当前资金】：{get_fund():.2f} 元\n【上午交易记录】：{tr_s}"
+    sl = _read_recent_stoploss()
+    sl_s = json.dumps(sl, ensure_ascii=False) if sl else "无"
+    decisions = _read_decisions()
+    memory = _read_memory()
+    dec_part = f"\n【今日决策记录】：\n{decisions}" if decisions else ""
+    mem_part = f"\n【历史经验教训】：\n{memory}" if memory else ""
+    return f"\n\n【当前资金】：{get_fund():.2f} 元\n【上午交易记录】：{tr_s}\n【近期止损记录】：{sl_s}{dec_part}{mem_part}"
 
 
 def _tail_evening_review() -> str:
     td = datetime.now().strftime("%Y-%m-%d")
     tr = read_trades(td)
     tr_s = json.dumps(tr, ensure_ascii=False) if tr else "无交易"
+    sl = _read_recent_stoploss()
+    sl_s = json.dumps(sl, ensure_ascii=False) if sl else "无"
+    decisions = _read_decisions()
+    memory = _read_memory()
+    dec_part = f"\n【今日决策记录】：\n{decisions}" if decisions else ""
+    mem_part = f"\n【历史经验教训】：\n{memory}" if memory else ""
     return (
         f"\n\n【当前资金】：{get_fund():.2f} 元\n"
         f"【初始本金】：{INITIAL_CAPITAL}元\n"
-        f"【今日实际交易记录】：\n{tr_s}"
+        f"【今日实际交易记录】：\n{tr_s}\n"
+        f"【近期止损记录】：{sl_s}{dec_part}{mem_part}"
     )
+
+
+# =====================================================================
+# 6B. DECISION JOURNAL & MEMORY
+# =====================================================================
+def _decisions_file_path() -> str:
+    today = datetime.now().strftime("%Y-%m-%d")
+    return f"{DATA_DIR}/trade/{today}/decisions.md"
+
+
+def _read_decisions() -> str:
+    """读取当天已有决策日志（供注入到后续 LLM 调用）。"""
+    path = _decisions_file_path()
+    if not os.path.isfile(path):
+        return ""
+    try:
+        return _read_user_text(path).strip()
+    except OSError:
+        return ""
+
+
+def _append_decision(mode: str, content: str):
+    """从 LLM 输出中提取关键决策，追加到当日 decisions.md。"""
+    decision = _extract_decision_summary(content, mode)
+    if not decision:
+        return
+    path = _decisions_file_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    time_str = datetime.now().strftime("%H:%M")
+    mode_labels = {
+        "news": "新闻",
+        "pre_market": "盘前",
+        "during_market": "盘中",
+        "post_market_lunch": "午间复盘",
+        "post_market_evening": "晚间复盘",
+    }
+    label = mode_labels.get(mode, mode)
+    line = f"[{time_str}] {label}: {decision}\n"
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(line)
+
+
+def _extract_decision_summary(content: str, mode: str) -> str:
+    """从 LLM 输出中提取 1 句核心决策摘要（≤100字）。"""
+    action_keywords = ["买入", "卖出", "关注", "放弃", "加仓", "减仓", "清仓",
+                       "挂单", "止损", "观望", "持有", "开仓", "不开新仓", "空仓"]
+    for line in content.split("\n"):
+        line = line.strip()
+        if not line or len(line) < 5:
+            continue
+        if any(kw in line for kw in action_keywords):
+            cleaned = re.sub(r"^[一二三四五六七八九十\d]+[、.．]\s*", "", line)
+            if len(cleaned) > 100:
+                cleaned = cleaned[:100] + "…"
+            return cleaned
+    # fallback: 第一句有实质内容的话
+    for line in content.split("\n"):
+        line = line.strip()
+        if len(line) > 10 and not line.startswith("【") and not line.startswith("="):
+            return line[:100] + ("…" if len(line) > 100 else "")
+    return ""
+
+
+def _read_memory(*, max_chars: int = MEMORY_MAX_INJECT_CHARS) -> str:
+    """读取 MEMORY.md 最近 max_chars 字符（最新条目优先）。"""
+    if not os.path.isfile(MEMORY_FILE):
+        return ""
+    try:
+        text = _read_user_text(MEMORY_FILE).strip()
+    except OSError:
+        return ""
+    if not text:
+        return ""
+    if len(text) > max_chars:
+        text = text[-max_chars:]
+        nl = text.find("\n")
+        if nl > 0:
+            text = text[nl + 1:]
+    return text
+
+
+def _count_memory_entries() -> tuple[int, int]:
+    """返回 (条目数, 字符数)。"""
+    if not os.path.isfile(MEMORY_FILE):
+        return 0, 0
+    try:
+        text = _read_user_text(MEMORY_FILE).strip()
+    except OSError:
+        return 0, 0
+    entries = [e.strip() for e in text.split("\n\n") if e.strip()]
+    return len(entries), len(text)
+
+
+def _compress_memory():
+    """当 MEMORY.md 超阈值时调用 LLM 压缩合并。"""
+    entry_count, char_count = _count_memory_entries()
+    if entry_count < MEMORY_COMPRESS_THRESHOLD_ENTRIES and char_count < MEMORY_COMPRESS_THRESHOLD_CHARS:
+        return
+    try:
+        text = _read_user_text(MEMORY_FILE).strip()
+    except OSError:
+        return
+    system = (
+        "你是一名交易经验整理助手。请将以下交易经验教训条目进行压缩合并："
+        "相似的合并为一条，保留最有价值的洞察，删除过时或重复内容。"
+        "输出格式：每条以日期前缀开头（合并的用最近日期），每条1-2句话。"
+        "总条目控制在15条以内。不要输出任何前缀说明。"
+    )
+    try:
+        compressed = call_llm(system, text, max_tokens=1500, temperature=0.1)
+        with open(MEMORY_FILE, "w", encoding="utf-8") as f:
+            f.write(compressed.strip() + "\n")
+        print(f"MEMORY.md 已压缩: {entry_count}条 → 压缩完成")
+    except Exception as e:
+        print(f"MEMORY.md 压缩失败: {e}")
+
+
+def _extract_section(content: str, header: str) -> str:
+    """按节标题切分内容，提取 header 到下一节之间的文本。"""
+    idx = content.find(header)
+    if idx < 0:
+        return ""
+    start = content.find("\n", idx)
+    if start < 0:
+        return ""
+    start += 1
+    next_section = re.search(r"\n[一二三四五六七八九十]+、", content[start:])
+    if next_section:
+        end = start + next_section.start()
+    else:
+        end = len(content)
+    return content[start:end].strip()
+
+
+def _extract_and_save_memory(content: str, *, lunch: bool):
+    """从复盘输出中提取经验教训，调用 LLM 提炼后追加到 MEMORY.md。"""
+    if lunch:
+        section_text = _extract_section(content, "五、下午操作策略调整")
+    else:
+        section_text = _extract_section(content, "八、经验及教训总结")
+    if not section_text or len(section_text.strip()) < 10:
+        return
+    system = (
+        "你是一名交易经验提炼助手。请将以下内容提炼为1-3条简短经验教训要点。"
+        "每条不超过30字，用「·」开头。只输出要点，不要任何前缀或解释。"
+        "如果内容没有实质性的经验教训（仅是计划或普通描述），输出「无」。"
+    )
+    try:
+        bullets = call_llm(system, section_text, max_tokens=300, temperature=0.1)
+    except Exception as e:
+        print(f"MEMORY提炼LLM失败: {e}")
+        return
+    if not bullets.strip() or bullets.strip() == "无":
+        return
+    today = datetime.now().strftime("%Y-%m-%d")
+    entry = f"{today}\n{bullets.strip()}\n"
+    os.makedirs(os.path.dirname(MEMORY_FILE), exist_ok=True)
+    with open(MEMORY_FILE, "a", encoding="utf-8") as f:
+        f.write("\n" + entry)
+    print(f"MEMORY.md 已更新: {entry.strip()[:60]}...")
+    _compress_memory()
 
 
 # =====================================================================
@@ -523,7 +769,7 @@ def filter_payload(payload: dict, lane: str) -> dict:
 # 9. PROMPTS
 # =====================================================================
 
-def _news_summary_for_prompt(*, max_chars: int = 1000) -> str:
+def _news_summary_for_prompt(*, max_chars: int = 800) -> str:
     if not os.path.isfile(NEWS_IMPACT_SUMMARY_FILE):
         return "\n\n【当日新闻摘要】\n（尚无新闻摘要）"
     try:
@@ -555,11 +801,11 @@ def _prompt_news_system() -> str:
         _persona()
         + f"当前日期：{today}。你正在进行每日新闻研读。请对以下多渠道新闻去噪、去重、提炼。\n\n"
         + "【输出要求】\n"
-        + "1. 按重要度降序排列，输出前20条，每条仅写标题或核心内容（一句话）。\n"
+        + "1. 按重要度降序排列，输出前50条，每条仅写标题或核心内容（一句话）。\n"
         + "2. 列完全部条目后，最后统一输出一段「综合解读」，站在短线交易者角度分析对大盘/板块/情绪的影响及操作方向。\n"
         + "3. 禁止对每一条新闻单独写解读，只在最后给一个整体解读。\n"
         + "4. 严格纯文本格式：\n\n"
-        + "1、{新闻标题或核心内容}\n2、{标题}\n……\n20、{标题}\n\n"
+        + "1、{新闻标题或核心内容}\n2、{标题}\n……\n50、{标题}\n\n"
         + "综合解读：{从宏观政策、行业板块、市场情绪三个维度，结合上述新闻进行整体研判，"
         + "给出对今日盘面的影响预判和短线操作方向建议，150字以内}\n"
         + LLM_OUTPUT_FORMAT
@@ -813,6 +1059,60 @@ def _prompt_lunch_narrative() -> str:
 # 10. ORCHESTRATORS
 # =====================================================================
 
+def _extract_news_brief(summary: str) -> str:
+    """从新闻LLM输出中提取「综合解读」段落。"""
+    for keyword in ("综合解读：", "综合解读:", "综合解读\n"):
+        idx = summary.find(keyword)
+        if idx != -1:
+            return summary[idx:].strip()
+    paragraphs = [p.strip() for p in summary.split("\n\n") if p.strip()]
+    if paragraphs:
+        last = paragraphs[-1]
+        if not last[:2].replace(".", "").replace("、", "").isdigit():
+            return last
+    return summary[-300:].strip()
+
+
+_NEWS_SUMMARY_COMPRESS_CHARS = 600
+
+
+def _append_and_compress_news_brief(new_brief: str) -> None:
+    """追加本次综合解读到摘要文件；超过阈值时用LLM压缩合并。"""
+    time_tag = datetime.now().strftime("%H:%M")
+    entry = f"[{time_tag}] {new_brief}"
+
+    # 读取已有内容
+    existing = ""
+    if os.path.isfile(NEWS_IMPACT_SUMMARY_FILE):
+        try:
+            existing = _read_user_text(NEWS_IMPACT_SUMMARY_FILE).strip()
+        except OSError:
+            existing = ""
+
+    if not existing:
+        combined = entry
+    else:
+        combined = existing + "\n" + entry
+
+    # 超过阈值则LLM精炼
+    if len(combined) > _NEWS_SUMMARY_COMPRESS_CHARS:
+        try:
+            compressed = call_llm(
+                "你是A股短线交易新闻研判助手。请将以下多批次新闻综合解读合并精炼为一段话，"
+                "保留所有关键信息（政策方向、利好/利空板块、情绪判断、操作建议），去除重复，"
+                "200字以内，纯文本输出。",
+                combined,
+                max_tokens=500,
+            )
+            combined = f"综合解读（截至{time_tag}）：{compressed.strip()}"
+        except Exception:
+            # 压缩失败则截取最新部分
+            combined = combined[-_NEWS_SUMMARY_COMPRESS_CHARS:]
+
+    with open(NEWS_IMPACT_SUMMARY_FILE, "w", encoding="utf-8") as f:
+        f.write(combined)
+
+
 def process_news(raw_data: dict, timestamp: str) -> str:
     today = datetime.now().strftime("%Y-%m-%d")
     time_str = datetime.now().strftime("%H_%M_%S")
@@ -826,6 +1126,9 @@ def process_news(raw_data: dict, timestamp: str) -> str:
         json.dump(raw_data, f, ensure_ascii=False, indent=2)
     with open(news_file, "w", encoding="utf-8") as f:
         f.write(f"# 新闻 {timestamp}\n\n{summary}\n")
+    # 提取综合解读并追加到摘要文件（多次调用时累积+压缩）
+    brief = _extract_news_brief(summary)
+    _append_and_compress_news_brief(brief)
     return summary
 
 
@@ -1242,7 +1545,21 @@ def parse_and_update(content: str, mode: str, market_payload: dict | None = None
             new_fund = float(m.group(1))
 
     if holdings and mode in ("during_market", "pre_market") and h_span is not None:
-        save_holdings(holdings)
+        # 检测止损卖出，追加到止损记录文件
+        for h in holdings:
+            sell_reason = str(h.get("卖出原因", "") or "").strip()
+            sell_time = str(h.get("卖出时间", "") or "").strip()
+            if sell_reason and sell_time and "止损" in sell_reason:
+                _append_stoploss_record(
+                    h.get("股票代码", ""),
+                    h.get("股票名称", ""),
+                    sell_time,
+                    sell_reason,
+                )
+                print(f"止损记录已追加: {h.get('股票名称', '')} {sell_time}")
+        # 仅保存仍在持仓的（未卖出的）
+        active = [h for h in holdings if not str(h.get("卖出时间", "") or "").strip()]
+        save_holdings(active if active else holdings)
         print(f"持仓已更新: {holdings}")
     elif mode in ("during_market", "pre_market") and h_span is not None and not holdings:
         # 提取持仓未更新原因
@@ -1362,12 +1679,12 @@ _PUSH_FOCUS = {
 
 def _format_push_message(label: str, timestamp: str, body: str, mode: str) -> str:
     """组装专业推送格式：标题行 + 关注点 + 分隔 + 正文。"""
-    focus = _PUSH_FOCUS.get(mode, "")
-    header = f"【{label}】{timestamp}"
+    # focus = _PUSH_FOCUS.get(mode, "")
+    header = f"【{label}】{timestamp}\n"
     parts = [header]
-    if focus:
-        parts.append(focus)
-    parts.append("=" * 36)
+    # if focus:
+    #     parts.append(focus)
+    # parts.append("=" * 36)
     parts.append(body.strip())
     return "\n".join(parts)
 
@@ -1434,10 +1751,13 @@ def main():
         elif mode == "post_market_lunch":
             analysis = _format_push_message("午间复盘", timestamp, analyze_lunch_market(data, timestamp), mode)
             save_review(timestamp, analysis, mode, data)
+            _extract_and_save_memory(analysis, lunch=True)
         elif mode == "post_market_evening":
             analysis = _format_push_message("晚间复盘", timestamp, analyze_evening_market(data, timestamp), mode)
             save_review(timestamp, analysis, mode, data)
+            _extract_and_save_memory(analysis, lunch=False)
         print("分析完成")
+        _append_decision(mode, analysis)
     except Exception as e:
         print(f"分析失败: {e}")
         analysis = f"【{label}】{timestamp}\n\n服务异常，请稍后重试。"

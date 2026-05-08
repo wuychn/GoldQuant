@@ -124,40 +124,37 @@ def _index_ma20_vs_close_pct(context: str) -> dict[str, Any | None]:
         return out
 
 
-def _two_market_amount_ratio_vs_ma5(context: str) -> dict[str, Any | None]:
-    """上证+深证成指日成交额之和，相对近 5 日（不含当日）均值的倍数（近似两市成交）。"""
+def _two_market_volume_ratio(context: str, index_spot: list[dict[str, Any]] | None) -> dict[str, Any | None]:
+    """从实时指数行情中提取上证、深证量比，取平均作为两市成交额倍率（量比已按时间归一化）。"""
     out: dict[str, Any | None] = {
-        "数据截止日": None,
-        "今日合计成交额": None,
-        "近5日合计成交额均值": None,
+        "上证量比": None,
+        "深证量比": None,
         "今日相对近5日均倍率": None,
     }
-    try:
-        start = get_n_workdays_ago(n=30) or "20200101"
-        ed = today()
-        sh = ak.stock_zh_index_daily_em(symbol="sh000001", start_date=start, end_date=ed)
-        sz = ak.stock_zh_index_daily_em(symbol="sz399001", start_date=start, end_date=ed)
-        if sh is None or sz is None or sh.empty or sz.empty:
-            return out
-        sh["amount"] = pd.to_numeric(sh["amount"], errors="coerce")
-        sz["amount"] = pd.to_numeric(sz["amount"], errors="coerce")
-        m = pd.merge(sh[["date", "amount"]], sz[["date", "amount"]], on="date", suffixes=("_上证", "_深证"))
-        m["合计成交额"] = m["amount_上证"].fillna(0) + m["amount_深证"].fillna(0)
-        m = m.dropna(subset=["合计成交额"])
-        if len(m) < 6:
-            return out
-        tail = m.tail(6)
-        today_amt = float(tail["合计成交额"].iloc[-1])
-        ma5 = float(tail["合计成交额"].iloc[-6:-1].mean())
-        out["数据截止日"] = str(tail["date"].iloc[-1])
-        out["今日合计成交额"] = round(today_amt, 2)
-        out["近5日合计成交额均值"] = round(ma5, 2) if ma5 else None
-        if ma5 and ma5 > 0:
-            out["今日相对近5日均倍率"] = round(today_amt / ma5, 4)
+    if not index_spot:
         return out
-    except Exception:
-        logger.exception("两市成交额对比失败 [%s]", context)
-        return out
+    sh_vr, sz_vr = None, None
+    for item in index_spot:
+        code = str(item.get("代码", "") or "").strip()
+        name = str(item.get("名称", "") or "").strip()
+        vr = item.get("量比")
+        if vr is None:
+            continue
+        try:
+            vr_f = float(vr)
+        except (TypeError, ValueError):
+            continue
+        if code == "000001" or "上证" in name:
+            sh_vr = vr_f
+        elif code == "399001" or "深证成" in name:
+            sz_vr = vr_f
+    out["上证量比"] = round(sh_vr, 4) if sh_vr is not None else None
+    out["深证量比"] = round(sz_vr, 4) if sz_vr is not None else None
+    # 取两市均值作为综合倍率
+    values = [v for v in (sh_vr, sz_vr) if v is not None]
+    if values:
+        out["今日相对近5日均倍率"] = round(sum(values) / len(values), 4)
+    return out
 
 
 def _yesterday_zt_pool_performance_zh(context: str, prev_trade_date: str | None) -> dict[str, Any | None]:
@@ -211,15 +208,20 @@ def build_market_state_machine_zh(
     context: str,
     *,
     zt_pool_full: list[dict[str, Any]] | None = None,
+    realtime_index_spot: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """策略 §7.1 状态机用到的可自动计算项，键名均为中文。"""
     prev_td = get_n_workdays_ago(n=1)
     pool_full = zt_pool_full if zt_pool_full is not None else today_zt_pool_full_zh(context)
     idx = _index_ma20_vs_close_pct(context)
-    amt = _two_market_amount_ratio_vs_ma5(context)
+    amt = _two_market_volume_ratio(context, realtime_index_spot)
     # 数据有延迟，需确认 TODO
     ztp = _yesterday_zt_pool_performance_zh(context, prev_td)
     ztc = _zt_height_and_count_zh(context, pool_full)
+
+    # 今日大盘实时涨跌幅（从实时指数行情中提取上证涨跌幅）
+    realtime = _extract_realtime_index_change(realtime_index_spot)
+
     return {
         "上证指数": idx,
         "两市成交额近似": amt,
@@ -228,4 +230,24 @@ def build_market_state_machine_zh(
             "涨停家数": ztc.get("涨停家数") if ztc else None,
             "市场最高连板数": ztc.get("市场最高连板数") if ztc else None,
         },
+        "今日大盘实时": realtime,
     }
+
+
+def _extract_realtime_index_change(index_spot: list[dict[str, Any]] | None) -> dict[str, Any]:
+    """从实时指数行情中提取上证指数当日涨跌幅。"""
+    out: dict[str, Any] = {"涨跌幅": None}
+    if not index_spot:
+        return out
+    for item in index_spot:
+        code = str(item.get("代码", "") or item.get("code", "")).strip()
+        name = str(item.get("名称", "") or "").strip()
+        if code == "000001" or "上证" in name:
+            chg = item.get("涨跌幅")
+            if chg is not None:
+                try:
+                    out["涨跌幅"] = round(float(chg), 2)
+                except (TypeError, ValueError):
+                    pass
+            break
+    return out

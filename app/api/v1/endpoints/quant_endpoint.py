@@ -36,7 +36,6 @@ from app.utils.quant_archive import (
     load_merge_write_daily_bars,
     quant_archive_base,
 )
-from app.utils.news_market_summary import refresh_news_market_summary_sync
 from app.utils.quant_market_enrich import (
     build_market_state_machine_zh,
     pre_auction_minute_zh,
@@ -418,11 +417,15 @@ async def _hsgtzj_or_none(context: str):
         return None
 
 
-async def _market_bundle_zh(route: str) -> dict[str, object]:
+async def _market_bundle_zh(route: str, *, realtime_index_spot: list | None = None) -> dict[str, object]:
     """仅返回「市场状态机」聚合块（涨停全表、昨日涨停明细不再下发，避免干扰模型）。"""
     zt_full = await run_in_threadpool(lambda: today_zt_pool_full_zh(f"{route}|今日涨停股池全量"))
     sc_zh = await run_in_threadpool(
-        lambda: build_market_state_machine_zh(f"{route}|市场状态机", zt_pool_full=zt_full),
+        lambda: build_market_state_machine_zh(
+            f"{route}|市场状态机",
+            zt_pool_full=zt_full,
+            realtime_index_spot=realtime_index_spot,
+        ),
     )
     return {"市场状态机": sc_zh}
 
@@ -758,8 +761,6 @@ async def news(settings: SettingsDep) -> Response:
     except Exception:
         _log_api_error("GET /quant/market/news | ak.stock_info_global_cls")
 
-    await run_in_threadpool(refresh_news_market_summary_sync, settings, news)
-
     return Response(data=_finalize_quant_payload(news))
 
 
@@ -801,7 +802,7 @@ async def pre_market(settings: SettingsDep, background_tasks: BackgroundTasks) -
         fund_flow_trade_days=1,
     )
 
-    bundle = await _market_bundle_zh(route)
+    bundle = await _market_bundle_zh(route, realtime_index_spot=dpzs)
     result = {
         "大盘指数": dpzs,
         "自选股": zxg,
@@ -869,7 +870,7 @@ async def during_market(settings: SettingsDep, background_tasks: BackgroundTasks
         fund_flow_trade_days=1,
     )
 
-    bundle = await _market_bundle_zh(route)
+    bundle = await _market_bundle_zh(route, realtime_index_spot=dpzs)
     result = {
         "大盘指数": dpzs,
         "赚钱效应": zqxy,
@@ -939,7 +940,7 @@ async def post_market(settings: SettingsDep, background_tasks: BackgroundTasks) 
         fund_flow_trade_days=3,
     )
 
-    bundle = await _market_bundle_zh(route)
+    bundle = await _market_bundle_zh(route, realtime_index_spot=dpzs)
     result = {
         "大盘指数": dpzs,
         "赚钱效应": zqxy,
