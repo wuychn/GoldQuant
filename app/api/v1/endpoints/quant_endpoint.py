@@ -304,11 +304,11 @@ def _finalize_quant_payload(obj: Any) -> Any:
 def _slim_xw_list(xw: object, *, limit: int = 3) -> list[dict[str, Any]]:
     if not isinstance(xw, list):
         return []
-    out: list[dict[str, Any]] = []
+    out: list[Any] = []
     for row in xw[:limit]:
         if not isinstance(row, dict):
             continue
-        slim = {k: row[k] for k in ("标题", "发布时间") if k in row}
+        slim = [row[k] for k in ["新闻内容"] if k in row]
         if slim:
             out.append(slim)
     return out
