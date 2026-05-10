@@ -67,7 +67,7 @@ def refresh_news_market_summary_sync(settings: Settings, news_items: list) -> No
     **在每次** ``GET /quant/market/news`` 聚合出 ``news_items`` 之后调用。
 
     仅使用 **大模型** 根据当次完整列表生成 **1000 字以内** 摘要，成功则 **覆盖写入**
-    ``~/data/quant/news_market_impact_summary.txt``。
+    ``~/.quant/news_market_impact_summary.txt``。
 
     未配置全局 ``LLM_API_KEY``（环境变量 ``GOLDQUANT_LLM_API_KEY``）或 LLM 调用失败时：**不写入**（保留上次有效摘要，若有）。
     """

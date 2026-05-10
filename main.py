@@ -38,14 +38,14 @@ FEISHU_APP_ID = "cli_a96dcfa5d3f91bd4"
 FEISHU_APP_SECRET = "eXhbDo1Ldh4sMGkBjVUjdhAiiBFZ6ld6"
 FEISHU_USER_ID = "ou_bc3cefb641bbc53148de964a637d8cfd"
 
-DATA_DIR = os.path.expanduser("~/data/quant")
+DATA_DIR = os.path.expanduser("~/.quant")
 FUND_FILE = f"{DATA_DIR}/fund.md"
 OPTIONAL_FILE = f"{DATA_DIR}/optional.jsonl"
 HOLDING_FILE = f"{DATA_DIR}/holding.jsonl"
 STOPLOSS_FILE = f"{DATA_DIR}/stoploss.jsonl"
 INITIAL_CAPITAL = 10000
 OPTIONAL_HISTORY_FILE = f"{DATA_DIR}/optional_history.jsonl"
-POPULARITY_FILE = f"{DATA_DIR}/popularity_history.md"
+POPULARITY_FILE = f"{DATA_DIR}/popularity_history.md" # TODO 一只票很久没上榜了是否会更新，是否会剔除？
 NEWS_IMPACT_SUMMARY_FILE = f"{DATA_DIR}/news_market_impact_summary.txt"
 
 OPTIONAL_STRATEGY_ALLOWED = frozenset({"涨停板战法", "龙回头战法"})
@@ -1165,7 +1165,7 @@ def _prompt_review_optional_lht() -> str:
 def _prompt_evening_narrative() -> str:
     return (
         _persona()
-        + "【当前任务】晚间复盘正文（一至八）。不要输出「自选更新」或自选 JSON。\n"
+        + "【当前任务】晚间复盘。不要输出「自选更新」或自选 JSON。\n"
         + "【数据说明】JSON 含大盘指数、赚钱效应、大盘资金流(3日)、概念板块、涨停统计、"
         + "同花顺人气榜(精简排名)、自选股(全量)、持仓股(全量)、市场状态机。\n\n"
         + "【策略条文】\n" + _load_sections("共用约束", "市场状态机", "仓位联动", "每日亏损限额") + "\n\n"
@@ -1902,9 +1902,9 @@ def main():
 
     try:
         # 真实数据获取（勿删）
-        data = fetch_map[mode]()
+        # data = fetch_map[mode]()
         # 测试，直接读文件获取数据（勿删） TODO
-        # data = json.loads(_read_user_text(_PROJECT_ROOT / 'data' / mode))
+        data = json.loads(_read_user_text(_PROJECT_ROOT / 'data' / mode))
         print("数据拉取成功")
     except Exception as e:
         print(f"数据拉取失败: {e}")

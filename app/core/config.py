@@ -100,7 +100,7 @@ class Settings(BaseSettings):
 
     #: 是否将盘前/盘中/盘后聚合结果写入本地归档（快照 + 合并日线 + 指标）
     QUANT_ARCHIVE_ENABLED: bool = True
-    #: 归档根目录；未设置时默认为用户目录下 ``~/data/quant/archive``
+    #: 归档根目录；未设置时默认为用户目录下 ``~/.quant/archive``
     QUANT_ARCHIVE_DIR: str | None = None
     #: 某股票本地尚无日线归档时，日线全量拉取的起始日期（``YYYYMMDD``，可含 ``-``）
     QUANT_HIST_FULL_START_DATE: str = "19900101"

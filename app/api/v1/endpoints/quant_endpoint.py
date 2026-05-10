@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["量化入口"])
 
 _INDEX_SERIAL_WHITELIST = (1, 2, 4)
-# 自选/持仓落盘：~/data/quant/ 下 JSONL（一行一条 JSON 对象）
+# 自选/持仓落盘：~/.quant/ 下 JSONL（一行一条 JSON 对象）
 QUANT_OPTIONAL_FILENAME = "optional.jsonl"
 QUANT_HOLDING_FILENAME = "holding.jsonl"
 
@@ -615,7 +615,7 @@ def _normalize_quant_stock_rows(raw: list | None) -> list:
 
 
 def _load_stock_rows_from_quant_file(filename: str) -> list:
-    """读取 ``~/data/quant/{filename}``，仅支持 JSONL（一行一条 JSON）。"""
+    """读取 ``~/.quant/{filename}``，仅支持 JSONL（一行一条 JSON）。"""
     path = _quant_data_file(filename)
     if not path.is_file():
         return []
@@ -654,12 +654,12 @@ async def _guard_real_workday_or_non_trading_response() -> Response | None:
 
 
 async def _zx(settings):
-    """从 ``~/data/quant/optional.jsonl`` 读取自选股（一行一条 JSON）。"""
+    """从 ``~/.quant/optional.jsonl`` 读取自选股（一行一条 JSON）。"""
     return await run_in_threadpool(lambda: _load_stock_rows_from_quant_file(QUANT_OPTIONAL_FILENAME))
 
 
 async def _cc(settings):
-    """从 ``~/data/quant/holding.jsonl`` 读取持仓（一行一条 JSON）。"""
+    """从 ``~/.quant/holding.jsonl`` 读取持仓（一行一条 JSON）。"""
     return await run_in_threadpool(lambda: _load_stock_rows_from_quant_file(QUANT_HOLDING_FILENAME))
 
 
@@ -699,7 +699,7 @@ async def news(settings: SettingsDep) -> Response:
     全球/同花顺/财联社资讯聚合到 ``news`` 列表后，**每次请求**调用
     ``refresh_news_market_summary_sync``：使用全局 LLM（``.env`` 中 ``LLM_API_KEY`` /
     ``LLM_BASE_URL`` / ``LLM_MODEL``，或兼容 ``GOLDQUANT_LLM_*``）生成 **500 字以内** 当日影响摘要，
-    成功则 **覆盖** 写入 ``~/data/quant/news_market_impact_summary.txt``；
+    成功则 **覆盖** 写入 ``~/.quant/news_market_impact_summary.txt``；
     未配置密钥或 LLM 失败则不覆盖该文件。
     """
 
@@ -782,7 +782,7 @@ async def pre_market(settings: SettingsDep, background_tasks: BackgroundTasks) -
     # zjl = await _last_market_fund_flow_row(f"{route} | ak.stock_market_fund_flow")
     # zqxy = await _earning_effect_pre_market(f"{route} | ak.stock_market_activity_legu")
 
-    # 从 ~/data/quant/optional.jsonl 获取自选股（每行 {"股票代码","股票名称",...}）
+    # 从 ~/.quant/optional.jsonl 获取自选股（每行 {"股票代码","股票名称",...}）
     zxg = await _enrich_ths_stock_list(
         settings,
         _zx,
@@ -792,7 +792,7 @@ async def pre_market(settings: SettingsDep, background_tasks: BackgroundTasks) -
         fund_flow_trade_days=1,
     )
 
-    # 从 ~/data/quant/holding.jsonl 获取持仓股（每行一条 JSON，含 股票代码、买入时间 等）
+    # 从 ~/.quant/holding.jsonl 获取持仓股（每行一条 JSON，含 股票代码、买入时间 等）
     ccg = await _enrich_ths_stock_list(
         settings,
         _cc,
@@ -850,7 +850,7 @@ async def during_market(settings: SettingsDep, background_tasks: BackgroundTasks
         _log_api_error(f"{route} | ths.hot_stock (no enrich)")
         thsrqg = []
 
-    # 从 ~/data/quant/optional.jsonl 获取自选股；全量盘口；每次 during_market 调用追加一根 10 分钟 K 并返回「盘中10分钟线」
+    # 从 ~/.quant/optional.jsonl 获取自选股；全量盘口；每次 during_market 调用追加一根 10 分钟 K 并返回「盘中10分钟线」
     zxg = await _enrich_ths_stock_list(
         settings,
         _zx,
@@ -860,7 +860,7 @@ async def during_market(settings: SettingsDep, background_tasks: BackgroundTasks
         fund_flow_trade_days=1,
     )
 
-    # 从 ~/data/quant/holding.jsonl 获取持仓股（同上）
+    # 从 ~/.quant/holding.jsonl 获取持仓股（同上）
     ccg = await _enrich_ths_stock_list(
         settings,
         _cc,
@@ -922,7 +922,7 @@ async def post_market(settings: SettingsDep, background_tasks: BackgroundTasks) 
         fund_flow_trade_days=3,
     )
 
-    # 从 ~/data/quant/optional.jsonl 获取自选股（每行 {"股票代码","股票名称",...}）
+    # 从 ~/.quant/optional.jsonl 获取自选股（每行 {"股票代码","股票名称",...}）
     zxg = await _enrich_ths_stock_list(
         settings,
         _zx,
@@ -931,7 +931,7 @@ async def post_market(settings: SettingsDep, background_tasks: BackgroundTasks) 
         fund_flow_trade_days=3,
     )
 
-    # 从 ~/data/quant/holding.jsonl 获取持仓股（每行一条 JSON，含 股票代码、买入时间 等）
+    # 从 ~/.quant/holding.jsonl 获取持仓股（每行一条 JSON，含 股票代码、买入时间 等）
     ccg = await _enrich_ths_stock_list(
         settings,
         _cc,
