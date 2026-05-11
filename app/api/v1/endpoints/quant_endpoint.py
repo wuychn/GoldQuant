@@ -575,7 +575,7 @@ async def _enrich_ths_stock_list(
 
 
 def _quant_data_file(name: str) -> Path:
-    return Path.home() / "data" / "quant" / name
+    return Path.home() / ".quant" / name
 
 
 def _parse_jsonl_stock_text(text: str) -> list:
@@ -698,7 +698,7 @@ async def news(settings: SettingsDep) -> Response:
     """
     全球/同花顺/财联社资讯聚合到 ``news`` 列表后，**每次请求**调用
     ``refresh_news_market_summary_sync``：使用全局 LLM（``.env`` 中 ``LLM_API_KEY`` /
-    ``LLM_BASE_URL`` / ``LLM_MODEL``，或兼容 ``GOLDQUANT_LLM_*``）生成 **500 字以内** 当日影响摘要，
+    ``LLM_BASE_URL`` / ``LLM_MODEL``，或 ``GOLDQUANT_LLM_*``）生成 **500 字以内** 当日影响摘要，
     成功则 **覆盖** 写入 ``~/.quant/news_market_impact_summary.txt``；
     未配置密钥或 LLM 失败则不覆盖该文件。
     """

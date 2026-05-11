@@ -74,7 +74,7 @@ class Settings(BaseSettings):
 
     # Uvicorn（`python -m app` 时使用）
     HOST: str = "0.0.0.0"
-    PORT: int = 8000
+    PORT: int = 8085
     UVICORN_RELOAD: bool = True
 
     # CORS：逗号分隔的源列表，或单独一个 `*` 表示全部（此时不可与凭证共用）
@@ -111,14 +111,19 @@ class Settings(BaseSettings):
     #: 盘前/盘中/盘后接口里「历史行情」日线最多返回条数（从最新往前截），减轻模型上下文；完整 K 线仍在本地归档。
     QUANT_HIST_RESPONSE_MAX_BARS: int = Field(default=48, ge=1, le=4000)
 
-    #: 全局 LLM：字段名为 ``LLM_*``；``.env`` 可直接写 ``LLM_API_KEY`` / ``LLM_BASE_URL`` / ``LLM_MODEL``（无前缀），亦可写 ``GOLDQUANT_LLM_*``（与旧习惯兼容）。``python main.py`` 与 FastAPI 共用。
+    #: 全局 LLM：字段名为 ``LLM_*``；``.env`` 可直接写 ``LLM_API_KEY`` / ``LLM_BASE_URL`` / ``LLM_MODEL``（无前缀），也可写 ``GOLDQUANT_LLM_*``。``python -m quant`` 与 FastAPI 共用。
     LLM_API_KEY: str | None = None
     LLM_BASE_URL: str = "https://api.minimaxi.com/anthropic"
     LLM_MODEL: str = "MiniMax-M2.7"
 
+    #: 飞书推送配置：可在 ``.env`` 写 ``FEISHU_*`` 或 ``GOLDQUANT_FEISHU_*``。
+    FEISHU_APP_ID: str | None = None
+    FEISHU_APP_SECRET: str | None = None
+    FEISHU_USER_ID: str | None = None
+
     @model_validator(mode="after")
-    def merge_llm_plain_env_names(self) -> Settings:
-        """兼容 ``.env`` 中无前缀的 ``LLM_*``（``env_prefix`` 无法自动映射到无前缀变量名）。"""
+    def merge_plain_env_names(self) -> Settings:
+        """读取 ``.env`` 中无前缀的集成配置（``env_prefix`` 无法自动映射）。"""
         ak = self.LLM_API_KEY
         if not ak:
             ak = _env_plain_or_prefixed("LLM_API_KEY", "GOLDQUANT_LLM_API_KEY", env_file=_ENV_FILE)
@@ -126,10 +131,28 @@ class Settings(BaseSettings):
         bu = bu_o if bu_o else self.LLM_BASE_URL
         md_o = _env_plain_or_prefixed("LLM_MODEL", "GOLDQUANT_LLM_MODEL", env_file=_ENV_FILE)
         md = md_o if md_o else self.LLM_MODEL
+        fs_app_id = self.FEISHU_APP_ID or _env_plain_or_prefixed(
+            "FEISHU_APP_ID",
+            "GOLDQUANT_FEISHU_APP_ID",
+            env_file=_ENV_FILE,
+        )
+        fs_app_secret = self.FEISHU_APP_SECRET or _env_plain_or_prefixed(
+            "FEISHU_APP_SECRET",
+            "GOLDQUANT_FEISHU_APP_SECRET",
+            env_file=_ENV_FILE,
+        )
+        fs_user_id = self.FEISHU_USER_ID or _env_plain_or_prefixed(
+            "FEISHU_USER_ID",
+            "GOLDQUANT_FEISHU_USER_ID",
+            env_file=_ENV_FILE,
+        )
         # BaseSettings 经 ``__init__`` 校验时须返回 ``self``，不可返回 ``model_copy`` 新实例（会触发 UserWarning）
         object.__setattr__(self, "LLM_API_KEY", ak)
         object.__setattr__(self, "LLM_BASE_URL", bu)
         object.__setattr__(self, "LLM_MODEL", md)
+        object.__setattr__(self, "FEISHU_APP_ID", fs_app_id)
+        object.__setattr__(self, "FEISHU_APP_SECRET", fs_app_secret)
+        object.__setattr__(self, "FEISHU_USER_ID", fs_user_id)
         return self
 
     @field_validator("CORS_ORIGINS")

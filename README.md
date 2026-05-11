@@ -1,39 +1,59 @@
-# GoldQuant Data API
+# GoldQuant
 
-面向 **OpenClaw** 等自动化决策工具的股票**热度榜**与**资讯**数据服务。服务端使用 [FastAPI](https://fastapi.tiangolo.com/)，数据层主要调用 [AKShare](https://github.com/akfamily/akshare) 及同花顺公开 JSON 接口。
+GoldQuant 是一个 A 股短线辅助决策系统，当前目标是：聚合行情与榜单数据，基于本地/实时数据生成可复现的结构化信号，并通过 LLM 生成复盘/提示文案后推送到飞书，由人工执行交易。
 
 > **说明**：本服务仅做数据聚合与转发，不构成投资建议。行情与榜单数据来自第三方网站，存在延迟、字段变更或访问失败的可能。
 
 ---
 
-## 项目结构（FastAPI 常见布局）
+## 项目结构
 
 ```text
 GoldQuant/
-├── app/
-│   ├── main.py                 # 应用入口：`create_app()` 与全局 `app` 实例
-│   ├── __main__.py             # `python -m app` 时调用 Uvicorn 真正启动服务
+├── app/                         # FastAPI 数据服务层
+│   ├── main.py                  # `create_app()` 与全局 `app` 实例
+│   ├── __main__.py              # `python -m app` 启动 Uvicorn
 │   ├── api/
-│   │   ├── deps.py             # 依赖注入（如 `SettingsDep`）
+│   │   ├── deps.py              # 依赖注入
 │   │   └── v1/
-│   │       ├── router.py       # 聚合 v1 子路由
-│   │       └── endpoints/
-│   │           ├── stock_eastmoney.py  # 东财（行情、热度、资讯等）
-│   │           ├── stock_sina.py         # 新浪
-│   │           ├── stock_ths.py        # 同花顺（行业、热榜直连）
-│   │           └── eastmoney_config.py # 管理端：东财请求头
+│   │       ├── router.py        # 聚合 v1 路由
+│   │       └── endpoints/       # 行情、资金、板块、新闻、量化聚合接口
 │   ├── core/
-│   │   ├── config.py         # `pydantic-settings`：环境变量与 `.env`
-│   │   └── proxy.py          # 出站代理：写入进程 HTTP(S)_PROXY
-│   └── utils/
-│       └── dataframe.py      # DataFrame → JSON 行列表
-├── .env.example                # 配置项说明模板（复制为 `.env` 使用）
-├── run.ps1                     # Windows：一键调用 `python -m app`（需在项目根目录）
-├── run.sh                      # Linux：./run.sh start|stop|restart（PID: goldquant.pid）
-├── pyproject.toml              # 包元数据与依赖声明（可 `pip install -e .`）
-├── requirements.txt            # 与 pyproject 依赖对齐，便于传统 `pip install -r`
+│   │   ├── config.py            # `pydantic-settings` 配置与 `.env`
+│   │   └── proxy.py             # 出站代理配置
+│   └── utils/                   # 数据清洗、归档、东财/同花顺工具
+├── quant/                       # 辅助决策与量化规则层
+│   ├── __main__.py              # `python -m quant` 统一入口
+│   ├── cli.py                   # run / signal / replay 命令
+│   ├── pipeline.py              # 完整辅助决策流水线：取数、LLM、状态更新、飞书
+│   ├── data_source.py           # local/remote 数据源加载
+│   ├── llm.py                   # LLM 客户端
+│   ├── feishu.py                # 飞书推送
+│   ├── state_update.py          # 分析结果解析与状态更新边界
+│   ├── config.py                # `quant/strategy.json` 读取
+│   ├── features.py              # 特征提取
+│   ├── market_state.py          # 市场状态判断
+│   ├── signals.py               # 结构化信号生成
+│   ├── replay.py                # 本地样例回放
+│   ├── rules/                   # 涨停板、龙回头、风控规则
+│   ├── data/                    # 本地样例数据
+│   ├── strategy.md              # 人类可读策略说明
+│   └── strategy.json            # 机器可读策略配置
+├── run.sh                       # Linux 后台启动 FastAPI 数据服务
+├── pyproject.toml               # 包元数据、依赖与 `goldquant` 命令
+├── requirements.txt             # 传统依赖安装入口
 └── README.md
 ```
+
+---
+
+## 职责分层
+
+`app/` 只负责数据服务。它通过 FastAPI 聚合 AKShare、东方财富、同花顺等公开数据源，并提供 `/api/v1/...` HTTP 接口。实时模式下，`quant` 会调用这些接口取数。
+
+`quant/` 负责辅助决策。它读取本地样例或实时 API 数据，执行确定性规则、生成结构化信号，必要时调用 LLM 生成复盘/提示文案，最后更新 `~/.quant` 状态文件并推送飞书。
+
+`~/.quant` 是运行态目录，存放自选、持仓、资金、止损、信号与复盘归档；`quant/data` 是仓库内的本地样例数据，不应当写入运行状态。
 
 ---
 
@@ -42,6 +62,7 @@ GoldQuant/
 - 配置类位于 `app/core/config.py`，通过 **`pydantic-settings`** 读取环境变量，**前缀为 `GOLDQUANT_`**（例如 `GOLDQUANT_ENV`）。
 - 项目根目录下的 **`.env`** 使用**固定绝对路径**加载（相对 `app/core/config.py` 解析），与从哪个目录启动无关；勿提交仓库（已列入 `.gitignore`），字段说明见 **`.env.example`**。
 - 常用项：`GOLDQUANT_CORS_ORIGINS`（跨域源，`*` 或逗号分隔）、`GOLDQUANT_HTTP_CLIENT_TIMEOUT`、`GOLDQUANT_THS_DEFAULT_USER_AGENT` 等。
+- LLM 与飞书凭据通过 `.env` 配置：`LLM_API_KEY`、`LLM_BASE_URL`、`LLM_MODEL`、`FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`FEISHU_USER_ID`。也可使用对应的 `GOLDQUANT_` 前缀变量。
 - **出站代理**：`GOLDQUANT_PROXY_ENABLED`、`GOLDQUANT_PROXY_URL`（或分别设置 `GOLDQUANT_PROXY_HTTP_URL` / `GOLDQUANT_PROXY_HTTPS_URL`）、`GOLDQUANT_PROXY_NO_PROXY`。开启后会在进程内设置 `HTTP_PROXY`/`HTTPS_PROXY`，AKShare 与本服务中的 httpx 请求均会走代理。
 
 ---
@@ -80,7 +101,7 @@ copy .env.example .env
 
 ---
 
-## 启动服务
+## 启动数据服务
 
 **必须在项目根目录 `GoldQuant` 下执行**（保证能 `import app`），并已激活 venv。
 
@@ -91,10 +112,7 @@ copy .env.example .env
 python -m app
 
 # 方式 B：与官方文档一致的 Uvicorn 命令行
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-
-# 方式 C：Windows 下可双击或在项目根执行根目录的 run.ps1
-.\run.ps1
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8085
 ```
 
 **Linux 后台启动 / 停止 / 重启**（项目根目录 `run.sh`，使用 `nohup`，**无热重载**，适合服务器常驻）：
@@ -106,15 +124,15 @@ chmod +x run.sh
 ./run.sh restart  # 先 stop（若曾用本脚本启动），再 start
 ```
 
-首次使用前需已创建 `.venv` 并安装依赖。若存在 `.env`，启动前会 `source` 以读取 `GOLDQUANT_HOST`、`GOLDQUANT_PORT` 等变量（默认 `0.0.0.0:8000`）。
+首次使用前需已创建 `.venv` 并安装依赖。若存在 `.env`，启动前会读取 `GOLDQUANT_HOST`、`GOLDQUANT_PORT` 等变量（默认 `0.0.0.0:8085`）。
 
-- 交互式 API 文档：<http://127.0.0.1:8000/docs>
-- OpenAPI JSON：<http://127.0.0.1:8000/openapi.json>
-- 健康检查：<http://127.0.0.1:8000/health>
+- 交互式 API 文档：<http://127.0.0.1:8085/docs>
+- OpenAPI JSON：<http://127.0.0.1:8085/openapi.json>
+- 健康检查：<http://127.0.0.1:8085/health>
 
 ### 启动后立刻退出、且几乎没有输出？
 
-常见原因是 **只运行了 `main.py` 文件**（例如在资源管理器中双击 `main.py`，或在 IDE 里用「运行当前文件」打开 `app/main.py`）。该文件只**定义** FastAPI 应用对象，**不会**调用 Uvicorn，进程会正常结束（退出码 0），看起来像「闪退」。
+常见原因是 **只运行了 `app/main.py` 文件**（例如在 IDE 里用「运行当前文件」打开 `app/main.py`）。该文件只**定义** FastAPI 应用对象，**不会**调用 Uvicorn，进程会正常结束（退出码 0），看起来像「闪退」。
 
 请改用上面的 **`python -m app`** 或 **`uvicorn app.main:app ...`**，并确认**工作目录**为项目根目录。若仍异常，在 PowerShell 中执行 `cd d:\workspace\GoldQuant`（换成你的路径）后再启动。
 
@@ -123,8 +141,145 @@ chmod +x run.sh
 ### `.env` 里配置了 `GOLDQUANT_PORT` 仍不生效？
 
 1. **配置加载位置**：应用已从「项目根目录」下的 `.env` **绝对路径**读取（不依赖当前工作目录）。请确认 `.env` 与 `app` 文件夹同级，且变量名为 **`GOLDQUANT_PORT=8085`**（不要写成 `PORT=` 单独一项，除非带前缀约定）。
-2. **启动方式**：只有 **`python -m app`**、**`run.ps1`**、**`run.sh start`** 会使用 `Settings` 里的端口。若使用命令行 **`uvicorn app.main:app`** 且**未**指定 `--port`，监听端口由 **Uvicorn 默认 8000** 决定，**不会**读取 `.env` 中的 `GOLDQUANT_PORT`。请改用 `python -m app`，或显式：`uvicorn app.main:app --host 0.0.0.0 --port 8085`。
+2. **启动方式**：只有 **`python -m app`**、**`run.sh start`** 会使用 `Settings` 里的端口。若使用命令行 **`uvicorn app.main:app`** 且**未**指定 `--port`，监听端口由 **Uvicorn 默认 8085** 决定，**不会**读取 `.env` 中的 `GOLDQUANT_PORT`。请改用 `python -m app`，或显式：`uvicorn app.main:app --host 0.0.0.0 --port 8085`。
 3. 修改 `.env` 后需**重启进程**；若曾启动过，`get_settings()` 有缓存，同一进程内不会自动刷新。
+
+---
+
+## 辅助决策运行方式
+
+推荐使用统一入口：
+
+```powershell
+python -m quant <command> [options]
+# 或更短：
+goldquant <command> [options]
+```
+
+如果没有安装可编辑包，也可以使用完整模块名：
+
+```powershell
+python -m quant.cli <command> [options]
+```
+
+统一入口包含三类命令：
+
+| 命令 | 用途 |
+|---|---|
+| `run` | 完整辅助决策链路：取数、LLM 分析、更新自选/持仓状态并推送飞书 |
+| `signal` | 从本地或实时数据生成确定性结构化信号，不调用 LLM，不推送飞书 |
+| `replay` | 按 `--mode` 回放 `quant/data/<mode>`，生成确定性结构化信号并可写入文件 |
+
+### 使用本地样例数据
+
+本地样例适合调试 prompt、解析、自选/持仓更新和规则引擎复现，不依赖实时接口。
+
+```powershell
+cd d:\workspace\GoldQuant
+
+# 默认 source=remote；本地数据用 source=local，读取 quant/data/<mode>
+python -m quant run --mode post_market_evening --source local
+
+# 盘前 / 盘中 / 午间本地样例
+python -m quant run --mode pre_market --source local
+python -m quant run --mode during_market --source local
+python -m quant run --mode post_market_lunch --source local
+```
+
+本地样例路径默认规则为：
+
+```text
+quant/data/<mode>
+```
+
+机器可读策略配置默认位于：
+
+```text
+quant/strategy.json
+```
+
+其中 `mode` 可选：
+
+```text
+news
+pre_market
+during_market
+post_market_lunch
+post_market_evening
+```
+
+也可以只运行确定性规则引擎，不走 LLM 和飞书：
+
+```powershell
+python -m quant replay --mode post_market_evening
+python -m quant replay --mode pre_market
+python -m quant replay --mode during_market
+```
+
+`replay` 会在终端打印结构化信号，并默认写入：
+
+```text
+~/.quant/signals/<时间>-<mode>-signals.json
+```
+
+如需指定输出文件：
+
+```powershell
+python -m quant replay --mode post_market_evening --output result_signals.json
+```
+
+### 使用实时数据
+
+实时模式需要先启动 FastAPI 服务，再由统一入口调用本地 API 聚合实时数据。
+
+终端一：启动 API。
+
+```powershell
+cd d:\workspace\GoldQuant
+python -m app
+```
+
+终端二：运行辅助决策。
+
+```powershell
+cd d:\workspace\GoldQuant
+
+# 如果 API 使用默认 8085 端口
+python -m quant run --mode pre_market --source remote --base-url http://127.0.0.1:8085
+python -m quant run --mode during_market --source remote --base-url http://127.0.0.1:8085
+python -m quant run --mode post_market_lunch --source remote --base-url http://127.0.0.1:8085
+python -m quant run --mode post_market_evening --source remote --base-url http://127.0.0.1:8085
+
+# 如果 .env 配置为 GOLDQUANT_PORT=8085
+python -m quant run --mode during_market --source remote --base-url http://127.0.0.1:8085
+```
+
+也可以用环境变量固定默认数据源和 API 地址：
+
+```powershell
+$env:GOLDQUANT_DATA_SOURCE="remote"
+$env:GOLDQUANT_BASE_URL="http://127.0.0.1:8085"
+
+python -m quant run --mode during_market
+```
+
+实时接口对应关系：
+
+| 运行模式 | 实时 API |
+|---|---|
+| `news` | `/api/v1/quant/market/news` |
+| `pre_market` | `/api/v1/quant/market/pre_market` |
+| `during_market` | `/api/v1/quant/market/during_market` |
+| `post_market_lunch` | `/api/v1/quant/market/post_market` |
+| `post_market_evening` | `/api/v1/quant/market/post_market` |
+
+量化状态文件统一保存在：
+
+```text
+~/.quant
+```
+
+主要包括 `optional.jsonl`、`holding.jsonl`、`stoploss.jsonl`、`fund.md`、`signals/` 等。
 
 ---
 
@@ -213,10 +368,10 @@ HTTP **502** 通常表示上游抓取失败或返回异常，响应体中的 `de
 
 ```powershell
 # 健康检查
-curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8085/health
 
 # 东财人气榜（需服务已启动且网络正常）
-curl http://127.0.0.1:8000/api/v1/hot/eastmoney/popularity
+curl http://127.0.0.1:8085/api/v1/hot/eastmoney/popularity
 ```
 
 亦可在 Python 中使用 `fastapi.testclient.TestClient` 做无端口集成测试。

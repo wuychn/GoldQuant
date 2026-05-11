@@ -39,7 +39,7 @@ def quant_archive_base(settings: Settings) -> Path:
     raw = (settings.QUANT_ARCHIVE_DIR or "").strip()
     if raw:
         return Path(raw).expanduser().resolve()
-    return Path.home() / "data" / "quant" / "archive"
+    return Path.home() / ".quant" / "archive"
 
 
 def normalized_full_start_date(settings: Settings) -> str:

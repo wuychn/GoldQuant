@@ -15,28 +15,34 @@ import json
 import os
 import re
 import sys
-import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
+
+import requests
 
 # 禁用代理
 for k in list(os.environ.keys()):
     if 'proxy' in k.lower():
         del os.environ[k]
 
-import requests
-
-from app.core.config import get_settings
+from quant.data_source import (
+    DEFAULT_BASE_URL,
+    VALID_MODES,
+    default_base_url,
+    default_data_source,
+    load_mode_data,
+)
+from quant.feishu import send_text
+from quant.llm import DEFAULT_OUTPUT_FORMAT, call_llm, parallel_workers
+from quant.state_update import apply_analysis_updates
 
 _PROJECT_ROOT = Path(__file__).resolve().parent
+FIXTURE_ROOT = _PROJECT_ROOT / "data"
 STRATEGY_FILE = _PROJECT_ROOT / "strategy.md"
 
-BASE_URL = "http://localhost:8085"
-FEISHU_APP_ID = "cli_a96dcfa5d3f91bd4"
-FEISHU_APP_SECRET = "eXhbDo1Ldh4sMGkBjVUjdhAiiBFZ6ld6"
-FEISHU_USER_ID = "ou_bc3cefb641bbc53148de964a637d8cfd"
+BASE_URL = DEFAULT_BASE_URL
 
 DATA_DIR = os.path.expanduser("~/.quant")
 FUND_FILE = f"{DATA_DIR}/fund.md"
@@ -50,17 +56,14 @@ NEWS_IMPACT_SUMMARY_FILE = f"{DATA_DIR}/news_market_impact_summary.txt"
 
 OPTIONAL_STRATEGY_ALLOWED = frozenset({"涨停板战法", "龙回头战法"})
 
-LLM_OUTPUT_FORMAT = "\n【输出格式要求】纯文本，禁止使用 markdown 的 #、*、- 等排版符号。\n"
+LLM_OUTPUT_FORMAT = DEFAULT_OUTPUT_FORMAT
 
-_LLM_PARALLEL_WORKERS = max(2, min(8, (os.cpu_count() or 4)))
+_LLM_PARALLEL_WORKERS = parallel_workers()
 
 MEMORY_FILE = f"{DATA_DIR}/MEMORY.md"
 MEMORY_MAX_INJECT_CHARS = 2000
 MEMORY_COMPRESS_THRESHOLD_ENTRIES = 30
 MEMORY_COMPRESS_THRESHOLD_CHARS = 3000
-
-_RE_THINKING = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL)
-
 
 def _persona(fund: float | None = None) -> str:
     f = fund if fund is not None else get_fund()
@@ -94,89 +97,8 @@ def _unwrap_payload(raw: dict) -> dict:
 
 
 # =====================================================================
-# 3. FEISHU
+# 3. LLM ENGINE
 # =====================================================================
-def get_token() -> str:
-    url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
-    resp = requests.post(url, json={"app_id": FEISHU_APP_ID, "app_secret": FEISHU_APP_SECRET}, timeout=10)
-    resp.raise_for_status()
-    result = resp.json()
-    if result.get("code") != 0:
-        raise Exception("获取token失败")
-    return result["tenant_access_token"]
-
-
-def send_msg(content: str, token: str):
-    url = "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=open_id"
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    data = {"receive_id": FEISHU_USER_ID, "msg_type": "text", "content": json.dumps({"text": content})}
-    resp = requests.post(url, headers=headers, json=data, timeout=600)
-    resp.raise_for_status()
-    result = resp.json()
-    if result.get("code") != 0:
-        raise Exception(f"发送失败: {result}")
-
-
-# =====================================================================
-# 4. LLM ENGINE
-# =====================================================================
-def call_llm(
-    system: str,
-    user: str,
-    max_tokens: int = 16000,
-    retries: int = 3,
-    *,
-    temperature: float | None = None,
-) -> str:
-    cfg = get_settings()
-    api_key = (cfg.LLM_API_KEY or "").strip()
-    if not api_key:
-        raise RuntimeError("未配置 LLM_API_KEY，请在 .env 中设置")
-    base = cfg.LLM_BASE_URL.rstrip("/")
-    url = f"{base}/v1/messages"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "x-api-key": api_key,
-        "anthropic-version": "2023-06-01",
-    }
-    temp = 0.3 if temperature is None else float(temperature)
-    payload = {
-        "model": cfg.LLM_MODEL,
-        "messages": [{"role": "user", "content": f"{system}\n\n{user}"}],
-        "max_tokens": max_tokens,
-        "temperature": temp,
-    }
-    for attempt in range(retries):
-        try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=600)
-            if resp.status_code == 529:
-                print(f"LLM限流，重试({attempt+1}/{retries})...")
-                time.sleep(5)
-                continue
-            resp.raise_for_status()
-            result = resp.json()
-            # 提取 text 类型的 content block
-            for c in result.get("content", []):
-                if c.get("type") == "text":
-                    text = _RE_THINKING.sub("", c["text"]).strip()
-                    if text:
-                        return text
-            # 没有 text block：thinking 占满了 max_tokens 或模型异常
-            stop = result.get("stop_reason", "")
-            if attempt < retries - 1:
-                print(f"LLM输出无文本(stop_reason={stop})，重试({attempt+1}/{retries})...")
-                time.sleep(3)
-                continue
-            print(f"LLM响应无text内容 stop_reason={stop} model={cfg.LLM_MODEL}")
-            raise Exception(f"LLM响应无有效文本(stop_reason={stop})")
-        except requests.exceptions.RequestException as e:
-            print(f"LLM请求异常: {e}")
-            if attempt < retries - 1:
-                time.sleep(5)
-    raise Exception("LLM调用失败")
-
-
 def _parallel_call(*fns: Callable[[], str]) -> list[str]:
     if not fns:
         return []
@@ -189,26 +111,9 @@ def _parallel_call(*fns: Callable[[], str]) -> list[str]:
 # =====================================================================
 # 5. DATA FETCH
 # =====================================================================
-def fetch_data(endpoint: str) -> dict:
-    resp = requests.get(f"{BASE_URL}{endpoint}", timeout=600)
-    resp.raise_for_status()
-    return resp.json()
-
-
-def fetch_news():
-    return fetch_data("/api/v1/quant/market/news")
-
-
-def fetch_pre_market():
-    return fetch_data("/api/v1/quant/market/pre_market")
-
-
-def fetch_during_market():
-    return fetch_data("/api/v1/quant/market/during_market")
-
-
-def fetch_post_market():
-    return fetch_data("/api/v1/quant/market/post_market")
+# Data loading lives in ``quant.data_source``. This section is intentionally
+# kept as a marker because the rest of the legacy file still uses numbered
+# sections while it is being migrated into the ``quant`` package.
 
 
 # =====================================================================
@@ -1866,12 +1771,15 @@ def _format_push_message(label: str, timestamp: str, body: str, mode: str) -> st
 # =====================================================================
 # 15. MAIN
 # =====================================================================
-def main():
-    if len(sys.argv) < 2:
-        print("用法: python main.py <news|pre_market|during_market|post_market_lunch|post_market_evening>")
-        sys.exit(1)
-
-    mode = sys.argv[1]
+def run(
+    mode: str,
+    *,
+    source: str | None = None,
+    base_url: str | None = None,
+) -> None:
+    global BASE_URL
+    BASE_URL = str(base_url or default_base_url()).rstrip("/")
+    data_source = source or default_data_source()
     now = datetime.now()
     timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -1889,22 +1797,21 @@ def main():
         print("今日非交易日，跳过")
         # return
 
-    fetch_map = {
-        "news": fetch_news,
-        "pre_market": fetch_pre_market,
-        "during_market": fetch_during_market,
-        "post_market_lunch": fetch_post_market,
-        "post_market_evening": fetch_post_market,
-    }
-    if mode not in fetch_map:
+    if mode not in VALID_MODES:
         print(f"未知模式: {mode}")
         sys.exit(1)
 
     try:
-        # 真实数据获取（勿删）
-        # data = fetch_map[mode]()
-        # 测试，直接读文件获取数据（勿删） TODO
-        data = json.loads(_read_user_text(_PROJECT_ROOT / 'data' / mode))
+        if data_source == "remote":
+            print(f"使用实时数据源: {BASE_URL}")
+        else:
+            print(f"使用本地样例数据: {FIXTURE_ROOT / mode}")
+        data = load_mode_data(
+            mode,
+            source=data_source,
+            project_root=FIXTURE_ROOT,
+            base_url=BASE_URL,
+        )
         print("数据拉取成功")
     except Exception as e:
         print(f"数据拉取失败: {e}")
@@ -1937,26 +1844,19 @@ def main():
 
     feishu_content = analysis
     try:
-        pu = parse_and_update(
+        update = apply_analysis_updates(
             analysis,
-            mode,
+            mode=mode,
             market_payload=_unwrap_payload(data)
             if mode in ("post_market_lunch", "post_market_evening")
             else None,
         )
-        feishu_content = replace_json_for_feishu(
-            analysis,
-            optional_span=pu["optional_span"],
-            optional_lines=pu["optional_lines"],
-            holdings_span=pu["holdings_span"],
-            holdings_lines=pu["holdings_lines"],
-        )
+        feishu_content = update.content_for_push
     except Exception as e:
         print(f"解析更新失败: {e}")
 
     try:
-        token = get_token()
-        send_msg(feishu_content, token)
+        send_text(feishu_content)
         print("飞书推送成功")
     except Exception as e:
         print(f"飞书推送失败: {e}")
@@ -1965,6 +1865,13 @@ def main():
     out_show = feishu_content
     print(out_show[:2000] if len(out_show) > 2000 else out_show)
     print("=" * 60)
+
+
+def main():
+    from quant.cli import parse_run_args
+
+    args = parse_run_args(sys.argv[1:])
+    run(args.mode, source=args.source, base_url=args.base_url)
 
 
 if __name__ == "__main__":

@@ -17,7 +17,7 @@ _MAX_CHARS = 1000
 
 
 def news_market_summary_path() -> Path:
-    return Path.home() / "data" / "quant" / _SUMMARY_FILENAME
+    return Path.home() / ".quant" / _SUMMARY_FILENAME
 
 
 def _truncate_zh(text: str, max_chars: int) -> str:
