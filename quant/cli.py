@@ -34,7 +34,7 @@ def add_run_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def parse_run_args(argv: Sequence[str]) -> argparse.Namespace:
+def parse_run_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="A股短线辅助决策：支持本地 local 与实时 remote 两种数据源。",
     )
@@ -46,7 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="GoldQuant 统一命令入口。")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    run_parser = sub.add_parser("run", help="运行完整辅助决策链路：取数、LLM 分析、状态更新、飞书推送。")
+    run_parser = sub.add_parser("run", help="运行规则引擎链路：取数、生成信号、状态更新、飞书推送。")
     add_run_arguments(run_parser)
 
     signal_parser = sub.add_parser("signal", help="读取 local/remote 数据并生成确定性结构化信号。")

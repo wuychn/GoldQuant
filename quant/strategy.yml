@@ -1,0 +1,63 @@
+# 策略配置版本。用于回测、复盘和信号归档时识别当前参数组合。
+version: v1
+
+# 股票池过滤规则：先决定哪些股票允许进入后续战法判断。
+universe:
+  # 允许的股票代码前缀；当前覆盖沪市主板、深市主板、创业板。
+  include_prefixes: ["60", "00", "30"]
+  # 排除的股票代码前缀；当前排除科创板和北交所。
+  exclude_prefixes: ["688", "8"]
+  # 是否排除 ST / *ST 标的。
+  exclude_st: true
+  # 最短上市天数；低于该天数的新股不进入候选池。
+  min_listing_days: 60
+
+# 全局风控规则：所有战法共享。
+risk:
+  # 最大持仓天数，超过后应进入卖出或复盘检查。
+  max_holding_days: 5
+  # 止损后冷却天数；冷却期内同一标的不再买入。
+  stoploss_cooldown_days: 3
+  # 弱势市场是否禁止新开仓。
+  weak_market_disable_new_buy: true
+  # 单票最大仓位占比。
+  max_single_position_pct: 0.1
+
+# 市场状态机参数：决定强势、震荡、弱势的判断和仓位上限。
+market_state:
+  # 强势市场总仓位上限。
+  strong_position_limit: 0.8
+  # 震荡市场总仓位上限。
+  neutral_position_limit: 0.5
+  # 弱势市场总仓位上限。
+  weak_position_limit: 0.2
+  # 至少多少个同方向投票才确认市场状态。
+  min_same_direction_votes: 3
+
+# 涨停板战法参数：用于强势连板接力候选筛选。
+zt_strategy:
+  # 是否启用涨停板战法。
+  enabled: true
+  # 最大流通市值，单位：亿元。
+  max_float_market_cap_yi: 200
+  # 最大股价，单位：元。
+  max_price: 20
+  # 最大人气排名，排名越小代表热度越高。
+  max_popularity_rank: 20
+  # 最小连板数；低于该值不视为连板接力候选。
+  min_consecutive_limit_up: 2
+  # 生成信号所需最低评分。
+  min_score_to_signal: 70
+
+# 龙回头战法参数：用于强势股回调后再上攻的候选筛选。
+lht_strategy:
+  # 是否启用龙回头战法。
+  enabled: true
+  # 最大人气排名。
+  max_popularity_rank: 50
+  # 从近阶段高点回撤的最低幅度，单位：百分比。
+  min_pullback_pct: 10
+  # 最小量比；缺失时不强制否决。
+  min_volume_ratio: 1.2
+  # 生成信号所需最低评分。
+  min_score_to_signal: 70

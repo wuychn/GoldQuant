@@ -1,19 +1,19 @@
 """Strategy configuration loading.
 
-The initial format is JSON to avoid adding runtime dependencies. The dataclass
-layout keeps the rules stable if the file later moves to YAML.
+The strategy file uses a small YAML subset so it can carry comments without
+adding a runtime dependency. Supported values: strings, booleans, numbers,
+inline arrays, and one-level nested dictionaries.
 """
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
-DEFAULT_STRATEGY_CONFIG = PACKAGE_ROOT / "strategy.json"
+DEFAULT_STRATEGY_CONFIG = PACKAGE_ROOT / "strategy.yml"
 
 
 @dataclass(frozen=True)
@@ -77,10 +77,68 @@ def _tuple(value: Any, default: tuple[str, ...]) -> tuple[str, ...]:
     return default
 
 
-def _load_json(path: Path) -> dict[str, Any]:
+def _strip_inline_comment(line: str) -> str:
+    in_single = False
+    in_double = False
+    for idx, ch in enumerate(line):
+        if ch == "'" and not in_double:
+            in_single = not in_single
+        elif ch == '"' and not in_single:
+            in_double = not in_double
+        elif ch == "#" and not in_single and not in_double:
+            return line[:idx].rstrip()
+    return line.rstrip()
+
+
+def _parse_scalar(raw: str) -> Any:
+    text = raw.strip()
+    if text == "":
+        return ""
+    if text in {"true", "True"}:
+        return True
+    if text in {"false", "False"}:
+        return False
+    if text.startswith("[") and text.endswith("]"):
+        inner = text[1:-1].strip()
+        if not inner:
+            return []
+        return [_parse_scalar(part.strip()) for part in inner.split(",")]
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
+        return text[1:-1]
+    try:
+        if "." in text:
+            return float(text)
+        return int(text)
+    except ValueError:
+        return text
+
+
+def _load_strategy_file(path: Path) -> dict[str, Any]:
+    root: dict[str, Any] = {}
+    current_section: dict[str, Any] | None = None
     with path.open("r", encoding="utf-8") as f:
-        data = json.load(f)
-    return data if isinstance(data, dict) else {}
+        for raw_line in f:
+            if not raw_line.strip() or raw_line.lstrip().startswith("#"):
+                continue
+            line = _strip_inline_comment(raw_line.rstrip("\n"))
+            if not line.strip():
+                continue
+            indent = len(line) - len(line.lstrip(" "))
+            key, sep, value = line.strip().partition(":")
+            if not sep:
+                continue
+            key = key.strip()
+            value = value.strip()
+            if indent == 0 and value == "":
+                section: dict[str, Any] = {}
+                root[key] = section
+                current_section = section
+            elif indent == 0:
+                root[key] = _parse_scalar(value)
+                current_section = None
+            elif current_section is not None:
+                current_section[key] = _parse_scalar(value)
+    return root
 
 
 def strategy_config_from_dict(raw: dict[str, Any] | None) -> StrategyConfig:
@@ -112,4 +170,4 @@ def load_strategy_config(path: str | Path | None = None) -> StrategyConfig:
     cfg_path = Path(path)
     if not cfg_path.is_file():
         return StrategyConfig()
-    return strategy_config_from_dict(_load_json(cfg_path))
+    return strategy_config_from_dict(_load_strategy_file(cfg_path))

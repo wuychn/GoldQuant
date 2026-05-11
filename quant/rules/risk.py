@@ -73,3 +73,16 @@ def checks_passed(checks: list[RuleCheck]) -> bool:
 
 def failed_reasons(checks: list[RuleCheck]) -> list[str]:
     return [f"{check.name}未通过：{check.detail}，当前={check.value}" for check in checks if not check.passed]
+
+
+def summarize_failed_checks(checks: list[RuleCheck], *, limit: int = 3) -> str:
+    counts: dict[str, int] = {}
+    details: dict[str, str] = {}
+    for check in checks:
+        if check.passed:
+            continue
+        key = check.name
+        counts[key] = counts.get(key, 0) + 1
+        details.setdefault(key, check.detail)
+    ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:limit]
+    return "；".join(f"{name} {count}只（{details[name]}）" for name, count in ranked)

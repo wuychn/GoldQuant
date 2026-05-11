@@ -55,6 +55,7 @@ class SignalReport:
     market_state: MarketState
     signals: list[StockSignal]
     risk_flags: list[str] = field(default_factory=list)
+    no_signal_reasons: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

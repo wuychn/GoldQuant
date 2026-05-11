@@ -1,6 +1,6 @@
 # GoldQuant
 
-GoldQuant 是一个 A 股短线辅助决策系统，当前目标是：聚合行情与榜单数据，基于本地/实时数据生成可复现的结构化信号，并通过 LLM 生成复盘/提示文案后推送到飞书，由人工执行交易。
+GoldQuant 是一个 A 股短线辅助决策系统，当前目标是：聚合行情与榜单数据，使用确定性规则引擎生成可复现的结构化信号，并推送到飞书，由人工执行交易。
 
 > **说明**：本服务仅做数据聚合与转发，不构成投资建议。行情与榜单数据来自第三方网站，存在延迟、字段变更或访问失败的可能。
 
@@ -25,12 +25,10 @@ GoldQuant/
 ├── quant/                       # 辅助决策与量化规则层
 │   ├── __main__.py              # `python -m quant` 统一入口
 │   ├── cli.py                   # run / signal / replay 命令
-│   ├── pipeline.py              # 完整辅助决策流水线：取数、LLM、状态更新、飞书
+│   ├── pipeline.py              # 规则引擎流水线：取数、信号、状态更新、飞书
 │   ├── data_source.py           # local/remote 数据源加载
-│   ├── llm.py                   # LLM 客户端
 │   ├── feishu.py                # 飞书推送
-│   ├── state_update.py          # 分析结果解析与状态更新边界
-│   ├── config.py                # `quant/strategy.json` 读取
+│   ├── config.py                # `quant/strategy.yml` 读取
 │   ├── features.py              # 特征提取
 │   ├── market_state.py          # 市场状态判断
 │   ├── signals.py               # 结构化信号生成
@@ -38,7 +36,7 @@ GoldQuant/
 │   ├── rules/                   # 涨停板、龙回头、风控规则
 │   ├── data/                    # 本地样例数据
 │   ├── strategy.md              # 人类可读策略说明
-│   └── strategy.json            # 机器可读策略配置
+│   └── strategy.yml             # 机器可读策略配置，含参数注释
 ├── run.sh                       # Linux 后台启动 FastAPI 数据服务
 ├── pyproject.toml               # 包元数据、依赖与 `goldquant` 命令
 ├── requirements.txt             # 传统依赖安装入口
@@ -51,7 +49,7 @@ GoldQuant/
 
 `app/` 只负责数据服务。它通过 FastAPI 聚合 AKShare、东方财富、同花顺等公开数据源，并提供 `/api/v1/...` HTTP 接口。实时模式下，`quant` 会调用这些接口取数。
 
-`quant/` 负责辅助决策。它读取本地样例或实时 API 数据，执行确定性规则、生成结构化信号，必要时调用 LLM 生成复盘/提示文案，最后更新 `~/.quant` 状态文件并推送飞书。
+`quant/` 负责辅助决策。它读取本地样例或实时 API 数据，执行确定性规则、生成结构化信号，最后更新 `~/.quant` 状态文件并推送飞书。
 
 `~/.quant` 是运行态目录，存放自选、持仓、资金、止损、信号与复盘归档；`quant/data` 是仓库内的本地样例数据，不应当写入运行状态。
 
@@ -62,7 +60,7 @@ GoldQuant/
 - 配置类位于 `app/core/config.py`，通过 **`pydantic-settings`** 读取环境变量，**前缀为 `GOLDQUANT_`**（例如 `GOLDQUANT_ENV`）。
 - 项目根目录下的 **`.env`** 使用**固定绝对路径**加载（相对 `app/core/config.py` 解析），与从哪个目录启动无关；勿提交仓库（已列入 `.gitignore`），字段说明见 **`.env.example`**。
 - 常用项：`GOLDQUANT_CORS_ORIGINS`（跨域源，`*` 或逗号分隔）、`GOLDQUANT_HTTP_CLIENT_TIMEOUT`、`GOLDQUANT_THS_DEFAULT_USER_AGENT` 等。
-- LLM 与飞书凭据通过 `.env` 配置：`LLM_API_KEY`、`LLM_BASE_URL`、`LLM_MODEL`、`FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`FEISHU_USER_ID`。也可使用对应的 `GOLDQUANT_` 前缀变量。
+- 飞书凭据通过 `.env` 配置：`FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`FEISHU_USER_ID`。也可使用对应的 `GOLDQUANT_` 前缀变量。
 - **出站代理**：`GOLDQUANT_PROXY_ENABLED`、`GOLDQUANT_PROXY_URL`（或分别设置 `GOLDQUANT_PROXY_HTTP_URL` / `GOLDQUANT_PROXY_HTTPS_URL`）、`GOLDQUANT_PROXY_NO_PROXY`。开启后会在进程内设置 `HTTP_PROXY`/`HTTPS_PROXY`，AKShare 与本服务中的 httpx 请求均会走代理。
 
 ---
@@ -166,13 +164,13 @@ python -m quant.cli <command> [options]
 
 | 命令 | 用途 |
 |---|---|
-| `run` | 完整辅助决策链路：取数、LLM 分析、更新自选/持仓状态并推送飞书 |
-| `signal` | 从本地或实时数据生成确定性结构化信号，不调用 LLM，不推送飞书 |
+| `run` | 规则引擎链路：取数、生成确定性信号、更新自选状态并推送飞书 |
+| `signal` | 从本地或实时数据生成确定性结构化信号，不推送飞书 |
 | `replay` | 按 `--mode` 回放 `quant/data/<mode>`，生成确定性结构化信号并可写入文件 |
 
 ### 使用本地样例数据
 
-本地样例适合调试 prompt、解析、自选/持仓更新和规则引擎复现，不依赖实时接口。
+本地样例适合调试规则参数、自选状态更新和规则引擎复现，不依赖实时接口。
 
 ```powershell
 cd d:\workspace\GoldQuant
@@ -195,7 +193,7 @@ quant/data/<mode>
 机器可读策略配置默认位于：
 
 ```text
-quant/strategy.json
+quant/strategy.yml
 ```
 
 其中 `mode` 可选：
@@ -208,7 +206,7 @@ post_market_lunch
 post_market_evening
 ```
 
-也可以只运行确定性规则引擎，不走 LLM 和飞书：
+也可以只生成结构化信号，不更新状态、不推送飞书：
 
 ```powershell
 python -m quant replay --mode post_market_evening
@@ -357,7 +355,7 @@ HTTP **502** 通常表示上游抓取失败或返回异常，响应体中的 `de
 
 ## 与 OpenClaw 集成思路
 
-将本服务作为本地或内网 HTTP 服务启动后，在 OpenClaw（或任意自动化流程）中通过 `GET` 请求上述路径拉取 JSON，再进入你的规则引擎或 LLM 工具链。建议：
+将本服务作为本地或内网 HTTP 服务启动后，在 OpenClaw（或任意自动化流程）中通过 `GET` 请求上述路径拉取 JSON，再进入规则引擎。建议：
 
 - 对榜单类接口做请求间隔与缓存，避免触发源站限流；
 - 生产环境为服务配置反向代理与鉴权（本仓库默认无认证，仅适合本机或可信网络）。
