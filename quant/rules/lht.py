@@ -14,7 +14,7 @@ from quant.features import (
     stock_name,
     volume_ratio,
 )
-from quant.models import RuleCheck, StockSignal
+from quant.models import RejectedCandidate, RuleCheck, StockSignal
 from quant.rules.risk import checks_passed, failed_reasons, summarize_failed_checks, universe_checks
 
 
@@ -119,6 +119,38 @@ def evaluate_lht_candidates(
             ),
         )
     return signals
+
+
+def rejected_lht_candidates(payload: dict[str, Any], config: StrategyConfig) -> list[RejectedCandidate]:
+    cfg = config.lht_strategy
+    if not cfg.enabled:
+        return []
+
+    rows = payload.get("同花顺人气榜")
+    if not isinstance(rows, list):
+        return []
+
+    rejected: list[RejectedCandidate] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        checks, score, _, _, _, _ = _candidate_checks_and_score(row, config)
+        reasons = failed_reasons(checks)
+        if checks_passed(checks) and score < cfg.min_score_to_signal:
+            reasons.append(f"规则评分未通过：最低要求 {cfg.min_score_to_signal}，当前={score}")
+        if not reasons:
+            continue
+        rejected.append(
+            RejectedCandidate(
+                stock_code=stock_code(row),
+                stock_name=stock_name(row),
+                strategy=STRATEGY_NAME,
+                score=min(score, 100),
+                failed_reasons=reasons,
+                checks=checks,
+            ),
+        )
+    return rejected
 
 
 def explain_lht_no_signal(payload: dict[str, Any], config: StrategyConfig) -> str:

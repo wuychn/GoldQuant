@@ -15,7 +15,7 @@ from typing import Any
 from quant.config import load_strategy_config
 from quant.data_source import DEFAULT_FIXTURE_ROOT, VALID_MODES, default_base_url, default_data_source, load_mode_data
 from quant.feishu import send_text
-from quant.models import SignalReport, StockSignal
+from quant.models import RejectedCandidate, SignalReport, StockSignal
 from quant.paths import get_quant_paths
 from quant.signals import generate_signal_report
 
@@ -109,12 +109,20 @@ def _format_signal(signal: StockSignal, idx: int) -> str:
     return "\n".join(lines)
 
 
+def _format_rejected_candidate(candidate: RejectedCandidate, idx: int) -> str:
+    reasons = "；".join(candidate.failed_reasons) if candidate.failed_reasons else "无"
+    return (
+        f"{idx}. {candidate.stock_name}({candidate.stock_code})\n"
+        f"   战法：{candidate.strategy} | 评分：{candidate.score}\n"
+        f"   未通过：{reasons}"
+    )
+
+
 def format_push_message(report: SignalReport, *, signal_path: Path) -> str:
     label = _LABELS.get(report.mode, report.mode)
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     lines = [
-        f"【{label}】{timestamp}",
-        "【规则引擎结果】",
+        f"【{label}】{timestamp}\n",
         f"策略版本：{report.strategy_version}",
         f"运行模式：{report.mode}",
         f"市场状态：{report.market_state.regime}（评分 {report.market_state.score}）",
@@ -122,7 +130,7 @@ def format_push_message(report: SignalReport, *, signal_path: Path) -> str:
     ]
     if report.risk_flags:
         lines.append(f"全局风险：{'；'.join(report.risk_flags)}")
-    lines.append(f"信号文件：{signal_path}")
+    # lines.append(f"信号文件：{signal_path}")
     lines.append("")
     lines.append("【核心信号】")
     if report.signals:
@@ -133,6 +141,13 @@ def format_push_message(report: SignalReport, *, signal_path: Path) -> str:
             lines.append("")
             lines.append("【未通过原因】")
             lines.extend(f"- {reason}" for reason in report.no_signal_reasons)
+    if report.rejected_candidates:
+        lines.append("")
+        lines.append("【未通过个股明细】")
+        lines.extend(
+            _format_rejected_candidate(candidate, idx)
+            for idx, candidate in enumerate(report.rejected_candidates, start=1)
+        )
     return "\n".join(lines)
 
 

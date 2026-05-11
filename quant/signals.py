@@ -7,10 +7,10 @@ from typing import Any
 from quant.config import StrategyConfig
 from quant.features import unwrap_payload
 from quant.market_state import classify_market_state
-from quant.models import SignalReport, StockSignal
-from quant.rules.lht import evaluate_lht_candidates, explain_lht_no_signal
+from quant.models import RejectedCandidate, SignalReport, StockSignal
+from quant.rules.lht import evaluate_lht_candidates, explain_lht_no_signal, rejected_lht_candidates
 from quant.rules.risk import market_risk_flags
-from quant.rules.zt import evaluate_zt_candidates, explain_zt_no_signal
+from quant.rules.zt import evaluate_zt_candidates, explain_zt_no_signal, rejected_zt_candidates
 
 
 def _dedupe(signals: list[StockSignal]) -> list[StockSignal]:
@@ -34,10 +34,13 @@ def generate_signal_report(
     risk_flags = market_risk_flags(market_state, config)
 
     signals: list[StockSignal] = []
+    rejected_candidates: list[RejectedCandidate] = []
     no_signal_reasons: list[str] = []
     if not risk_flags:
         signals.extend(evaluate_zt_candidates(payload, config, mode=mode))
         signals.extend(evaluate_lht_candidates(payload, config, mode=mode))
+        rejected_candidates.extend(rejected_zt_candidates(payload, config))
+        rejected_candidates.extend(rejected_lht_candidates(payload, config))
     else:
         no_signal_reasons.extend(f"全局风控未通过：{flag}" for flag in risk_flags)
 
@@ -57,4 +60,5 @@ def generate_signal_report(
         signals=deduped,
         risk_flags=risk_flags,
         no_signal_reasons=no_signal_reasons,
+        rejected_candidates=rejected_candidates,
     )

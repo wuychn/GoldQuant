@@ -49,6 +49,16 @@ class StockSignal:
 
 
 @dataclass(frozen=True)
+class RejectedCandidate:
+    stock_code: str
+    stock_name: str
+    strategy: str
+    score: int
+    failed_reasons: list[str]
+    checks: list[RuleCheck] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class SignalReport:
     strategy_version: str
     mode: str
@@ -56,6 +66,7 @@ class SignalReport:
     signals: list[StockSignal]
     risk_flags: list[str] = field(default_factory=list)
     no_signal_reasons: list[str] = field(default_factory=list)
+    rejected_candidates: list[RejectedCandidate] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

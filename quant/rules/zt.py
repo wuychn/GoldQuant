@@ -13,7 +13,7 @@ from quant.features import (
     stock_name,
     to_int,
 )
-from quant.models import RuleCheck, StockSignal
+from quant.models import RejectedCandidate, RuleCheck, StockSignal
 from quant.rules.risk import checks_passed, failed_reasons, summarize_failed_checks, universe_checks, valuation_checks
 
 
@@ -130,6 +130,40 @@ def evaluate_zt_candidates(
             ),
         )
     return signals
+
+
+def rejected_zt_candidates(payload: dict[str, Any], config: StrategyConfig) -> list[RejectedCandidate]:
+    cfg = config.zt_strategy
+    if not cfg.enabled:
+        return []
+
+    hot_rows = payload.get("同花顺人气榜")
+    if not isinstance(hot_rows, list):
+        return []
+
+    limit_up = _limit_up_rows(payload)
+    rejected: list[RejectedCandidate] = []
+    for raw in hot_rows:
+        if not isinstance(raw, dict):
+            continue
+        row = _merge_limit_up_info(raw, limit_up)
+        checks, score, _, _, code = _candidate_checks_and_score(row, limit_up, config)
+        reasons = failed_reasons(checks)
+        if checks_passed(checks) and score < cfg.min_score_to_signal:
+            reasons.append(f"规则评分未通过：最低要求 {cfg.min_score_to_signal}，当前={score}")
+        if not reasons:
+            continue
+        rejected.append(
+            RejectedCandidate(
+                stock_code=code,
+                stock_name=stock_name(row),
+                strategy=STRATEGY_NAME,
+                score=min(score, 100),
+                failed_reasons=reasons,
+                checks=checks,
+            ),
+        )
+    return rejected
 
 
 def explain_zt_no_signal(payload: dict[str, Any], config: StrategyConfig) -> str:
