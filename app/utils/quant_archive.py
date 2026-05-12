@@ -1,6 +1,6 @@
 """将盘前/盘中/盘后聚合结果落盘，并基于累积日线合并计算均线、ATR、MACD 等。
 
-目录结构（默认 ``~/data/quant/archive``，可用 ``GOLDQUANT_QUANT_ARCHIVE_DIR`` 覆盖）::
+目录结构（默认 ``~/.quant/archive``，可用 ``GOLDQUANT_QUANT_ARCHIVE_DIR`` 覆盖）::
 
     snapshots/YYYYMMDD/HHMMSS_<phase>.json   # 每次请求的完整 JSON
     bars/<股票代码>.jsonl                    # 按日合并的 OHLCV（一行一日）

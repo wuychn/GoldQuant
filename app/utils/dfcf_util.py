@@ -142,6 +142,21 @@ def hist(symbol, period='daily', *, start_date=None, end_date=None):
         ak.stock_zh_a_hist(symbol=str(symbol), period=period, start_date=start, end_date=end))
 
 
+async def all_stocks():
+    """
+    实时返回所有A股数据
+
+    TODO，添加缓存，缓存5天
+    :return:
+    """
+    result = []
+    sh = dataframe_to_records(ak.stock_sh_a_spot_em())
+    xz = dataframe_to_records(ak.stock_sz_a_spot_em())
+    result.append(sh)
+    result.append(xz)
+    return {i['代码']: i for i in result}
+
+
 def ggjbxx(symbol):
     """
     获取个股基本信息
@@ -168,7 +183,8 @@ def ggjbxx(symbol):
 
 
 if __name__ == "__main__":
-    print(json.dumps(jbxx(600519), ensure_ascii=False, indent=2))
+    # print(json.dumps(jbxx(600519), ensure_ascii=False, indent=2))
+    print(json.dumps(all_stocks()))
     # print(hqbj_dc(600519))
     # print(hqbj("002580"))
     # print(json.dumps(ztgc(), ensure_ascii=False, indent=2))

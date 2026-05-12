@@ -74,7 +74,7 @@ class Settings(BaseSettings):
 
     # Uvicorn（`python -m app` 时使用）
     HOST: str = "0.0.0.0"
-    PORT: int = 8000
+    PORT: int = 8085
     UVICORN_RELOAD: bool = True
 
     # CORS：逗号分隔的源列表，或单独一个 `*` 表示全部（此时不可与凭证共用）
@@ -100,7 +100,7 @@ class Settings(BaseSettings):
 
     #: 是否将盘前/盘中/盘后聚合结果写入本地归档（快照 + 合并日线 + 指标）
     QUANT_ARCHIVE_ENABLED: bool = True
-    #: 归档根目录；未设置时默认为用户目录下 ``~/data/quant/archive``
+    #: 归档根目录；未设置时默认为用户目录下 ``~/.quant/archive``
     QUANT_ARCHIVE_DIR: str | None = None
     #: 某股票本地尚无日线归档时，日线全量拉取的起始日期（``YYYYMMDD``，可含 ``-``）
     QUANT_HIST_FULL_START_DATE: str = "19900101"
@@ -111,6 +111,11 @@ class Settings(BaseSettings):
     #: 盘前/盘中/盘后接口里「历史行情」日线最多返回条数（从最新往前截），减轻模型上下文；完整 K 线仍在本地归档。
     QUANT_HIST_RESPONSE_MAX_BARS: int = Field(default=48, ge=1, le=4000)
 
+    # 飞书配置
+    FEISHU_APP_ID: str | None = None
+    FEISHU_APP_SECRET: str | None = None
+    FEISHU_USER_ID: str | None = None
+
     #: 全局 LLM：字段名为 ``LLM_*``；``.env`` 可直接写 ``LLM_API_KEY`` / ``LLM_BASE_URL`` / ``LLM_MODEL``（无前缀），亦可写 ``GOLDQUANT_LLM_*``（与旧习惯兼容）。``python main.py`` 与 FastAPI 共用。
     LLM_API_KEY: str | None = None
     LLM_BASE_URL: str = "https://api.minimaxi.com/anthropic"
@@ -118,7 +123,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def merge_llm_plain_env_names(self) -> Settings:
-        """兼容 ``.env`` 中无前缀的 ``LLM_*``（``env_prefix`` 无法自动映射到无前缀变量名）。"""
+        """兼容 ``.env`` 中无前缀的 ``LLM_*`` / ``FEISHU_*``（``env_prefix`` 无法自动映射到无前缀变量名）。"""
         ak = self.LLM_API_KEY
         if not ak:
             ak = _env_plain_or_prefixed("LLM_API_KEY", "GOLDQUANT_LLM_API_KEY", env_file=_ENV_FILE)
@@ -126,10 +131,17 @@ class Settings(BaseSettings):
         bu = bu_o if bu_o else self.LLM_BASE_URL
         md_o = _env_plain_or_prefixed("LLM_MODEL", "GOLDQUANT_LLM_MODEL", env_file=_ENV_FILE)
         md = md_o if md_o else self.LLM_MODEL
-        # BaseSettings 经 ``__init__`` 校验时须返回 ``self``，不可返回 ``model_copy`` 新实例（会触发 UserWarning）
         object.__setattr__(self, "LLM_API_KEY", ak)
         object.__setattr__(self, "LLM_BASE_URL", bu)
         object.__setattr__(self, "LLM_MODEL", md)
+
+        # 飞书配置（支持无前缀 FEISHU_*）
+        for field_name in ("FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_USER_ID"):
+            val = getattr(self, field_name, None)
+            if not val:
+                val = _env_plain_or_prefixed(field_name, f"GOLDQUANT_{field_name}", env_file=_ENV_FILE)
+                if val:
+                    object.__setattr__(self, field_name, val)
         return self
 
     @field_validator("CORS_ORIGINS")

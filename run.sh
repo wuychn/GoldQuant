@@ -46,7 +46,7 @@ cmd_start() {
   fi
 
   local host="${GOLDQUANT_HOST:-0.0.0.0}"
-  local port="${GOLDQUANT_PORT:-8000}"
+  local port="${GOLDQUANT_PORT:-8085}"
 
   nohup "${venv_py}" -m uvicorn app.main:app \
     --host "${host}" \

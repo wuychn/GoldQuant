@@ -91,7 +91,7 @@ copy .env.example .env
 python -m app
 
 # 方式 B：与官方文档一致的 Uvicorn 命令行
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8085
 
 # 方式 C：Windows 下可双击或在项目根执行根目录的 run.ps1
 .\run.ps1
@@ -106,11 +106,11 @@ chmod +x run.sh
 ./run.sh restart  # 先 stop（若曾用本脚本启动），再 start
 ```
 
-首次使用前需已创建 `.venv` 并安装依赖。若存在 `.env`，启动前会 `source` 以读取 `GOLDQUANT_HOST`、`GOLDQUANT_PORT` 等变量（默认 `0.0.0.0:8000`）。
+首次使用前需已创建 `.venv` 并安装依赖。若存在 `.env`，启动前会 `source` 以读取 `GOLDQUANT_HOST`、`GOLDQUANT_PORT` 等变量（默认 `0.0.0.0:8085`）。
 
-- 交互式 API 文档：<http://127.0.0.1:8000/docs>
-- OpenAPI JSON：<http://127.0.0.1:8000/openapi.json>
-- 健康检查：<http://127.0.0.1:8000/health>
+- 交互式 API 文档：<http://127.0.0.1:8085/docs>
+- OpenAPI JSON：<http://127.0.0.1:8085/openapi.json>
+- 健康检查：<http://127.0.0.1:8085/health>
 
 ### 启动后立刻退出、且几乎没有输出？
 
@@ -123,7 +123,7 @@ chmod +x run.sh
 ### `.env` 里配置了 `GOLDQUANT_PORT` 仍不生效？
 
 1. **配置加载位置**：应用已从「项目根目录」下的 `.env` **绝对路径**读取（不依赖当前工作目录）。请确认 `.env` 与 `app` 文件夹同级，且变量名为 **`GOLDQUANT_PORT=8085`**（不要写成 `PORT=` 单独一项，除非带前缀约定）。
-2. **启动方式**：只有 **`python -m app`**、**`run.ps1`**、**`run.sh start`** 会使用 `Settings` 里的端口。若使用命令行 **`uvicorn app.main:app`** 且**未**指定 `--port`，监听端口由 **Uvicorn 默认 8000** 决定，**不会**读取 `.env` 中的 `GOLDQUANT_PORT`。请改用 `python -m app`，或显式：`uvicorn app.main:app --host 0.0.0.0 --port 8085`。
+2. **启动方式**：只有 **`python -m app`**、**`run.ps1`**、**`run.sh start`** 会使用 `Settings` 里的端口。若使用命令行 **`uvicorn app.main:app`** 且**未**指定 `--port`，监听端口由 **Uvicorn 默认 8085** 决定，**不会**读取 `.env` 中的 `GOLDQUANT_PORT`。请改用 `python -m app`，或显式：`uvicorn app.main:app --host 0.0.0.0 --port 8085`。
 3. 修改 `.env` 后需**重启进程**；若曾启动过，`get_settings()` 有缓存，同一进程内不会自动刷新。
 
 ---
@@ -213,10 +213,10 @@ HTTP **502** 通常表示上游抓取失败或返回异常，响应体中的 `de
 
 ```powershell
 # 健康检查
-curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8085/health
 
 # 东财人气榜（需服务已启动且网络正常）
-curl http://127.0.0.1:8000/api/v1/hot/eastmoney/popularity
+curl http://127.0.0.1:8085/api/v1/hot/eastmoney/popularity
 ```
 
 亦可在 Python 中使用 `fastapi.testclient.TestClient` 做无端口集成测试。
