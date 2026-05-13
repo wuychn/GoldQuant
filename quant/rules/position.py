@@ -101,7 +101,7 @@ class PositionLimitRule(Rule):
 
 
 class DailyLossLimitRule(Rule):
-    """每日亏损限额：当日已实现+浮动亏损达总资金阈值时次日全天空仓。"""
+    """每日亏损限额：`ctx.daily_pnl` 为当日已实现盈亏（成交汇总）占当前总权益比例达阈值则触发。"""
 
     def default_params(self):
         return {"max_daily_loss_pct": -3.0}

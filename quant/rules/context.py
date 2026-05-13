@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from quant.data_io import compute_holdings_market_value
+
 
 @dataclass
 class RuleContext:
@@ -38,7 +40,7 @@ class RuleContext:
     # 持仓股列表
     holdings: list[dict[str, Any]] = field(default_factory=list)
 
-    # 总资金（元）
+    # 总权益（现金 + 持仓市值，元）；与 data_io.get_fund() 一致
     fund: float = 0.0
 
     # 近期止损记录 [{股票代码, 股票名称, 止损时间, 原因}]
@@ -50,7 +52,7 @@ class RuleContext:
     # 赚钱效应数据
     profit_effect: dict[str, Any] = field(default_factory=dict)
 
-    # 当日已实现+浮动盈亏
+    # 当日已实现盈亏合计（元）：来自当日 trades_buy/sell 汇总，非浮动盈亏
     daily_pnl: float = 0.0
 
     # 附加数据（规则间传递中间结果）
@@ -208,19 +210,10 @@ class RuleContext:
         return False
 
     def current_position_ratio(self) -> float:
-        """当前持仓总额占总资金比例（0~1）。"""
+        """当前持仓市值 / 总权益（0~1）。"""
         if self.fund <= 0:
             return 0.0
-        total_position = 0.0
-        for h in self.holdings:
-            price = h.get("盘口", {}).get("最新") or h.get("买入价", 0)
-            try:
-                price = float(price)
-            except (TypeError, ValueError):
-                price = 0.0
-            # 假设每笔持仓为 fund * 单票仓位比例，简化计算
-            total_position += price  # 这里需实际持仓金额，由外部传入
-        # 如果持仓有 "持仓金额" 字段则优先使用
         if self.extra.get("position_amount") is not None:
             return float(self.extra["position_amount"]) / self.fund
-        return 0.0
+        mv = compute_holdings_market_value(self.holdings)
+        return mv / self.fund

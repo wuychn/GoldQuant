@@ -7,10 +7,11 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 
 from quant.config import (
-    DATA_DIR, FUND_FILE, HOLDING_FILE, INITIAL_CAPITAL, MEMORY_COMPRESS_THRESHOLD_CHARS,
+    ACCOUNT_STATE_FILE, DATA_DIR, FUND_FILE, HOLDING_FILE, INITIAL_CAPITAL,
+    MEMORY_COMPRESS_THRESHOLD_CHARS,
     MEMORY_COMPRESS_THRESHOLD_ENTRIES, MEMORY_FILE, MEMORY_MAX_INJECT_CHARS,
     NEWS_IMPACT_SUMMARY_FILE, OPTIONAL_FILE, OPTIONAL_HISTORY_FILE,
-    POPULARITY_FILE, STOPLOSS_FILE,
+    POPULARITY_FILE, POSITION_MV_FILE, STOPLOSS_FILE,
 )
 
 
@@ -35,42 +36,188 @@ def unwrap_payload(raw: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Fund management
+# Fund / account state
+# fund.md = 现金（纯数字），position_market_value.md = 持仓总市值（纯数字），
+# account_state.json = 与上次原子写入一致的快照。
+# get_fund() = 现金 + 持仓市值（磁盘口径）。
 # ---------------------------------------------------------------------------
 
+def _format_plain_balance(value: float) -> str:
+    s = f"{value:.4f}".rstrip("0").rstrip(".")
+    return s if s else "0"
+
+
+def _parse_plain_float(text: str) -> float | None:
+    text = text.strip()
+    if not text:
+        return None
+    try:
+        return float(text.replace(",", "").replace("，", ""))
+    except ValueError:
+        return None
+
+
+def compute_holdings_market_value(holdings: list) -> float:
+    """按持仓数量 ×（盘口最新价，缺省用买入价）估算总市值。"""
+    total = 0.0
+    for h in holdings:
+        try:
+            qty = int(h.get("持仓股数", h.get("数量", 0)) or 0)
+        except (TypeError, ValueError):
+            continue
+        if qty <= 0:
+            continue
+        pk = h.get("盘口") if isinstance(h.get("盘口"), dict) else {}
+        p = pk.get("最新") if pk else None
+        if p is None:
+            p = h.get("买入价", 0)
+        try:
+            p = float(p)
+        except (TypeError, ValueError):
+            p = 0.0
+        total += qty * p
+    return total
+
+
+def _read_account_state_json() -> tuple[float, float] | None:
+    if not os.path.isfile(ACCOUNT_STATE_FILE):
+        return None
+    try:
+        d = json.loads(read_user_text(ACCOUNT_STATE_FILE))
+        return float(d["cash"]), float(d["position_market_value"])
+    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+        return None
+
+
+def _read_plain_cash_mv_files() -> tuple[float, float] | None:
+    """无 account_state 时读两镜像个位数；fund.md 必填一条有效数字才认。"""
+    if not os.path.isfile(FUND_FILE):
+        return None
+    try:
+        raw = read_user_text(FUND_FILE)
+    except OSError:
+        return None
+    cash = _parse_plain_float(raw)
+    if cash is None:
+        return None
+    mv = 0.0
+    if os.path.isfile(POSITION_MV_FILE):
+        try:
+            mvp = _parse_plain_float(read_user_text(POSITION_MV_FILE))
+            if mvp is not None:
+                mv = mvp
+        except OSError:
+            pass
+    return cash, mv
+
+
+def _load_cash_mv_pair() -> tuple[float, float]:
+    """优先 account_state.json，否则 fund.md + position_market_value.md，否则初始本金。"""
+    got = _read_account_state_json()
+    if got is not None:
+        return got
+    pair = _read_plain_cash_mv_files()
+    if pair is not None:
+        return pair
+    return float(INITIAL_CAPITAL), 0.0
+
+
+def get_cash() -> float:
+    return _load_cash_mv_pair()[0]
+
+
+def get_position_market_value() -> float:
+    return _load_cash_mv_pair()[1]
+
+
+def get_total_equity() -> float:
+    c, m = _load_cash_mv_pair()
+    return c + m
+
+
 def get_fund() -> float:
-    try:
-        return float(read_user_text(FUND_FILE).strip())
-    except (OSError, ValueError, TypeError):
-        return INITIAL_CAPITAL
+    """账户总权益（现金 + 磁盘持仓市值快照），用于 tail/提示等。"""
+    return get_total_equity()
 
 
-def update_fund(profit: float):
-    fund = get_fund() + profit
-    today = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    existing = {}
-    try:
-        content = read_user_text(FUND_FILE)
-        hist = re.findall(r'(\d{4}-\d{2}-\d{2}):\s*([\d.]+)', content)
-        for d, v in hist:
-            existing[d] = float(v)
-        existing[today.split(' ')[0]] = fund
-        lines = [
-            "# 资金曲线",
-            f"- 初始本金：{INITIAL_CAPITAL:.2f} 元",
-            f"- 更新时间：{today}",
-            f"- 当前总资产：{fund:.2f} 元",
-            f"- 当日盈亏：{profit:+.2f} 元 ({profit/INITIAL_CAPITAL*100:+.2f}%)",
-            "- 历史记录（累计）：",
-        ]
-        for d, v in sorted(existing.items()):
-            lines.append(f"{d}: {v:.2f}")
-        with open(FUND_FILE, "w", encoding="utf-8") as f:
-            f.write('\n'.join(lines))
-    except Exception:
-        with open(FUND_FILE, "w", encoding="utf-8") as f:
-            f.write(str(int(fund)))
-    return fund
+def atomic_save_holdings_and_account_state(
+    holdings: list,
+    cash: float,
+    position_mv: float,
+    *,
+    last_batch_realized_pnl: float | None = None,
+) -> None:
+    """同一批写入口径：先临时文件，再 os.replace，降低半截更新概率。"""
+    os.makedirs(DATA_DIR, exist_ok=True)
+    cash = max(0.0, float(cash))
+    position_mv = max(0.0, float(position_mv))
+    equity = cash + position_mv
+    ts = datetime.now().isoformat(timespec="seconds")
+    state = {
+        "cash": cash,
+        "position_market_value": position_mv,
+        "total_equity": equity,
+        "updated_at": ts,
+    }
+    if last_batch_realized_pnl is not None:
+        state["last_batch_realized_pnl"] = last_batch_realized_pnl
+    h_tmp = HOLDING_FILE + ".tmp"
+    st_tmp = ACCOUNT_STATE_FILE + ".tmp"
+    cash_tmp = FUND_FILE + ".tmp"
+    mv_tmp = POSITION_MV_FILE + ".tmp"
+    _write_jsonl_stock_file(h_tmp, holdings)
+    with open(st_tmp, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
+    with open(cash_tmp, "w", encoding="utf-8") as f:
+        f.write(_format_plain_balance(cash))
+    with open(mv_tmp, "w", encoding="utf-8") as f:
+        f.write(_format_plain_balance(position_mv))
+    os.replace(h_tmp, HOLDING_FILE)
+    os.replace(st_tmp, ACCOUNT_STATE_FILE)
+    os.replace(cash_tmp, FUND_FILE)
+    os.replace(mv_tmp, POSITION_MV_FILE)
+
+
+def persist_account_cash_and_mv(
+    cash: float,
+    position_mv: float,
+    *,
+    last_batch_realized_pnl: float | None = None,
+) -> None:
+    """不写持仓时，仅同步现金与市值快照（须与 holding.jsonl 一致，由调用方保证）。"""
+    holdings = get_holdings()
+    atomic_save_holdings_and_account_state(
+        holdings,
+        cash,
+        position_mv,
+        last_batch_realized_pnl=last_batch_realized_pnl,
+    )
+
+
+def set_total_equity(equity: float) -> None:
+    """按目标总权益反推现金（总权益−当前持仓市值）；现金不低于 0。"""
+    holdings = get_holdings()
+    mv = compute_holdings_market_value(holdings)
+    cash = max(0.0, float(equity) - mv)
+    atomic_save_holdings_and_account_state(
+        holdings,
+        cash,
+        mv,
+        last_batch_realized_pnl=None,
+    )
+
+
+def update_fund(profit: float) -> None:
+    """在现金上叠加盈亏（复盘外少用）；现金不低于 0。"""
+    rows = get_holdings()
+    cash = max(0.0, get_cash() + float(profit))
+    mv = compute_holdings_market_value(rows)
+    atomic_save_holdings_and_account_state(
+        rows,
+        cash,
+        mv,
+        last_batch_realized_pnl=None,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +259,43 @@ def _write_jsonl_stock_file(path: str, rows: list) -> None:
 
 def get_holdings() -> list:
     return _read_jsonl_stock_file(HOLDING_FILE)
+
+
+def merge_holdings_by_code(holdings: list) -> list:
+    """同一股票代码合并为一行：股数加总，买入价为加权平均成本。"""
+    buckets: dict[str, dict] = {}
+    order: list[str] = []
+    for h in holdings:
+        if not isinstance(h, dict):
+            continue
+        code = str(h.get("股票代码", "")).strip()
+        if not code:
+            continue
+        try:
+            qty = int(h.get("持仓股数", h.get("数量", 0)) or 0)
+        except (TypeError, ValueError):
+            qty = 0
+        if qty <= 0:
+            continue
+        try:
+            bp = float(h.get("买入价", 0) or 0)
+        except (TypeError, ValueError):
+            bp = 0.0
+        if code not in buckets:
+            buckets[code] = {"tpl": dict(h), "qty": 0, "cost": 0.0}
+            order.append(code)
+        b = buckets[code]
+        b["qty"] += qty
+        b["cost"] += qty * bp
+    out: list[dict] = []
+    for code in order:
+        b = buckets[code]
+        row = dict(b["tpl"])
+        q = b["qty"]
+        row["持仓股数"] = q
+        row["买入价"] = round(b["cost"] / q, 6) if q else 0.0
+        out.append(row)
+    return out
 
 
 def save_holdings(holdings: list):
@@ -172,20 +356,85 @@ def read_recent_stoploss(days: int = 5) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Trades
+# Trades：trades_buy.md / trades_sell.md（JSON 数组）
 # ---------------------------------------------------------------------------
 
-def read_trades(today: str) -> list:
+def _trade_buy_path(today: str) -> str:
+    return f"{DATA_DIR}/trade/{today}/trades_buy.md"
+
+
+def _trade_sell_path(today: str) -> str:
+    return f"{DATA_DIR}/trade/{today}/trades_sell.md"
+
+
+def _safe_read_json_trade_list(path: str) -> list:
     try:
-        return json.loads(read_user_text(f"{DATA_DIR}/trade/{today}/trades.md"))
+        data = json.loads(read_user_text(path))
+        return data if isinstance(data, list) else []
     except (OSError, json.JSONDecodeError, TypeError, ValueError):
         return []
 
 
-def save_trades(today: str, trades: list):
+def _append_trades_file_atomic(path: str, new_rows: list[dict]) -> None:
+    if not new_rows:
+        return
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    cur = _safe_read_json_trade_list(path)
+    cur.extend(new_rows)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(cur, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+
+
+def _trade_entry_sort_key(entry: dict) -> tuple[str, str]:
+    d = str(entry.get("日期", "") or "")
+    t = str(entry.get("时间", "") or "00:00:00")
+    return d, t
+
+
+def read_trades(today: str) -> list:
+    merged = (
+        _safe_read_json_trade_list(_trade_buy_path(today))
+        + _safe_read_json_trade_list(_trade_sell_path(today))
+    )
+    merged.sort(key=_trade_entry_sort_key)
+    return merged
+
+
+def sum_today_realized_pnl(today: str) -> float:
+    """当日成交明细中「已实现盈亏」合计（买入一般为 0）。"""
+    total = 0.0
+    for e in read_trades(today):
+        v = e.get("已实现盈亏", 0)
+        try:
+            total += float(v)
+        except (TypeError, ValueError):
+            pass
+    return total
+
+
+def sync_profit_md_from_trades(today: str) -> None:
+    """由当日成交汇总写入 profit.md（供统计与推送 tail 使用）。"""
+    p = sum_today_realized_pnl(today)
     os.makedirs(f"{DATA_DIR}/trade/{today}", exist_ok=True)
-    with open(f"{DATA_DIR}/trade/{today}/trades.md", "w", encoding="utf-8") as f:
-        f.write(json.dumps(trades, ensure_ascii=False, indent=2))
+    path = f"{DATA_DIR}/trade/{today}/profit.md"
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(str(p))
+    os.replace(tmp, path)
+
+
+def append_trades(today: str, entries: list[dict]) -> None:
+    """买入写入 trades_buy.md，卖出写入 trades_sell.md。"""
+    if not entries:
+        return
+    buys = [e for e in entries if e.get("方向") == "买入"]
+    sells = [e for e in entries if e.get("方向") == "卖出"]
+    if buys:
+        _append_trades_file_atomic(_trade_buy_path(today), buys)
+    if sells:
+        _append_trades_file_atomic(_trade_sell_path(today), sells)
 
 
 # ---------------------------------------------------------------------------
@@ -220,8 +469,9 @@ def append_trade_log(action: str, detail: str):
 # Optional archive
 # ---------------------------------------------------------------------------
 
-def archive_optional(new_list: list):
-    old_list = get_optional()
+def archive_optional(new_list: list, old_list: list | None = None):
+    """记录自选新增/移除。若提供 old_list，则与 new_list 比较；否则读取磁盘当前自选。"""
+    old_list = old_list if old_list is not None else get_optional()
     old_codes = {r.get("股票代码", "") for r in old_list}
     new_codes = {r.get("股票代码", "") for r in new_list}
     today = datetime.now().strftime("%Y-%m-%d")
@@ -472,12 +722,20 @@ def read_popularity_summary(min_days: int = 3) -> str:
 # Tail builders (context injected into LLM user messages)
 # ---------------------------------------------------------------------------
 
+def _account_context_tail() -> str:
+    c, m = _load_cash_mv_pair()
+    te = c + m
+    return (
+        f"【现金】{c:.2f} 元 【持仓市值】{m:.2f} 元 【总权益】{te:.2f} 元"
+    )
+
+
 def tail_fund_only() -> str:
     sl = read_recent_stoploss()
     sl_s = json.dumps(sl, ensure_ascii=False) if sl else "无"
     memory = read_memory()
     mem_part = f"\n【历史经验教训】：\n{memory}" if memory else ""
-    return f"\n\n【当前资金】：{get_fund():.2f} 元\n【近期止损记录】：{sl_s}{mem_part}"
+    return f"\n\n{_account_context_tail()}\n【近期止损记录】：{sl_s}{mem_part}"
 
 
 def tail_during_market() -> str:
@@ -490,7 +748,7 @@ def tail_during_market() -> str:
     memory = read_memory()
     log_part = f"\n【今日操作记录】：\n{trade_log}" if trade_log else ""
     mem_part = f"\n【历史经验教训】：\n{memory}" if memory else ""
-    return f"\n\n【当前资金】：{get_fund():.2f} 元\n【今日交易记录】：{tr_s}\n【近期止损记录】：{sl_s}{log_part}{mem_part}"
+    return f"\n\n{_account_context_tail()}\n【今日交易记录】：{tr_s}\n【近期止损记录】：{sl_s}{log_part}{mem_part}"
 
 
 def tail_lunch_review() -> str:
@@ -503,7 +761,7 @@ def tail_lunch_review() -> str:
     memory = read_memory()
     log_part = f"\n【今日操作记录】：\n{trade_log}" if trade_log else ""
     mem_part = f"\n【历史经验教训】：\n{memory}" if memory else ""
-    return f"\n\n【当前资金】：{get_fund():.2f} 元\n【上午交易记录】：{tr_s}\n【近期止损记录】：{sl_s}{log_part}{mem_part}"
+    return f"\n\n{_account_context_tail()}\n【上午交易记录】：{tr_s}\n【近期止损记录】：{sl_s}{log_part}{mem_part}"
 
 
 def tail_evening_review() -> str:
@@ -519,7 +777,7 @@ def tail_evening_review() -> str:
     mem_part = f"\n【历史经验教训】：\n{memory}" if memory else ""
     stats_part = f"\n【近期交易统计】：\n{stats}" if stats else ""
     return (
-        f"\n\n【当前资金】：{get_fund():.2f} 元\n"
+        f"\n\n{_account_context_tail()}\n"
         f"【初始本金】：{INITIAL_CAPITAL}元\n"
         f"【今日实际交易记录】：\n{tr_s}\n"
         f"【近期止损记录】：{sl_s}{log_part}{stats_part}{mem_part}"

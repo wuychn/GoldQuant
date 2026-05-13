@@ -1,18 +1,15 @@
-"""后处理：解析 LLM 输出、更新持仓/自选、保存文件。"""
+"""后处理：飞书正文替换（不从 LLM 落盘交易/资金/持仓/自选）。"""
 
 import json
 import os
 import re
 from datetime import datetime
 
-from quant.config import DATA_DIR, FUND_FILE
-from quant.data_io import (
-    append_stoploss_record, append_trade_log, archive_optional,
-    get_optional, save_holdings, save_optional, update_fund,
-)
+from quant.config import DATA_DIR
+from quant.data_io import get_holdings, get_optional
 from quant.parsers import (
     build_readable_block, extract_json_array_with_span, holding_to_readable,
-    normalize_holding_rows, normalize_optional_rows, optional_to_readable,
+    optional_to_readable,
 )
 
 
@@ -50,95 +47,26 @@ def replace_json_for_feishu(
 
 
 def parse_and_update(content: str, mode: str, market_payload: dict | None = None) -> dict:
-    holdings_raw, h_span = extract_json_array_with_span(content, "持仓更新")
-    optional_raw, o_span = extract_json_array_with_span(content, "自选更新")
+    """仅解析 LLM 正文中 JSON 块位置；展示行一律来自磁盘（规则引擎/成交写入的数据）。"""
+    _, h_span = extract_json_array_with_span(content, "持仓更新")
+    _, o_span = extract_json_array_with_span(content, "自选更新")
 
-    holdings = normalize_holding_rows(holdings_raw)
-    optional = normalize_optional_rows(optional_raw)
-
-    holdings_lines = [holding_to_readable(h) for h in holdings] if holdings else []
-    optional_lines = [optional_to_readable(o) for o in optional] if optional else []
+    disk_holdings = get_holdings()
+    disk_optional = get_optional()
+    holdings_lines = [holding_to_readable(h) for h in disk_holdings]
+    optional_lines = [optional_to_readable(o) for o in disk_optional]
 
     holdings_text = "\n".join(holdings_lines) if holdings_lines else None
     optional_text = "\n".join(optional_lines) if optional_lines else None
 
-    profit = None
-    new_fund = None
-
-    if "今日盈亏" in content:
-        m = re.search(r"当日总盈亏[：:\s]*([+-]?\d+(?:\.\d+)?)", content)
-        if m:
-            profit = float(m.group(1))
-        else:
-            m = re.search(r"[盈亏][为：:\s]*([+-]?\d+(?:\.\d+)?)", content)
-            if m:
-                profit = float(m.group(1))
-
-    if "资金总额" in content:
-        m = re.search(r"资金总额[为：:\s]*(\d+(?:\.\d+)?)", content)
-        if m:
-            new_fund = float(m.group(1))
-
-    if holdings and mode in ("during_market", "pre_market") and h_span is not None:
-        for h in holdings:
-            sell_reason = str(h.get("卖出原因", "") or "").strip()
-            sell_time = str(h.get("卖出时间", "") or "").strip()
-            if sell_reason and sell_time:
-                action = "止损卖出" if "止损" in sell_reason else "卖出"
-                append_trade_log(action, f"{h.get('股票名称', '')}({h.get('股票代码', '')}) {sell_reason}")
-                if "止损" in sell_reason:
-                    append_stoploss_record(
-                        h.get("股票代码", ""),
-                        h.get("股票名称", ""),
-                        sell_time,
-                        sell_reason,
-                    )
-                    print(f"止损记录已追加: {h.get('股票名称', '')} {sell_time}")
-            elif h.get("买入时间") and not sell_time:
-                buy_reason = str(h.get("买入原因", "") or "").strip()
-                if buy_reason:
-                    append_trade_log("买入", f"{h.get('股票名称', '')}({h.get('股票代码', '')}) {buy_reason}")
-        active = [h for h in holdings if not str(h.get("卖出时间", "") or "").strip()]
-        save_holdings(active if active else holdings)
-        print(f"持仓已更新: {holdings}")
-    elif mode in ("during_market", "pre_market") and h_span is not None and not holdings:
-        reason = _extract_reason_from_content(content, "持仓未更新原因")
-        print(f"持仓未更新。原因：{reason}")
+    if mode in ("during_market", "pre_market"):
+        if h_span is not None and not disk_holdings:
+            reason = _extract_reason_from_content(content, "持仓未更新原因")
+            print(f"（仅展示）持仓磁盘为空。LLM 提示：{reason}")
 
     if mode in ("post_market_lunch", "post_market_evening") and o_span is not None:
-        if optional:
-            archive_optional(optional)
-            save_optional(optional)
-            for o in optional:
-                tag = o.get("战法", "")
-                append_trade_log("加自选", f"{o.get('股票名称', '')}({o.get('股票代码', '')}) [{tag}]")
-            print(f"自选股已更新（共 {len(optional)} 条）: {optional}")
-        else:
-            reason_zt = _extract_reason_from_content(content, "涨停板战法自选未更新原因")
-            reason_lht = _extract_reason_from_content(content, "龙回头战法自选未更新原因")
-            reasons = []
-            if reason_zt:
-                reasons.append(f"涨停板：{reason_zt}")
-            if reason_lht:
-                reasons.append(f"龙回头：{reason_lht}")
-            reason_zsll = _extract_reason_from_content(content, "主升浪战法自选未更新原因")
-            if reason_zsll:
-                reasons.append(f"主升浪：{reason_zsll}")
-            reason_str = "；".join(reasons) if reasons else "LLM未给出具体原因"
-            print(f"自选未更新。原因：{reason_str}")
-
-    if profit is not None and mode in ("post_market_lunch", "post_market_evening"):
-        update_fund(profit)
-        today = datetime.now().strftime("%Y-%m-%d")
-        os.makedirs(f"{DATA_DIR}/trade/{today}", exist_ok=True)
-        with open(f"{DATA_DIR}/trade/{today}/profit.md", "w", encoding="utf-8") as f:
-            f.write(str(int(profit)))
-        print(f"盈亏: {profit}")
-
-    if new_fund is not None:
-        with open(FUND_FILE, "w", encoding="utf-8") as f:
-            f.write(str(int(new_fund)))
-        print(f"资金已更新: {new_fund}")
+        if not disk_optional:
+            print("（仅展示）自选磁盘为空；加自选由规则引擎写入，不解析 LLM 自选 JSON。")
 
     return {
         "holdings_text": holdings_text,
@@ -147,8 +75,8 @@ def parse_and_update(content: str, mode: str, market_payload: dict | None = None
         "optional_lines": optional_lines,
         "holdings_span": h_span,
         "optional_span": o_span,
-        "normalized_holdings": holdings,
-        "normalized_optional": optional,
+        "normalized_holdings": disk_holdings,
+        "normalized_optional": disk_optional,
     }
 
 

@@ -11,8 +11,11 @@ from quant.config import DATA_DIR, NEWS_IMPACT_SUMMARY_FILE
 from quant.data_fetch import fetch_during_market, fetch_news, fetch_post_market, fetch_pre_market
 from quant.data_filter import filter_payload
 from quant.data_io import (
-    extract_and_save_memory, get_fund, get_optional, read_recent_stoploss,
-    read_user_text, save_optional, tail_during_market, tail_evening_review,
+    archive_optional,
+    compute_holdings_market_value,
+    extract_and_save_memory, get_cash, get_optional, read_recent_stoploss,
+    read_user_text, save_optional, sum_today_realized_pnl, tail_during_market,
+    tail_evening_review,
     tail_fund_only, tail_lunch_review, unwrap_payload,
     update_popularity_history, read_popularity_summary,
 )
@@ -103,6 +106,11 @@ def process_news(raw_data: dict, timestamp: str) -> str:
 
 def _build_rule_context(payload: dict, mode: str) -> RuleContext:
     """从 payload 构建规则引擎上下文。"""
+    holdings_live = payload.get("持仓股", [])
+    # 总权益 = 磁盘现金（成交唯一写入源）+ 本帧 payload 持仓按盘口估算市值，避免盘中仍用过期快照
+    fund_live = get_cash() + compute_holdings_market_value(holdings_live)
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    daily_realized = sum_today_realized_pnl(today_str)
     return RuleContext(
         market_state=payload.get("市场状态机", {}),
         index_data=payload.get("大盘指数", {}),
@@ -111,10 +119,11 @@ def _build_rule_context(payload: dict, mode: str) -> RuleContext:
         popularity_list=payload.get("同花顺人气榜", []),
         concept_sectors=payload.get("概念板块", {}),
         watchlist=payload.get("自选股", []),
-        holdings=payload.get("持仓股", []),
-        fund=get_fund(),
+        holdings=holdings_live,
+        fund=fund_live,
         stoploss_records=read_recent_stoploss(),
         profit_effect=payload.get("赚钱效应", {}),
+        daily_pnl=daily_realized,
     )
 
 
@@ -521,7 +530,9 @@ def _run_review(raw_data: dict, tail: str, *, lunch: bool) -> str:
             added_rows.append(row)
             existing_codes.add(row["股票代码"])
     if added_rows:
-        save_optional(existing + added_rows)
+        merged = existing + added_rows
+        archive_optional(merged, old_list=existing)
+        save_optional(merged)
         print(f"规则引擎新增自选 {len(added_rows)} 只: "
               + ", ".join(f"{r['股票名称']}({r['股票代码']})" for r in added_rows))
 
@@ -697,6 +708,7 @@ def run_mode(mode: str, timestamp: str):
         pass
     else:
         try:
+            # 仅替换飞书展示用 JSON 块为磁盘真实持仓/自选；不写资金与成交文件
             pu = parse_and_update(
                 analysis,
                 mode,

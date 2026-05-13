@@ -75,6 +75,10 @@ common:
 # 涨停板战法 - 加自选（主打连板强势接力；连板上下限见 ZTConsecutiveBoards）
 # --------------------------------------------------------------------------
 zt_watchlist:
+  # 情绪退潮时（见 SentimentDecayWarning 实现）不加涨停板战法自选
+  SentimentDecayWarning:
+    enabled: true
+
   # 人气排名要求
   ZTPopularity:
     enabled: true
@@ -106,6 +110,10 @@ zt_watchlist:
 # 对自选中涨停板战法标的进行盘前竞价阶段筛选
 # --------------------------------------------------------------------------
 zt_buy_pre:
+  # 情绪退潮时不开涨停板战法新仓
+  SentimentDecayWarning:
+    enabled: true
+
   # 高开幅度要求
   ZTHighOpen:
     enabled: true
@@ -134,6 +142,10 @@ zt_buy_pre:
 # 盘中实时监控，符合条件的标的触发买入信号
 # --------------------------------------------------------------------------
 zt_buy_intraday:
+  # 情绪退潮时不开涨停板战法新仓
+  SentimentDecayWarning:
+    enabled: true
+
   # 盘中人气保持
   ZTIntradayPopularity:
     enabled: true

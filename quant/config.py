@@ -14,6 +14,8 @@ BASE_URL = "http://localhost:8085"
 
 DATA_DIR = os.path.expanduser("~/.quant")
 FUND_FILE = f"{DATA_DIR}/fund.md"
+POSITION_MV_FILE = f"{DATA_DIR}/position_market_value.md"
+ACCOUNT_STATE_FILE = f"{DATA_DIR}/account_state.json"
 OPTIONAL_FILE = f"{DATA_DIR}/optional.jsonl"
 HOLDING_FILE = f"{DATA_DIR}/holding.jsonl"
 STOPLOSS_FILE = f"{DATA_DIR}/stoploss.jsonl"

@@ -8,12 +8,17 @@ from datetime import datetime
 from quant.data_io import (
     append_stoploss_record,
     append_trade_log,
-    get_fund,
+    append_trades,
+    atomic_save_holdings_and_account_state,
+    compute_holdings_market_value,
+    get_cash,
     get_holdings,
-    save_holdings,
-    update_fund,
+    merge_holdings_by_code,
+    sync_profit_md_from_trades,
 )
 from quant.signals import TradeSignal
+
+_CASH_EPS = 1e-6
 
 
 @dataclass
@@ -40,32 +45,45 @@ def _format_trade_detail(trade: ExecutedTrade) -> str:
     return " ".join(parts)
 
 
+def _executed_to_record(trade: ExecutedTrade, *, date_str: str) -> dict:
+    s = trade.signal
+    return {
+        "日期": date_str,
+        "时间": trade.timestamp,
+        "方向": s.action,
+        "股票代码": s.code,
+        "股票名称": s.name,
+        "成交价": s.price,
+        "股数": s.quantity,
+        "战法": s.strategy,
+        "理由": s.reason,
+        "卖出类型": s.sell_type or "",
+        "已实现盈亏": trade.pnl,
+    }
+
+
 def execute_signals(signals: list[TradeSignal]) -> list[ExecutedTrade]:
     """原子执行所有交易信号。
 
-    执行顺序：卖出优先（释放资金）→ 买入。
-    所有计算在内存中完成后一次性写入文件。
+    卖出优先 → 买入；同代码多行持仓先合并；现金全程非负；成交后同步 profit.md。
     """
     if not signals:
         return []
 
-    # 1. 获取当前状态快照
-    holdings = get_holdings()
-    fund = get_fund()
+    cash = max(0.0, get_cash())
+    holdings = merge_holdings_by_code(get_holdings())
     timestamp = datetime.now().strftime("%H:%M:%S")
+    date_str = datetime.now().strftime("%Y-%m-%d")
     executed: list[ExecutedTrade] = []
 
-    # 建立持仓索引：code -> list index
     holdings_idx: dict[str, int] = {}
     for i, h in enumerate(holdings):
         code = str(h.get("股票代码", "")).strip()
         if code:
             holdings_idx[code] = i
 
-    # 标记需要删除的持仓
     to_remove: set[int] = set()
 
-    # 2. 卖出优先
     for signal in signals:
         if signal.action != "卖出":
             continue
@@ -88,8 +106,9 @@ def execute_signals(signals: list[TradeSignal]) -> list[ExecutedTrade]:
             continue
 
         actual_qty = min(signal.quantity, current_qty)
+        if actual_qty <= 0:
+            continue
 
-        # 计算盈亏
         buy_price = 0.0
         try:
             buy_price = float(holding.get("买入价", 0))
@@ -97,19 +116,13 @@ def execute_signals(signals: list[TradeSignal]) -> list[ExecutedTrade]:
             pass
 
         pnl = (signal.price - buy_price) * actual_qty
+        cash = max(0.0, cash + signal.price * actual_qty)
 
-        # 回收资金
-        fund += signal.price * actual_qty
-
-        # 更新或删除持仓记录
         if actual_qty >= current_qty:
-            # 清仓：标记删除
             to_remove.add(idx)
         else:
-            # 减仓：更新股数
             holding["持仓股数"] = current_qty - actual_qty
 
-        # 止损记录
         if signal.sell_type in ("止损", "时间止损"):
             today = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             append_stoploss_record(
@@ -118,18 +131,22 @@ def execute_signals(signals: list[TradeSignal]) -> list[ExecutedTrade]:
 
         executed.append(ExecutedTrade(signal, timestamp, pnl))
 
-    # 3. 买入
+    holdings_after_sells = [h for i, h in enumerate(holdings) if i not in to_remove]
+
     for signal in signals:
         if signal.action != "买入":
             continue
 
         cost = signal.price * signal.quantity
-        if cost > fund:
-            print(f"买入跳过：{signal.name}({signal.code}) 资金不足（需{cost:.0f}，余{fund:.0f}）")
+        if cost > cash + _CASH_EPS:
+            print(
+                f"买入跳过：{signal.name}({signal.code}) 现金不足（需{cost:.2f}，"
+                f"余{cash:.2f}）"
+            )
             continue
 
-        fund -= cost
-        holdings.append({
+        cash = max(0.0, cash - cost)
+        holdings_after_sells.append({
             "股票代码": signal.code,
             "股票名称": signal.name,
             "买入价": signal.price,
@@ -141,20 +158,23 @@ def execute_signals(signals: list[TradeSignal]) -> list[ExecutedTrade]:
 
         executed.append(ExecutedTrade(signal, timestamp))
 
-    # 4. 原子写入
     if not executed:
         return []
 
-    # 移除已清仓的持仓
-    final_holdings = [h for i, h in enumerate(holdings) if i not in to_remove]
-    save_holdings(final_holdings)
-
-    # 更新资金
+    final_holdings = merge_holdings_by_code(holdings_after_sells)
+    position_mv = compute_holdings_market_value(final_holdings)
     total_pnl = sum(e.pnl for e in executed)
-    if total_pnl != 0:
-        update_fund(total_pnl)
+    atomic_save_holdings_and_account_state(
+        final_holdings,
+        cash,
+        position_mv,
+        last_batch_realized_pnl=total_pnl if total_pnl else None,
+    )
 
-    # 写操作记录
+    struct_rows = [_executed_to_record(e, date_str=date_str) for e in executed]
+    append_trades(date_str, struct_rows)
+    sync_profit_md_from_trades(date_str)
+
     for e in executed:
         append_trade_log(e.signal.action, _format_trade_detail(e))
 

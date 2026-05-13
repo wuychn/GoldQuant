@@ -176,6 +176,7 @@ def build_zt_watchlist_chain() -> RuleChain:
     config = _load_config()
     rules: list[Rule] = [
         StockPoolFilterRule(),
+        SentimentDecayWarningRule(),
         ZTPopularityRule(),
         ZTMarketCapRule(),
         ZTConsecutiveBoardsRule(),
@@ -190,6 +191,7 @@ def build_zt_buy_pre_chain() -> RuleChain:
     config = _load_config()
     rules: list[Rule] = [
         StockPoolFilterRule(),
+        SentimentDecayWarningRule(),
         StopLossCoolingRule(),
         ZTHighOpenRule(),
         ZTVolumeRatioPreRule(),
@@ -205,6 +207,7 @@ def build_zt_buy_intraday_chain() -> RuleChain:
     config = _load_config()
     rules: list[Rule] = [
         StockPoolFilterRule(),
+        SentimentDecayWarningRule(),
         StopLossCoolingRule(),
         PositionLimitRule(),
         ZTIntradayPopularityRule(),
