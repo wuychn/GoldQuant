@@ -6,8 +6,9 @@ from pathlib import Path
 
 from app.core.config import get_settings
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[1]
-STRATEGY_FILE = _PROJECT_ROOT / "strategy.md"
+_QUANT_DIR = Path(__file__).resolve().parent
+_PROJECT_ROOT = _QUANT_DIR.parent
+STRATEGY_FILE = _QUANT_DIR / "strategy.md"
 
 BASE_URL = "http://localhost:8085"
 

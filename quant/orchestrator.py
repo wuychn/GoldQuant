@@ -342,14 +342,15 @@ def _run_review(raw_data: dict, tail: str, *, lunch: bool) -> str:
               + ", ".join(f"{r['股票名称']}({r['股票代码']})" for r in added_rows))
 
     # 4. 构建自选更新段落（纯规则引擎产出，无 LLM 参与）
-    optional_section = _build_optional_section(optional_result)
+    section_num = "六" if lunch else "九"
+    optional_section = _build_optional_section(optional_result, section_num=section_num)
 
     # 5. LLM 仅负责 narrative（市场回顾/自选表现/持仓表现/经验总结）
-    #    将规则引擎的自选决策摘要注入 tail，让 LLM 在叙述中引用
-    decision_tail = f"\n\n【规则引擎自选决策】\n{optional_result['summary']}" if optional_result["summary"] else ""
+    #    注意：不注入本次自选决策摘要，避免 LLM 在"自选股全天表现"中混入新增标的
+    #    "自选股全天表现"只关注 payload 中已有的自选股（T-1日加入的）
     u_narrative = build_user_msg(
         filter_payload(payload, "narrative"),
-        tail=tail + rules_summary + pop_tail + decision_tail,
+        tail=tail + rules_summary + pop_tail,
     )
     sys_n = prompt_lunch_narrative() if lunch else prompt_evening_narrative()
     narrative = call_llm(sys_n, u_narrative, max_tokens=8000, temperature=0.1)
@@ -357,32 +358,35 @@ def _run_review(raw_data: dict, tail: str, *, lunch: bool) -> str:
     return narrative.rstrip() + "\n\n" + optional_section
 
 
-def _build_optional_section(optional_result: dict) -> str:
-    """从规则引擎结果构建【自选更新】段落。"""
-    lines = ["【自选更新】"]
+def _build_optional_section(optional_result: dict, *, section_num: str = "九") -> str:
+    """从规则引擎结果构建自选更新段落（可读列表格式）。"""
+    lines = [f"{section_num}、自选更新"]
     merged = optional_result["added_zt"] + optional_result["added_lht"]
 
     if merged:
-        lines.append(json.dumps(merged, ensure_ascii=False))
+        for i, row in enumerate(merged, 1):
+            tag = row.get("战法", "")
+            reason = row.get("加入自选原因", "")
+            lines.append(f"{i}、{row['股票名称']}({row['股票代码']}) [{tag}] {reason}")
     else:
-        lines.append("[]")
+        lines.append("本次无新增自选标的。")
 
     # 追加未更新原因
     if not optional_result["added_zt"]:
         rejects = optional_result["rejected_zt"][:5]
         if rejects:
-            lines.append("涨停板战法自选未更新原因：" +
-                         "；".join(f"{r['股票名称']}({r['股票代码']}){r['reason']}" for r in rejects))
-        else:
-            lines.append("涨停板战法自选未更新原因：人气榜无符合条件的标的")
+            lines.append("")
+            lines.append("涨停板战法未入选原因：")
+            for r in rejects:
+                lines.append(f"  · {r['股票名称']}({r['股票代码']})：{r['reason']}")
 
     if not optional_result["added_lht"]:
         rejects = optional_result["rejected_lht"][:5]
         if rejects:
-            lines.append("龙回头战法自选未更新原因：" +
-                         "；".join(f"{r['股票名称']}({r['股票代码']}){r['reason']}" for r in rejects))
-        else:
-            lines.append("龙回头战法自选未更新原因：人气榜无符合条件的标的")
+            lines.append("")
+            lines.append("龙回头战法未入选原因：")
+            for r in rejects:
+                lines.append(f"  · {r['股票名称']}({r['股票代码']})：{r['reason']}")
 
     return "\n".join(lines)
 
