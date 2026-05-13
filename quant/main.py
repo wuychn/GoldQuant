@@ -10,6 +10,12 @@ for k in list(os.environ.keys()):
     if "proxy" in k.lower():
         del os.environ[k]
 
+# 直接执行本文件时，脚本目录在 sys.path 首位，无法解析顶层的 quant 包；
+# 将项目根目录插入 path，与 python -m quant 行为一致。
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
 from quant.orchestrator import run_mode
 
 
