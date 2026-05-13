@@ -72,7 +72,8 @@ class LHTMABreakdownRule(Rule):
         threshold = ma5_f * self.breakdown_ratio
         if latest_f < threshold:
             return self._fail(
-                f"最新{latest_f:.2f}<MA5×{self.breakdown_ratio}={threshold:.2f}，均线破位触发减仓"
+                f"最新{latest_f:.2f}<MA5×{self.breakdown_ratio}={threshold:.2f}，均线破位触发减仓",
+                sell_type="减半",
             )
         return self._pass(f"最新{latest_f:.2f}≥MA5×{self.breakdown_ratio}={threshold:.2f}，未破位")
 
@@ -104,7 +105,7 @@ class LHTCapitalOutflowRule(Rule):
             return self._skip(f"{name}净额数据格式异常")
 
         if net_f < 0:
-            return self._fail(f"主力净流出{net_f:.0f}，触发弱势减仓信号")
+            return self._fail(f"主力净流出{net_f:.0f}，触发弱势减仓信号", sell_type="减半")
         return self._pass(f"主力净流入{net_f:.0f}≥0，资金面正常")
 
 
@@ -143,7 +144,8 @@ class LHTReboundPullbackRule(Rule):
 
         if pullback >= self.pullback_pct:
             return self._fail(
-                f"从最高{high_f:.2f}回落{pullback:.2f}%≥{self.pullback_pct}%，触发减仓"
+                f"从最高{high_f:.2f}回落{pullback:.2f}%≥{self.pullback_pct}%，触发减仓",
+                sell_type="减半",
             )
         return self._pass(f"从最高回落{pullback:.2f}%<{self.pullback_pct}%，正常持有")
 
@@ -196,7 +198,8 @@ class LHTProfitTargetRule(Rule):
 
         if latest_f >= target:
             return self._fail(
-                f"最新{latest_f:.2f}≥近10日最高收盘{max_close_10d:.2f}×97%={target:.2f}，触发止盈卖50%"
+                f"最新{latest_f:.2f}≥近10日最高收盘{max_close_10d:.2f}×97%={target:.2f}，触发止盈卖50%",
+                sell_type="止盈",
             )
         return self._pass(f"最新{latest_f:.2f}<止盈目标{target:.2f}，继续持有")
 
@@ -239,7 +242,8 @@ class LHTMAStopLossRule(Rule):
         threshold = ma5_f * 0.98
         if close_f <= threshold:
             return self._fail(
-                f"最新收盘{close_f:.2f}≤MA5×98%={threshold:.2f}，次日开盘应止损卖出"
+                f"最新收盘{close_f:.2f}≤MA5×98%={threshold:.2f}，次日开盘应止损卖出",
+                sell_type="止损",
             )
         return self._pass(f"最新收盘{close_f:.2f}>MA5×98%={threshold:.2f}，未触发止损")
 
@@ -313,7 +317,8 @@ class LHTTimeStopLossRule(Rule):
 
         if gain_pct < self.min_gain:
             return self._fail(
-                f"持仓{days_held}日≥{self.max_days}日且涨幅{gain_pct:.2f}%<{self.min_gain}%，触发时间止损"
+                f"持仓{days_held}日≥{self.max_days}日且涨幅{gain_pct:.2f}%<{self.min_gain}%，触发时间止损",
+                sell_type="时间止损",
             )
         return self._pass(
             f"持仓{days_held}日≥{self.max_days}日但涨幅{gain_pct:.2f}%≥{self.min_gain}%，继续持有"

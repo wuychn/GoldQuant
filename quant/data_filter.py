@@ -121,6 +121,29 @@ def filter_payload(payload: dict, lane: str) -> dict:
             "市场状态机": p.get("市场状态机"),
         }
 
+    if lane == "during_narrative":
+        # 盘中叙述：大盘 + 市场分析数据 + 全量自选/持仓 + 人气榜前10精简
+        return {
+            "大盘指数": p.get("大盘指数"),
+            "赚钱效应": p.get("赚钱效应"),
+            "大盘资金流": p.get("大盘资金流"),
+            "涨停统计": p.get("涨停统计"),
+            "概念板块": p.get("概念板块"),
+            "市场状态机": p.get("市场状态机"),
+            "同花顺人气榜": [_slim_hot_stock(h) for h in hot[:10]],
+            "自选股": zxg,
+            "持仓股": ccg,
+        }
+
+    if lane == "pre_market":
+        # 盘前单次调用：大盘 + 全量自选/持仓（含盘口/集合竞价/历史/技术指标/资金流）+ 市场状态机
+        return {
+            "大盘指数": p.get("大盘指数"),
+            "自选股": zxg,
+            "持仓股": ccg,
+            "市场状态机": p.get("市场状态机"),
+        }
+
     if lane == "pre_main":
         return {
             "大盘指数": p.get("大盘指数"),

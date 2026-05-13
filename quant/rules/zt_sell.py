@@ -78,7 +78,8 @@ class ZTWeaknessOutflowRule(Rule):
 
         if below_avg and net_outflow:
             return self._fail(
-                f"分时走弱（最新{latest_f:.2f}<均价{avg_f:.2f}）且主力净流出，触发减仓信号"
+                f"分时走弱（最新{latest_f:.2f}<均价{avg_f:.2f}）且主力净流出，触发减仓信号",
+                sell_type="减半",
             )
 
         if below_avg:
@@ -135,7 +136,8 @@ class ZTProfitPullbackRule(Rule):
         if pullback_pct >= self.pullback_trigger:
             return self._fail(
                 f"浮盈曾达{profit_pct:.2f}%≥{self.profit_trigger}%，"
-                f"从最高{high_f:.2f}回落{pullback_pct:.2f}%≥{self.pullback_trigger}%，触发移动止盈"
+                f"从最高{high_f:.2f}回落{pullback_pct:.2f}%≥{self.pullback_trigger}%，触发移动止盈",
+                sell_type="止盈",
             )
         return self._pass(
             f"浮盈{profit_pct:.2f}%，从最高回落{pullback_pct:.2f}%<{self.pullback_trigger}%，继续持有"
@@ -191,10 +193,10 @@ class ZTOpenPatternSellRule(Rule):
             pattern = "一字涨停开"
             pullback = (high_f - latest_f) / high_f * 100 if high_f > 0 else 0
             if pullback >= 4:
-                return self._fail(f"{pattern}：从最高回落{pullback:.2f}%≥4%，建议卖50%")
+                return self._fail(f"{pattern}：从最高回落{pullback:.2f}%≥4%，建议卖50%", sell_type="减半")
             below_open = latest_f < open_f
             if below_open:
-                return self._fail(f"{pattern}：最新{latest_f:.2f}<今开{open_f:.2f}，建议清仓")
+                return self._fail(f"{pattern}：最新{latest_f:.2f}<今开{open_f:.2f}，建议清仓", sell_type="清仓")
             return self._pass(f"{pattern}：暂未触发卖出条件")
 
         gap_pct = (open_f - close_f) / close_f * 100
@@ -203,10 +205,10 @@ class ZTOpenPatternSellRule(Rule):
             # 高开
             pattern = "高开"
             if latest_f < open_f:
-                return self._fail(f"{pattern}（+{gap_pct:.1f}%）：最新{latest_f:.2f}<今开{open_f:.2f}，建议卖50%")
+                return self._fail(f"{pattern}（+{gap_pct:.1f}%）：最新{latest_f:.2f}<今开{open_f:.2f}，建议卖50%", sell_type="减半")
             pullback_from_high = (high_f - latest_f) / high_f * 100 if high_f > 0 else 0
             if pullback_from_high >= 5.5:
-                return self._fail(f"{pattern}：从最高回落{pullback_from_high:.2f}%≥5.5%，建议清仓")
+                return self._fail(f"{pattern}：从最高回落{pullback_from_high:.2f}%≥5.5%，建议清仓", sell_type="清仓")
             return self._pass(f"{pattern}：暂未触发卖出条件")
 
         if 0.5 <= gap_pct < 2:
@@ -218,16 +220,16 @@ class ZTOpenPatternSellRule(Rule):
             except (TypeError, ValueError):
                 avg_f = close_f
             if latest_f < avg_f:
-                return self._fail(f"{pattern}：最新{latest_f:.2f}<均价{avg_f:.2f}，建议卖50%")
+                return self._fail(f"{pattern}：最新{latest_f:.2f}<均价{avg_f:.2f}，建议卖50%", sell_type="减半")
             if latest_f < close_f:
-                return self._fail(f"{pattern}：最新{latest_f:.2f}<昨收{close_f:.2f}，建议清仓")
+                return self._fail(f"{pattern}：最新{latest_f:.2f}<昨收{close_f:.2f}，建议清仓", sell_type="清仓")
             return self._pass(f"{pattern}：暂未触发卖出条件")
 
         # 低开
         pattern = "低开"
         drop_pct = (latest_f - close_f) / close_f * 100
         if drop_pct <= -8:
-            return self._fail(f"{pattern}：跌幅{drop_pct:.2f}%达-8%，建议一次清仓")
+            return self._fail(f"{pattern}：跌幅{drop_pct:.2f}%达-8%，建议一次清仓", sell_type="清仓")
         return self._pass(f"{pattern}：跌幅{drop_pct:.2f}%，暂未触发")
 
 
@@ -275,7 +277,8 @@ class ZTATRStopLossRule(Rule):
 
         if latest_f <= stop_loss:
             return self._fail(
-                f"最新{latest_f:.2f}≤ATR止损价{stop_loss:.2f}（买入价{buy_f:.2f}），触发止损"
+                f"最新{latest_f:.2f}≤ATR止损价{stop_loss:.2f}（买入价{buy_f:.2f}），触发止损",
+                sell_type="止损", stop_loss_price=stop_loss,
             )
         return self._pass(f"最新{latest_f:.2f}>止损价{stop_loss:.2f}，安全")
 
@@ -325,7 +328,8 @@ class ZTTimeStopLossRule(Rule):
         if below_open and low_amplitude and low_gain:
             return self._fail(
                 f"时间止损条件满足：最新{latest_f:.2f}<今开{open_f:.2f}，"
-                f"振幅{amplitude:.2f}%<3%，涨幅{gain_f:.2f}%<1%，14:55应清仓"
+                f"振幅{amplitude:.2f}%<3%，涨幅{gain_f:.2f}%<1%，14:55应清仓",
+                sell_type="时间止损",
             )
         return self._pass(
             f"时间止损未触发（最新{'<' if below_open else '≥'}今开，振幅{amplitude:.2f}%，涨幅{gain_f:.2f}%）"

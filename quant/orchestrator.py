@@ -17,19 +17,18 @@ from quant.data_io import (
     update_popularity_history, read_popularity_summary,
 )
 from quant.feishu import get_token, send_msg
-from quant.llm import call_llm, parallel_call
-from quant.parsers import parse_first_json_array_from_text
+from quant.llm import call_llm
 from quant.post_process import parse_and_update, replace_json_for_feishu, save_raw_data, save_review
 from quant.prompts import (
-    build_user_msg, prompt_during_buy_lht, prompt_during_buy_zt,
-    prompt_during_hold_lht, prompt_during_hold_zt, prompt_during_overview,
-    prompt_during_positions, prompt_evening_narrative, prompt_lunch_narrative,
-    prompt_news_system, prompt_pre_market_lht, prompt_pre_market_main,
-    prompt_pre_market_zt,
+    build_user_msg, prompt_during_narrative,
+    prompt_evening_narrative, prompt_lunch_narrative,
+    prompt_news_system, prompt_pre_market,
 )
 from quant.push_format import format_push_message
 from quant.rules.context import RuleContext
 from quant.rules.registry import get_chains_for_mode, run_global_check, run_stock_chain
+from quant.signals import generate_buy_signals, generate_sell_signals
+from quant.trade_executor import ExecutedTrade, execute_signals
 
 
 # ---------------------------------------------------------------------------
@@ -270,17 +269,35 @@ def _run_rules_for_optional(payload: dict, mode: str) -> dict:
 
 def analyze_pre_market(raw_data: dict, timestamp: str) -> str:
     payload = unwrap_payload(raw_data)
-    rules_summary = _run_rules_for_mode(payload, "pre_market")
-    tail = tail_fund_only() + rules_summary
-    u_main = build_user_msg(filter_payload(payload, "pre_main"), tail=tail)
-    u_zt = build_user_msg(filter_payload(payload, "pre_zt"), tail=tail, include_news=False)
-    u_lht = build_user_msg(filter_payload(payload, "pre_lht"), tail=tail, include_news=False)
-    m, zt, lht = parallel_call(
-        lambda: call_llm(prompt_pre_market_main(), u_main, max_tokens=8000, temperature=0.16),
-        lambda: call_llm(prompt_pre_market_zt(), u_zt, max_tokens=4000, temperature=0.16),
-        lambda: call_llm(prompt_pre_market_lht(), u_lht, max_tokens=4000, temperature=0.16),
-    )
-    return m.rstrip() + "\n\n" + zt.strip() + "\n\n" + lht.strip()
+    ctx = _build_rule_context(payload, "pre_market")
+    chains = get_chains_for_mode("pre_market")
+
+    # 1. 全局预检
+    global_chain = chains.get("global")
+    global_summary = ""
+    if global_chain:
+        global_result = global_chain.evaluate(ctx)
+        global_summary = global_result.summary()
+
+    # 2. 仅生成涨停板战法买入信号（盘前不操作龙回头）
+    zt_only_chains = {k: v for k, v in chains.items() if "lht" not in k}
+    buy_signals = generate_buy_signals(ctx, zt_only_chains)
+
+    # 3. 原子执行交易
+    executed = execute_signals(buy_signals)
+    if executed:
+        print(f"盘前执行交易 {len(executed)} 笔")
+
+    # 4. LLM 叙述（一~三）
+    rules_tail = f"\n\n【规则引擎预检】\n{global_summary}" if global_summary else ""
+    tail = tail_fund_only() + rules_tail
+    u = build_user_msg(filter_payload(payload, "pre_market"), tail=tail)
+    narrative = call_llm(prompt_pre_market(), u, max_tokens=8000, temperature=0.16)
+
+    # 5. 拼接第四节（规则引擎产出）
+    section_four = _build_operation_section(executed, section="四、操作")
+
+    return narrative.rstrip() + "\n\n" + section_four
 
 
 # ---------------------------------------------------------------------------
@@ -289,23 +306,58 @@ def analyze_pre_market(raw_data: dict, timestamp: str) -> str:
 
 def analyze_during_market(raw_data: dict, timestamp: str) -> str:
     payload = unwrap_payload(raw_data)
-    rules_summary = _run_rules_for_mode(payload, "during_market")
-    tail = tail_during_market() + rules_summary
-    u_overview = build_user_msg(filter_payload(payload, "overview"), tail=tail)
-    u_zt_buy = build_user_msg(filter_payload(payload, "zt_buy"), tail=tail)
-    u_lht_buy = build_user_msg(filter_payload(payload, "lht_buy"), tail=tail)
-    u_zt_hold = build_user_msg(filter_payload(payload, "zt_hold"), tail=tail)
-    u_lht_hold = build_user_msg(filter_payload(payload, "lht_hold"), tail=tail)
-    u_pos = build_user_msg(filter_payload(payload, "positions"), tail=tail)
-    p1, p2, p3, p4, p5, p6 = parallel_call(
-        lambda: call_llm(prompt_during_overview(), u_overview, max_tokens=2000, temperature=0.16),
-        lambda: call_llm(prompt_during_buy_zt(), u_zt_buy, max_tokens=4000, temperature=0.16),
-        lambda: call_llm(prompt_during_buy_lht(), u_lht_buy, max_tokens=4000, temperature=0.16),
-        lambda: call_llm(prompt_during_hold_zt(), u_zt_hold, max_tokens=4000, temperature=0.16),
-        lambda: call_llm(prompt_during_hold_lht(), u_lht_hold, max_tokens=4000, temperature=0.16),
-        lambda: call_llm(prompt_during_positions(), u_pos, max_tokens=4000, temperature=0.16),
+    ctx = _build_rule_context(payload, "during_market")
+    chains = get_chains_for_mode("during_market")
+
+    # 1. 全局预检
+    global_chain = chains.get("global")
+    global_summary = ""
+    if global_chain:
+        global_result = global_chain.evaluate(ctx)
+        global_summary = global_result.summary()
+
+    # 2. 规则引擎生成买卖信号
+    buy_signals = generate_buy_signals(ctx, chains)
+    sell_signals = generate_sell_signals(ctx, chains)
+    all_signals = sell_signals + buy_signals  # 卖出优先
+
+    # 3. 原子执行交易（更新持仓/资金/操作记录）
+    executed = execute_signals(all_signals)
+    if executed:
+        print(f"盘中执行交易 {len(executed)} 笔")
+
+    # 4. LLM 叙述（一~四，不做任何买卖决策）
+    rules_tail = f"\n\n【规则引擎预检】\n{global_summary}" if global_summary else ""
+    tail = tail_during_market() + rules_tail
+    u_narrative = build_user_msg(
+        filter_payload(payload, "during_narrative"), tail=tail,
     )
-    return "\n\n".join(x.strip() for x in (p1, p2, p3, p4, p5, p6) if x.strip())
+    narrative = call_llm(prompt_during_narrative(), u_narrative, max_tokens=6000, temperature=0.16)
+
+    # 5. 拼接第五节（纯规则引擎产出）
+    section_five = _build_operation_section(executed)
+
+    return narrative.rstrip() + "\n\n" + section_five
+
+
+def _build_operation_section(executed: list[ExecutedTrade], *, section: str = "五、操作") -> str:
+    """从已执行交易列表构建操作段落。"""
+    lines = [section]
+    if not executed:
+        lines.append("本轮无操作信号。")
+        return "\n".join(lines)
+    for e in executed:
+        s = e.signal
+        pnl_part = f"，盈亏：{e.pnl:+.2f}元" if e.pnl else ""
+        lines.append(
+            f"· {s.action}{s.name}（{s.code}），"
+            f"时间：{e.timestamp}，"
+            f"价格：{s.price:.2f}，"
+            f"数量：{s.quantity // 100}手，"
+            f"战法：{s.strategy}，"
+            f"理由：{s.reason}{pnl_part}"
+        )
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -481,23 +533,28 @@ def run_mode(mode: str, timestamp: str):
         analysis = f"【{label}】{timestamp}\n\n服务异常，请稍后重试。"
 
     feishu_content = analysis
-    try:
-        pu = parse_and_update(
-            analysis,
-            mode,
-            market_payload=unwrap_payload(data)
-            if mode in ("post_market_lunch", "post_market_evening")
-            else None,
-        )
-        feishu_content = replace_json_for_feishu(
-            analysis,
-            optional_span=pu["optional_span"],
-            optional_lines=pu["optional_lines"],
-            holdings_span=pu["holdings_span"],
-            holdings_lines=pu["holdings_lines"],
-        )
-    except Exception as e:
-        print(f"解析更新失败: {e}")
+    if mode in ("during_market", "pre_market"):
+        # 盘中/盘前模式：交易已在 analyze 内部由规则引擎完成，
+        # 无需 parse_and_update() 解析 LLM 输出中的 JSON
+        pass
+    else:
+        try:
+            pu = parse_and_update(
+                analysis,
+                mode,
+                market_payload=unwrap_payload(data)
+                if mode in ("post_market_lunch", "post_market_evening")
+                else None,
+            )
+            feishu_content = replace_json_for_feishu(
+                analysis,
+                optional_span=pu["optional_span"],
+                optional_lines=pu["optional_lines"],
+                holdings_span=pu["holdings_span"],
+                holdings_lines=pu["holdings_lines"],
+            )
+        except Exception as e:
+            print(f"解析更新失败: {e}")
 
     try:
         token = get_token()
