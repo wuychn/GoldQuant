@@ -1,17 +1,17 @@
-"""龙回头战法-加自选规则（7条）。"""
+"""龙回头战法-加自选规则：前期连板辨识度 + 深调企稳第二波，参数均由 rules_config 覆盖。"""
 
 from __future__ import annotations
 
 from quant.rules.base import Rule, RuleResult
 from quant.rules.context import RuleContext
+from quant.rules.daily_bar_zt import max_consecutive_limit_up_days
 
 
 class LHTPopularityRule(Rule):
-    """龙回头加自选条件1：人气排名≤50。"""
+    """龙回头加自选：人气排名≤上限。"""
 
-    def __init__(self, *, max_rank: int = 50, enabled: bool = True):
-        super().__init__(enabled=enabled)
-        self.max_rank = max_rank
+    def default_params(self) -> dict:
+        return {"max_rank": 50}
 
     @property
     def name(self) -> str:
@@ -21,6 +21,7 @@ class LHTPopularityRule(Rule):
         stock = ctx.target_stock
         code = str(stock.get("股票代码", "")).strip()
         name = str(stock.get("股票名称", "")).strip()
+        max_rank = int(self.params["max_rank"])
 
         rank = stock.get("人气排名")
         if rank is None:
@@ -36,78 +37,61 @@ class LHTPopularityRule(Rule):
         except (TypeError, ValueError):
             return self._fail(f"{name}({code})人气排名数据异常: {rank}")
 
-        if rank <= self.max_rank:
-            return self._pass(f"人气排名={rank}≤{self.max_rank}")
-        return self._fail(f"人气排名={rank}>{self.max_rank}")
+        if rank <= max_rank:
+            return self._pass(f"人气排名={rank}≤{max_rank}")
+        return self._fail(f"人气排名={rank}>{max_rank}")
 
 
-class LHTRecentZTRule(Rule):
-    """龙回头加自选条件2：近30日内曾涨停。"""
+class LHTMaxConsecutiveZTRunRule(Rule):
+    """龙回头加自选：回看窗口内「连续涨停」最大天数≥阈值（刻画前期连板龙头）。"""
 
-    def __init__(self, *, lookback_days: int = 30, enabled: bool = True):
-        super().__init__(enabled=enabled)
-        self.lookback_days = lookback_days
+    def default_params(self) -> dict:
+        return {
+            "lookback_days": 30,
+            "min_consecutive_zt_days": 2,
+            "main_board_zt_pct": 9.8,
+            "cyb_zt_pct": 19.8,
+        }
 
     @property
     def name(self) -> str:
-        return "LHT近期涨停"
+        return "LHT前期连板"
 
     def evaluate(self, ctx: RuleContext) -> RuleResult:
         stock = ctx.target_stock
         code = str(stock.get("股票代码", "")).strip()
         name = str(stock.get("股票名称", "")).strip()
+        lookback = int(self.params["lookback_days"])
+        need = int(self.params["min_consecutive_zt_days"])
+        main_pct = float(self.params["main_board_zt_pct"])
+        cyb_pct = float(self.params["cyb_zt_pct"])
 
         history = stock.get("历史行情", [])
-        if not history:
-            return self._fail(f"{name}({code})无历史行情数据")
+        if not history or not isinstance(history, list) or len(history) < 2:
+            return self._fail(f"{name}({code})历史行情不足")
 
-        if not isinstance(history, list) or len(history) < 2:
-            return self._fail(f"{name}({code})历史行情数据不足")
+        best = max_consecutive_limit_up_days(
+            history,
+            code,
+            lookback_days=lookback,
+            main_pct=main_pct,
+            cyb_pct=cyb_pct,
+        )
 
-        # 创业板涨停阈值19.8%，其他9.8%
-        threshold = 19.8 if code.startswith("30") else 9.8
-
-        # 检查历史行情中是否有涨停日
-        has_zt = False
-        for i in range(1, min(len(history), self.lookback_days + 1)):
-            bar = history[i] if i < len(history) else None
-            if not isinstance(bar, dict):
-                continue
-            # 优先使用涨跌幅字段
-            change = bar.get("涨跌幅")
-            if change is not None:
-                try:
-                    if float(change) >= threshold:
-                        has_zt = True
-                        break
-                except (TypeError, ValueError):
-                    pass
-            else:
-                # 从相邻两日收盘计算
-                prev_bar = history[i - 1] if i - 1 >= 0 and isinstance(history[i - 1], dict) else None
-                if prev_bar:
-                    try:
-                        cur_close = float(bar.get("收盘", 0))
-                        prev_close = float(prev_bar.get("收盘", 0))
-                        if prev_close > 0:
-                            pct = (cur_close - prev_close) / prev_close * 100
-                            if pct >= threshold:
-                                has_zt = True
-                                break
-                    except (TypeError, ValueError):
-                        pass
-
-        if has_zt:
-            return self._pass(f"近{self.lookback_days}日内曾涨停")
-        return self._fail(f"近{self.lookback_days}日内无涨停经历")
+        if best >= need:
+            return self._pass(
+                f"近{lookback}日内最大连续涨停{best}天≥要求{need}天"
+            )
+        return self._fail(
+            f"近{lookback}日内最大连续涨停{best}天<{need}天，前期连板辨识度不足"
+        )
 
 
 class LHTPullbackRule(Rule):
-    """龙回头加自选条件3：回调幅度≥10%（近30日最高收盘到最新收盘）。"""
+    """龙回头加自选：从阶段高点回落幅度≥阈值（深调）。"""
 
-    def __init__(self, *, min_pullback: float = 10.0, enabled: bool = True):
-        super().__init__(enabled=enabled)
-        self.min_pullback = min_pullback
+    def default_params(self) -> dict:
+        return {"min_pullback_pct": 10.0, "lookback_days": 30}
 
     @property
     def name(self) -> str:
@@ -117,14 +101,15 @@ class LHTPullbackRule(Rule):
         stock = ctx.target_stock
         code = str(stock.get("股票代码", "")).strip()
         name = str(stock.get("股票名称", "")).strip()
+        min_pb = float(self.params["min_pullback_pct"])
+        lookback = int(self.params["lookback_days"])
 
         history = stock.get("历史行情", [])
         if not history or not isinstance(history, list):
             return self._fail(f"{name}({code})无历史行情数据")
 
-        # 取近30日收盘价
-        closes = []
-        for bar in history[-30:]:
+        closes: list[float] = []
+        for bar in history[-lookback:]:
             if isinstance(bar, dict):
                 c = bar.get("收盘")
                 if c is not None:
@@ -144,19 +129,26 @@ class LHTPullbackRule(Rule):
 
         pullback_pct = (max_close - latest_close) / max_close * 100
 
-        if pullback_pct >= self.min_pullback:
+        if pullback_pct >= min_pb:
             return self._pass(
-                f"近30日最高{max_close:.2f}，最新{latest_close:.2f}，"
-                f"回落{pullback_pct:.1f}%≥{self.min_pullback}%"
+                f"近{lookback}日最高{max_close:.2f}，最新{latest_close:.2f}，"
+                f"回落{pullback_pct:.1f}%≥{min_pb}%"
             )
         return self._fail(
-            f"近30日最高{max_close:.2f}，最新{latest_close:.2f}，"
-            f"回落{pullback_pct:.1f}%<{self.min_pullback}%，回调不充分"
+            f"近{lookback}日最高{max_close:.2f}，最新{latest_close:.2f}，"
+            f"回落{pullback_pct:.1f}%<{min_pb}%，深调不充分"
         )
 
 
 class LHTMASupportRule(Rule):
-    """龙回头加自选条件4：回踩均线企稳（价格在任一均线的[98%,110%]且均线多头排列）。"""
+    """龙回头加自选：回踩均线企稳 + 均线多头（区间与多头要求可配）。"""
+
+    def default_params(self) -> dict:
+        return {
+            "ma_low_ratio": 0.98,
+            "ma_high_ratio": 1.10,
+            "require_ma5_ge_ma10": False,
+        }
 
     @property
     def name(self) -> str:
@@ -166,14 +158,15 @@ class LHTMASupportRule(Rule):
         stock = ctx.target_stock
         code = str(stock.get("股票代码", "")).strip()
         name = str(stock.get("股票名称", "")).strip()
-        tech = stock.get("技术指标", {})
+        lo = float(self.params["ma_low_ratio"])
+        hi = float(self.params["ma_high_ratio"])
+        require55 = bool(self.params["require_ma5_ge_ma10"])
 
-        # 获取均线数据
+        tech = stock.get("技术指标", {})
         ma5 = tech.get("均线5日")
         ma10 = tech.get("均线10日")
         ma20 = tech.get("均线20日")
 
-        # 获取最新收盘价
         latest_close = tech.get("最新收盘价")
         if latest_close is None:
             history = stock.get("历史行情", [])
@@ -188,8 +181,7 @@ class LHTMASupportRule(Rule):
         except (TypeError, ValueError):
             return self._fail(f"{name}({code})收盘价数据异常")
 
-        # 检查价格在任一均线[98%, 110%]区间
-        ma_values = {}
+        ma_values: dict[str, float] = {}
         for label, val in [("5日", ma5), ("10日", ma10), ("20日", ma20)]:
             if val is not None:
                 try:
@@ -204,7 +196,7 @@ class LHTMASupportRule(Rule):
         for label, ma_val in ma_values.items():
             if ma_val > 0:
                 ratio = price / ma_val
-                if 0.98 <= ratio <= 1.10:
+                if lo <= ratio <= hi:
                     near_ma = (label, ma_val, ratio)
                     break
 
@@ -212,32 +204,40 @@ class LHTMASupportRule(Rule):
             ratios_info = ", ".join(
                 f"{l}={price/v*100:.1f}%" for l, v in ma_values.items() if v > 0
             )
-            return self._fail(f"{name}({code})不在任何均线[98%,110%]区间（{ratios_info}）")
+            return self._fail(
+                f"{name}({code})不在任何均线[{lo*100:.0f}%,{hi*100:.0f}%]区间（{ratios_info}）"
+            )
 
-        # 检查均线多头排列（至少满足其一）
         ma5_v = ma_values.get("5日", 0)
         ma10_v = ma_values.get("10日", 0)
         ma20_v = ma_values.get("20日", 0)
 
         bullish = False
-        if ma5_v > 0 and ma10_v > 0 and ma5_v >= ma10_v:
-            bullish = True
-        elif ma10_v > 0 and ma20_v > 0 and ma10_v >= ma20_v:
-            bullish = True
+        if require55:
+            if ma5_v > 0 and ma10_v > 0 and ma20_v > 0:
+                bullish = ma5_v >= ma10_v >= ma20_v
+        else:
+            if ma5_v > 0 and ma10_v > 0 and ma5_v >= ma10_v:
+                bullish = True
+            elif ma10_v > 0 and ma20_v > 0 and ma10_v >= ma20_v:
+                bullish = True
 
         if not bullish:
             return self._fail(
-                f"{name}({code})均线非多头排列（MA5={ma5_v:.2f}, MA10={ma10_v:.2f}, MA20={ma20_v:.2f}）"
+                f"{name}({code})均线多头未满足（MA5={ma5_v:.2f}, MA10={ma10_v:.2f}, MA20={ma20_v:.2f}）"
             )
 
         label, ma_val, ratio = near_ma
         return self._pass(
-            f"收盘{price:.2f}在均线{label}({ma_val:.2f})的{ratio*100:.1f}%处，均线多头排列"
+            f"收盘{price:.2f}在均线{label}({ma_val:.2f})的{ratio*100:.1f}%处，多头企稳"
         )
 
 
 class LHTConsecutiveUpRule(Rule):
-    """龙回头加自选条件5：连续两日收阳（收盘>开盘）。"""
+    """龙回头加自选：连续收阳企稳。"""
+
+    def default_params(self) -> dict:
+        return {"min_consecutive_days": 2}
 
     @property
     def name(self) -> str:
@@ -247,39 +247,34 @@ class LHTConsecutiveUpRule(Rule):
         stock = ctx.target_stock
         code = str(stock.get("股票代码", "")).strip()
         name = str(stock.get("股票名称", "")).strip()
+        n = int(self.params["min_consecutive_days"])
+        if n < 1:
+            n = 1
 
         history = stock.get("历史行情", [])
-        if not history or not isinstance(history, list) or len(history) < 2:
-            return self._fail(f"{name}({code})历史行情不足2日")
+        if not history or not isinstance(history, list) or len(history) < n:
+            return self._fail(f"{name}({code})历史行情不足{n}日")
 
-        last_two = history[-2:]
-        all_positive = True
-        for bar in last_two:
+        last_n = history[-n:]
+        for bar in last_n:
             if not isinstance(bar, dict):
-                all_positive = False
-                break
+                return self._fail(f"{name}({code})K线数据异常")
             try:
                 close = float(bar.get("收盘", 0))
                 open_p = float(bar.get("开盘", 0))
                 if close <= open_p:
-                    all_positive = False
-                    break
+                    return self._fail(f"{name}({code})近{n}日未连续收阳")
             except (TypeError, ValueError):
-                all_positive = False
-                break
+                return self._fail(f"{name}({code})价格格式异常")
 
-        if all_positive:
-            return self._pass("最后两日均收阳（收盘>开盘）")
-        return self._fail("最后两日未连续收阳")
+        return self._pass(f"最近{n}日均收阳（收盘>开盘）")
 
 
 class LHTVolumeRule(Rule):
-    """龙回头加自选条件6：量能温和放大（最近一日成交额在前5日均值的[1.0, 3.0]倍）。"""
+    """龙回头加自选：量能温和放大。"""
 
-    def __init__(self, *, min_ratio: float = 1.0, max_ratio: float = 3.0, enabled: bool = True):
-        super().__init__(enabled=enabled)
-        self.min_ratio = min_ratio
-        self.max_ratio = max_ratio
+    def default_params(self) -> dict:
+        return {"min_ratio": 1.0, "max_ratio": 3.0}
 
     @property
     def name(self) -> str:
@@ -289,13 +284,14 @@ class LHTVolumeRule(Rule):
         stock = ctx.target_stock
         code = str(stock.get("股票代码", "")).strip()
         name = str(stock.get("股票名称", "")).strip()
+        min_ratio = float(self.params["min_ratio"])
+        max_ratio = float(self.params["max_ratio"])
 
         history = stock.get("历史行情", [])
         if not history or not isinstance(history, list) or len(history) < 6:
             return self._fail(f"{name}({code})历史行情不足6日（需最近1日+前5日均值）")
 
-        # 取最近6日成交额
-        amounts = []
+        amounts: list[float] = []
         for bar in history[-6:]:
             if isinstance(bar, dict):
                 amt = bar.get("成交额", bar.get("金额"))
@@ -316,19 +312,19 @@ class LHTVolumeRule(Rule):
 
         ratio = latest_amt / prev5_avg
 
-        if self.min_ratio <= ratio <= self.max_ratio:
+        if min_ratio <= ratio <= max_ratio:
             return self._pass(
                 f"最近成交额{latest_amt:.0f}/前5日均值{prev5_avg:.0f}={ratio:.2f}倍，"
-                f"在[{self.min_ratio},{self.max_ratio}]区间"
+                f"在[{min_ratio},{max_ratio}]区间"
             )
         return self._fail(
-            f"量比{ratio:.2f}倍不在[{self.min_ratio},{self.max_ratio}]区间"
+            f"量比{ratio:.2f}倍不在[{min_ratio},{max_ratio}]区间"
             f"（最近{latest_amt:.0f}/均值{prev5_avg:.0f}）"
         )
 
 
 class LHTMACDRule(Rule):
-    """龙回头加自选条件7：MACD配合（DIF>DEA且DIF>0）。"""
+    """龙回头加自选：MACD 多头配合。"""
 
     @property
     def name(self) -> str:

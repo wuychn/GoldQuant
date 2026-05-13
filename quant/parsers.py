@@ -164,6 +164,8 @@ def _infer_optional_strategy_from_reason(reason: str) -> str | None:
     s = (reason or "").strip()
     if s.startswith("【涨停板战法】"):
         return "涨停板战法"
+    if s.startswith("【主升浪战法】"):
+        return "主升浪战法"
     if s.startswith("【龙回头战法】"):
         return "龙回头战法"
     return None

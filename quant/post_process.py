@@ -121,6 +121,9 @@ def parse_and_update(content: str, mode: str, market_payload: dict | None = None
                 reasons.append(f"涨停板：{reason_zt}")
             if reason_lht:
                 reasons.append(f"龙回头：{reason_lht}")
+            reason_zsll = _extract_reason_from_content(content, "主升浪战法自选未更新原因")
+            if reason_zsll:
+                reasons.append(f"主升浪：{reason_zsll}")
             reason_str = "；".join(reasons) if reasons else "LLM未给出具体原因"
             print(f"自选未更新。原因：{reason_str}")
 

@@ -23,7 +23,7 @@ POPULARITY_FILE = f"{DATA_DIR}/popularity_history.md"
 NEWS_IMPACT_SUMMARY_FILE = f"{DATA_DIR}/news_market_impact_summary.txt"
 MEMORY_FILE = f"{DATA_DIR}/MEMORY.md"
 
-OPTIONAL_STRATEGY_ALLOWED = frozenset({"涨停板战法", "龙回头战法"})
+OPTIONAL_STRATEGY_ALLOWED = frozenset({"涨停板战法", "龙回头战法", "主升浪战法"})
 
 LLM_OUTPUT_FORMAT = "\n【输出格式要求】纯文本，禁止使用 markdown 的 #、*、- 等排版符号。\n"
 

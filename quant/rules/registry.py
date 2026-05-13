@@ -33,10 +33,34 @@ from quant.rules.lht_watchlist import (
     LHTConsecutiveUpRule,
     LHTMACDRule,
     LHTMASupportRule,
+    LHTMaxConsecutiveZTRunRule,
     LHTPopularityRule,
     LHTPullbackRule,
-    LHTRecentZTRule,
     LHTVolumeRule,
+)
+from quant.rules.zsll_buy import (
+    ZSLMainCapitalInflowRule,
+    ZSLPriceRidingMARule,
+    ZSLTimeAfter10Rule,
+    ZSLVolumeRatioRule,
+)
+from quant.rules.zsll_sell import (
+    ZSLAboveMA5Rule,
+    ZSLCapitalOutflowRule,
+    ZSLMABreakdownRule,
+    ZSLMAStopLossRule,
+    ZSLProfitTargetRule,
+    ZSLReboundPullbackRule,
+    ZSLTimeStopLossRule,
+)
+from quant.rules.zsll_watchlist import (
+    ZSLMACDRule,
+    ZSLMaLongTrendRule,
+    ZSLPopularityRule,
+    ZSLPositiveDaysRatioRule,
+    ZSLTrendGainRule,
+    ZSLVolumeThrustRule,
+    ZSLWindowMaxDrawdownRule,
 )
 from quant.rules.market_state import (
     MarketStateDeterminationRule,
@@ -222,7 +246,7 @@ def build_lht_watchlist_chain() -> RuleChain:
     rules: list[Rule] = [
         StockPoolFilterRule(),
         LHTPopularityRule(),
-        LHTRecentZTRule(),
+        LHTMaxConsecutiveZTRunRule(),
         LHTPullbackRule(),
         LHTMASupportRule(),
         LHTConsecutiveUpRule(),
@@ -274,6 +298,64 @@ def build_lht_sell_chain() -> RuleChain:
     return RuleChain("龙回头-卖出", rules, halt_on_first_failure=False)
 
 
+def build_zsll_watchlist_chain() -> RuleChain:
+    """主升浪战法-加自选规则链。"""
+    config = _load_config()
+    rules: list[Rule] = [
+        StockPoolFilterRule(),
+        ZSLPopularityRule(),
+        ZSLTrendGainRule(),
+        ZSLMaLongTrendRule(),
+        ZSLWindowMaxDrawdownRule(),
+        ZSLPositiveDaysRatioRule(),
+        ZSLVolumeThrustRule(),
+        ZSLMACDRule(),
+    ]
+    _apply_config("zsll_watchlist", rules, config)
+    return RuleChain("主升浪-加自选", rules, halt_on_first_failure=True)
+
+
+def build_zsll_buy_chain() -> RuleChain:
+    """主升浪战法-买入规则链。"""
+    config = _load_config()
+    rules: list[Rule] = [
+        StockPoolFilterRule(),
+        StopLossCoolingRule(),
+        PositionLimitRule(),
+        ZSLPriceRidingMARule(),
+        ZSLTimeAfter10Rule(),
+        ZSLVolumeRatioRule(),
+        ZSLMainCapitalInflowRule(),
+    ]
+    _apply_config("zsll_buy", rules, config)
+    return RuleChain("主升浪-买入", rules, halt_on_first_failure=True)
+
+
+def build_zsll_hold_chain() -> RuleChain:
+    """主升浪战法-持股监控规则链。"""
+    config = _load_config()
+    rules: list[Rule] = [
+        ZSLAboveMA5Rule(),
+        ZSLMABreakdownRule(),
+        ZSLCapitalOutflowRule(),
+        ZSLReboundPullbackRule(),
+    ]
+    _apply_config("zsll_hold", rules, config)
+    return RuleChain("主升浪-持股监控", rules, halt_on_first_failure=False)
+
+
+def build_zsll_sell_chain() -> RuleChain:
+    """主升浪战法-卖出规则链。"""
+    config = _load_config()
+    rules: list[Rule] = [
+        ZSLProfitTargetRule(),
+        ZSLMAStopLossRule(),
+        ZSLTimeStopLossRule(),
+    ]
+    _apply_config("zsll_sell", rules, config)
+    return RuleChain("主升浪-卖出", rules, halt_on_first_failure=False)
+
+
 # ---------------------------------------------------------------------------
 # 便捷方法：根据模式获取所有相关链
 # ---------------------------------------------------------------------------
@@ -285,18 +367,24 @@ def get_chains_for_mode(mode: str) -> dict[str, RuleChain]:
     if mode == "pre_market":
         chains["zt_buy_pre"] = build_zt_buy_pre_chain()
         chains["lht_buy"] = build_lht_buy_chain()
+        chains["zsll_buy"] = build_zsll_buy_chain()
         chains["zt_hold"] = build_zt_hold_chain()
         chains["lht_hold"] = build_lht_hold_chain()
+        chains["zsll_hold"] = build_zsll_hold_chain()
     elif mode == "during_market":
         chains["zt_buy_intraday"] = build_zt_buy_intraday_chain()
         chains["lht_buy"] = build_lht_buy_chain()
+        chains["zsll_buy"] = build_zsll_buy_chain()
         chains["zt_hold"] = build_zt_hold_chain()
         chains["zt_sell"] = build_zt_sell_chain()
         chains["lht_hold"] = build_lht_hold_chain()
         chains["lht_sell"] = build_lht_sell_chain()
+        chains["zsll_hold"] = build_zsll_hold_chain()
+        chains["zsll_sell"] = build_zsll_sell_chain()
     elif mode in ("post_market_lunch", "post_market_evening"):
         chains["zt_watchlist"] = build_zt_watchlist_chain()
         chains["lht_watchlist"] = build_lht_watchlist_chain()
+        chains["zsll_watchlist"] = build_zsll_watchlist_chain()
 
     return chains
 

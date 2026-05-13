@@ -48,8 +48,8 @@ position:
   PositionLimit:
     enabled: true
     params:
-      max_positions_strong: 3  # 强势市场最多持仓数
-      max_positions_neutral: 2 # 震荡市场最多持仓数
+      max_positions_strong: 5  # 强势市场最多持仓数
+      max_positions_neutral: 3 # 震荡市场最多持仓数
       max_positions_weak: 1    # 弱势市场最多持仓数
 
 # --------------------------------------------------------------------------
@@ -69,11 +69,10 @@ common:
   StopLossCooling:
     enabled: true
     params:
-      cooling_days: 5          # 止损后冷却天数
+      cooling_days: 3          # 止损后冷却天数
 
 # --------------------------------------------------------------------------
-# 涨停板战法 - 加自选
-# 从人气榜中筛选符合涨停板战法的标的加入自选
+# 涨停板战法 - 加自选（主打连板强势接力；连板上下限见 ZTConsecutiveBoards）
 # --------------------------------------------------------------------------
 zt_watchlist:
   # 人气排名要求
@@ -112,7 +111,7 @@ zt_buy_pre:
     enabled: true
     params:
       min_open_pct: 1.0        # 最低高开幅度(%)
-      max_open_pct: 5.0        # 最高高开幅度(%)，过高追高风险
+      max_open_pct: 7.0        # 最高高开幅度(%)，过高追高风险
 
   # 竞价量比
   ZTVolumeRatioPre:
@@ -126,7 +125,7 @@ zt_buy_pre:
 
   # 集合竞价成交额
   ZTAuctionVolume:
-    enabled: true
+    enabled: false
     params:
       min_auction_amount_wan: 3000  # 集合竞价最低成交额(万元)
 
@@ -139,7 +138,7 @@ zt_buy_intraday:
   ZTIntradayPopularity:
     enabled: true
     params:
-      max_rank: 30             # 盘中人气排名需在前N名
+      max_rank: 20             # 盘中人气排名需在前N名
 
   # 概念板块活跃
   ZTIntradayConcept:
@@ -170,7 +169,7 @@ zt_hold:
 
   # 大单持续流出预警
   ZTWeaknessOutflow:
-    enabled: true
+    enabled: false
     params:
       outflow_threshold_wan: -5000  # 大单净流出超此值触发预警(万)
 
@@ -189,7 +188,7 @@ zt_sell:
   ZTOpenPatternSell:
     enabled: true
     params:
-      low_open_pct: -1.0       # 开盘跌幅低于此值触发(%)
+      low_open_pct: -3.0       # 开盘跌幅低于此值触发(%)
 
   # ATR止损（基于波动率的动态止损）
   ZTATRStopLoss:
@@ -201,53 +200,52 @@ zt_sell:
   ZTTimeStopLoss:
     enabled: true
     params:
-      max_hold_days: 3         # 最大持仓天数
+      max_hold_days: 5         # 最大持仓天数
 
 # --------------------------------------------------------------------------
-# 龙回头战法 - 加自选
-# 从人气榜中筛选符合龙回头形态的标的
+# 龙回头战法 - 加自选（第二波：前期连板辨识度 + 深调企稳）
 # --------------------------------------------------------------------------
 lht_watchlist:
-  # 人气排名（龙回头需要有过高人气的历史）
   LHTPopularity:
     enabled: true
     params:
-      max_rank: 100            # 历史最高排名需在前N名
+      max_rank: 100
 
-  # 近期有涨停历史
-  LHTRecentZT:
+  # 回看窗口内「连续涨停」最大天数（日线涨跌幅达到涨停阈值）
+  LHTMaxConsecutiveZTRun:
     enabled: true
     params:
-      lookback_days: 10        # 回看天数
-      min_zt_count: 1          # 最少涨停次数
+      lookback_days: 15
+      min_consecutive_zt_days: 2   # 至少连续 N 个涨停日，刻画前期龙头
+      main_board_zt_pct: 9.8
+      cyb_zt_pct: 19.8
 
-  # 回调幅度（从高点回撤）
+  # 从阶段高点回落（深调）
   LHTPullback:
     enabled: true
     params:
-      min_pullback_pct: -5.0  # 最少回调幅度(%)
-      max_pullback_pct: -30.0  # 最大回调幅度(%)，过深可能破位
+      min_pullback_pct: 10.0      # 最小回落幅度(%)，与主升浪阶段回撤上限配合使用
+      lookback_days: 30
 
-  # 均线支撑（回调到均线附近获支撑）
+  # 回踩均线企稳区间 + 多头结构
   LHTMASupport:
     enabled: true
     params:
-      support_ma: 20           # 支撑均线周期
-      tolerance_pct: 3.0       # 允许偏离均线幅度(%)
+      ma_low_ratio: 0.98
+      ma_high_ratio: 1.10
+      require_ma5_ge_ma10: false  # true 时要求 MA5≥MA10≥MA20 严格多头排列
 
-  # 连续收阳（企稳信号）
   LHTConsecutiveUp:
     enabled: true
     params:
-      min_consecutive_days: 2  # 最少连续收阳天数
+      min_consecutive_days: 2
 
-  # 缩量企稳
   LHTVolume:
     enabled: true
     params:
-      max_volume_ratio: 0.7    # 回调阶段量比上限（相对前期放量）
+      min_ratio: 1.0
+      max_ratio: 3.0
 
-  # MACD 金叉/底背离
   LHTMACD:
     enabled: true
 
@@ -329,3 +327,117 @@ lht_sell:
     enabled: true
     params:
       max_hold_days: 10        # 最大持仓天数
+
+# --------------------------------------------------------------------------
+# 主升浪战法 - 加自选（主打中长期趋势与结构）
+# --------------------------------------------------------------------------
+zsll_watchlist:
+  ZSLPopularity:
+    enabled: true
+    params:
+      max_rank: 80
+
+  # 近 ref_days 根 K 线累计涨幅
+  ZSLTrendGain:
+    enabled: true
+    params:
+      ref_days: 15
+      min_gain_pct: 5.0
+
+  # 均线多头 + 收盘相对 MA5/MA20
+  ZSLMaLongTrend:
+    enabled: true
+    params:
+      require_full_stack: true
+      ma5_floor_ratio: 0.98
+      ma20_floor_ratio: 1.0
+
+  # 窗口内自高点最大回撤上限（非深调第二波语义）
+  ZSLWindowMaxDrawdown:
+    enabled: true
+    params:
+      lookback_days: 60
+      max_drawdown_from_high_pct: 35.0
+
+  # 收阳日占比
+  ZSLPositiveDaysRatio:
+    enabled: true
+    params:
+      window_days: 15
+      min_positive_ratio: 0.52
+
+  ZSLVolumeThrust:
+    enabled: true
+    params:
+      min_ratio: 0.9
+      max_ratio: 5.0
+
+  ZSLMACD:
+    enabled: true
+
+# --------------------------------------------------------------------------
+# 主升浪战法 - 买入
+# --------------------------------------------------------------------------
+zsll_buy:
+  ZSLPriceRidingMA:
+    enabled: true
+    params:
+      ma5_low_ratio: 0.99
+      ma5_high_ratio: 1.06
+      ma10_low_ratio: 0.99
+      ma10_high_ratio: 1.03
+      ma20_low_ratio: 0.99
+      ma20_high_ratio: 1.03
+
+  ZSLTimeAfter10:
+    enabled: true
+    params:
+      earliest_hour: 10
+      earliest_minute: 0
+
+  ZSLVolumeRatio:
+    enabled: true
+    params:
+      min_ratio: 1.0
+      max_ratio: 3.5
+
+  ZSLMainCapitalInflow:
+    enabled: true
+
+# --------------------------------------------------------------------------
+# 主升浪战法 - 持股监控
+# --------------------------------------------------------------------------
+zsll_hold:
+  ZSLAboveMA5:
+    enabled: true
+
+  ZSLMABreakdown:
+    enabled: true
+    params:
+      breakdown_ratio: 0.98
+
+  ZSLCapitalOutflow:
+    enabled: true
+
+  ZSLReboundPullback:
+    enabled: true
+    params:
+      pullback_pct: 3.0
+
+# --------------------------------------------------------------------------
+# 主升浪战法 - 卖出
+# --------------------------------------------------------------------------
+zsll_sell:
+  ZSLProfitTarget:
+    enabled: true
+
+  ZSLMAStopLoss:
+    enabled: true
+    params:
+      stop_ratio: 0.98
+
+  ZSLTimeStopLoss:
+    enabled: true
+    params:
+      max_days: 5
+      min_gain_pct: 5.0

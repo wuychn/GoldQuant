@@ -25,6 +25,7 @@ from quant.prompts import (
     prompt_news_system, prompt_pre_market,
 )
 from quant.push_format import format_push_message
+from quant.rules.base import ChainResult
 from quant.rules.context import RuleContext
 from quant.rules.registry import get_chains_for_mode, run_global_check, run_stock_chain
 from quant.signals import generate_buy_signals, generate_sell_signals
@@ -134,10 +135,13 @@ def _run_rules_for_mode(payload: dict, mode: str) -> str:
             buy_chain_key = "zt_buy_pre" if mode == "pre_market" else "zt_buy_intraday"
             zt_buy = chains.get(buy_chain_key)
             lht_buy = chains.get("lht_buy")
+            zsll_buy = chains.get("zsll_buy")
             for stock in ctx.watchlist:
                 strategy = str(stock.get("战法", "")).strip()
                 if "涨停" in strategy and zt_buy:
                     parts.append(run_stock_chain(zt_buy, ctx, stock))
+                elif "主升浪" in strategy and zsll_buy:
+                    parts.append(run_stock_chain(zsll_buy, ctx, stock))
                 elif "龙回头" in strategy and lht_buy:
                     parts.append(run_stock_chain(lht_buy, ctx, stock))
 
@@ -146,6 +150,8 @@ def _run_rules_for_mode(payload: dict, mode: str) -> str:
             zt_sell = chains.get("zt_sell")
             lht_hold = chains.get("lht_hold")
             lht_sell = chains.get("lht_sell")
+            zsll_hold = chains.get("zsll_hold")
+            zsll_sell = chains.get("zsll_sell")
             for stock in ctx.holdings:
                 strategy = str(stock.get("战法", stock.get("买入原因", ""))).strip()
                 if "涨停" in strategy:
@@ -153,7 +159,12 @@ def _run_rules_for_mode(payload: dict, mode: str) -> str:
                         parts.append(run_stock_chain(zt_hold, ctx, stock))
                     if zt_sell:
                         parts.append(run_stock_chain(zt_sell, ctx, stock))
-                else:
+                elif "主升浪" in strategy:
+                    if zsll_hold:
+                        parts.append(run_stock_chain(zsll_hold, ctx, stock))
+                    if zsll_sell:
+                        parts.append(run_stock_chain(zsll_sell, ctx, stock))
+                elif "龙回头" in strategy:
                     if lht_hold:
                         parts.append(run_stock_chain(lht_hold, ctx, stock))
                     if lht_sell:
@@ -166,24 +177,58 @@ def _run_rules_for_mode(payload: dict, mode: str) -> str:
         return ""
 
 
+def _chain_failure_text(chain_result: ChainResult | None) -> str:
+    """规则链失败原因单行拼接。"""
+    if chain_result is None:
+        return "（未执行）"
+    parts = [r.reason for r in chain_result.failures if r.reason]
+    return "; ".join(parts) if parts else "（无失败明细）"
+
+
+def _prior_chain_caption(chain_result: ChainResult | None, chain_enabled: bool) -> str:
+    """互斥说明里描述「上一优先级」未入选原因；链未启用时单独标注。"""
+    if not chain_enabled:
+        return "该战法链未启用"
+    return _chain_failure_text(chain_result)
+
+
 def _run_rules_for_optional(payload: dict, mode: str) -> dict:
     """运行加自选规则链，直接决策哪些标的加入自选。
+
+    复盘时单票至多归入一种战法：**涨停板战法 > 龙回头战法 > 主升浪战法**（先通过者优先，
+    后续战法链不再参评该股）。
 
     Returns:
         {
             "added_zt": [{"股票代码", "股票名称", "战法", "加入自选原因"}...],
             "added_lht": [...],
+            "added_zsll": [...],
             "rejected_zt": [{"股票名称", "股票代码", "reason"}...],
             "rejected_lht": [...],
+            "rejected_zsll": [...],
+            "exclusivity_decisions": [
+                {"股票代码", "股票名称", "入选战法", "互斥说明"},
+                ...
+            ],
             "summary": str,  # 人类可读摘要
         }
     """
-    result = {"added_zt": [], "added_lht": [], "rejected_zt": [], "rejected_lht": [], "summary": ""}
+    result = {
+        "added_zt": [],
+        "added_lht": [],
+        "added_zsll": [],
+        "rejected_zt": [],
+        "rejected_lht": [],
+        "rejected_zsll": [],
+        "exclusivity_decisions": [],
+        "summary": "",
+    }
     try:
         ctx = _build_rule_context(payload, mode)
         chains = get_chains_for_mode(mode)
         zt_chain = chains.get("zt_watchlist")
         lht_chain = chains.get("lht_watchlist")
+        zsll_chain = chains.get("zsll_watchlist")
 
         for stock in ctx.popularity_list[:20]:
             code = str(stock.get("股票代码", "")).strip()
@@ -191,48 +236,120 @@ def _run_rules_for_optional(payload: dict, mode: str) -> dict:
             if not code:
                 continue
 
-            # 涨停板战法筛选
+            ctx.target_stock = stock
+
+            zt_res: ChainResult | None = None
+            lht_res: ChainResult | None = None
+            zsll_res: ChainResult | None = None
+
             if zt_chain:
-                ctx.target_stock = stock
-                chain_result = zt_chain.evaluate(ctx)
-                if chain_result.all_passed:
-                    reasons = "; ".join(r.reason for r in chain_result.passes if r.reason)
+                zt_res = zt_chain.evaluate(ctx)
+                if zt_res.all_passed:
+                    zt_reasons = "; ".join(r.reason for r in zt_res.passes if r.reason)
                     result["added_zt"].append({
                         "股票代码": code,
                         "股票名称": name,
                         "战法": "涨停板战法",
-                        "加入自选原因": f"【涨停板战法】{reasons}",
+                        "加入自选原因": f"【涨停板战法】{zt_reasons}",
                     })
-                else:
-                    fail_reasons = "; ".join(r.reason for r in chain_result.failures)
-                    result["rejected_zt"].append({
+                    result["exclusivity_decisions"].append({
                         "股票代码": code,
                         "股票名称": name,
-                        "reason": fail_reasons,
+                        "入选战法": "涨停板战法",
+                        "互斥说明": (
+                            "涨停板战法链全通过（互斥优先级第1），该股不再参与龙回头/主升浪评选。"
+                        ),
                     })
+                    continue
+                result["rejected_zt"].append({
+                    "股票代码": code,
+                    "股票名称": name,
+                    "reason": _chain_failure_text(zt_res),
+                })
 
-            # 龙回头战法筛选
             if lht_chain:
-                ctx.target_stock = stock
-                chain_result = lht_chain.evaluate(ctx)
-                if chain_result.all_passed:
-                    reasons = "; ".join(r.reason for r in chain_result.passes if r.reason)
+                lht_res = lht_chain.evaluate(ctx)
+                if lht_res.all_passed:
+                    lht_reasons = "; ".join(r.reason for r in lht_res.passes if r.reason)
                     result["added_lht"].append({
                         "股票代码": code,
                         "股票名称": name,
                         "战法": "龙回头战法",
-                        "加入自选原因": f"【龙回头战法】{reasons}",
+                        "加入自选原因": f"【龙回头战法】{lht_reasons}",
                     })
-                else:
-                    fail_reasons = "; ".join(r.reason for r in chain_result.failures)
-                    result["rejected_lht"].append({
+                    zt_txt = _prior_chain_caption(zt_res, bool(zt_chain))
+                    result["exclusivity_decisions"].append({
                         "股票代码": code,
                         "股票名称": name,
-                        "reason": fail_reasons,
+                        "入选战法": "龙回头战法",
+                        "互斥说明": (
+                            f"涨停板战法未通过（{zt_txt}）；龙回头战法链全通过（互斥优先级第2），"
+                            "该股不再参评主升浪。"
+                        ),
                     })
+                    continue
+                result["rejected_lht"].append({
+                    "股票代码": code,
+                    "股票名称": name,
+                    "reason": _chain_failure_text(lht_res),
+                })
+
+            if zsll_chain:
+                zsll_res = zsll_chain.evaluate(ctx)
+                if zsll_res.all_passed:
+                    zsll_reasons = "; ".join(r.reason for r in zsll_res.passes if r.reason)
+                    result["added_zsll"].append({
+                        "股票代码": code,
+                        "股票名称": name,
+                        "战法": "主升浪战法",
+                        "加入自选原因": f"【主升浪战法】{zsll_reasons}",
+                    })
+                    zt_txt = _prior_chain_caption(zt_res, bool(zt_chain))
+                    lht_txt = _prior_chain_caption(lht_res, bool(lht_chain))
+                    result["exclusivity_decisions"].append({
+                        "股票代码": code,
+                        "股票名称": name,
+                        "入选战法": "主升浪战法",
+                        "互斥说明": (
+                            f"涨停板战法未通过（{zt_txt}）；龙回头战法未通过（{lht_txt}）；"
+                            "主升浪战法链全通过（互斥优先级第3）。"
+                        ),
+                    })
+                    continue
+                result["rejected_zsll"].append({
+                    "股票代码": code,
+                    "股票名称": name,
+                    "reason": _chain_failure_text(zsll_res),
+                })
+
+            zt_txt = _prior_chain_caption(zt_res, bool(zt_chain))
+            lht_txt = _prior_chain_caption(lht_res, bool(lht_chain))
+            zsll_txt = _prior_chain_caption(zsll_res, bool(zsll_chain))
+            result["exclusivity_decisions"].append({
+                "股票代码": code,
+                "股票名称": name,
+                "入选战法": "",
+                "互斥说明": (
+                    f"三板战法均未入选。涨停板：{zt_txt}；龙回头：{lht_txt}；主升浪：{zsll_txt}"
+                ),
+            })
 
         # 生成摘要
         parts = []
+        decs = result.get("exclusivity_decisions") or []
+        if decs:
+            parts.append(
+                "【复盘·战法互斥】人气榜前20逐只判定，优先级：涨停板战法 > 龙回头战法 > 主升浪战法，"
+                "至多归入其一。"
+            )
+            for d in decs:
+                tag = d.get("入选战法") or "未入选"
+                parts.append(
+                    f"  · {d.get('股票名称', '')}({d.get('股票代码', '')}) [{tag}] "
+                    f"{d.get('互斥说明', '')}"
+                )
+            parts.append("")
+
         if result["added_zt"]:
             parts.append(f"涨停板战法新增自选{len(result['added_zt'])}只：" +
                          "、".join(f"{s['股票名称']}({s['股票代码']})" for s in result["added_zt"]))
@@ -254,6 +371,17 @@ def _run_rules_for_optional(payload: dict, mode: str) -> dict:
                              "；".join(f"{r['股票名称']}({r['股票代码']}){r['reason']}" for r in top_rejects))
             else:
                 parts.append("龙回头战法自选未更新原因：人气榜无数据")
+
+        if result["added_zsll"]:
+            parts.append(f"主升浪战法新增自选{len(result['added_zsll'])}只：" +
+                         "、".join(f"{s['股票名称']}({s['股票代码']})" for s in result["added_zsll"]))
+        else:
+            top_rejects = result["rejected_zsll"][:3]
+            if top_rejects:
+                parts.append("主升浪战法自选未更新原因：" +
+                             "；".join(f"{r['股票名称']}({r['股票代码']}){r['reason']}" for r in top_rejects))
+            else:
+                parts.append("主升浪战法自选未更新原因：人气榜无数据")
 
         result["summary"] = "\n".join(parts)
     except Exception as e:
@@ -279,8 +407,8 @@ def analyze_pre_market(raw_data: dict, timestamp: str) -> str:
         global_result = global_chain.evaluate(ctx)
         global_summary = global_result.summary()
 
-    # 2. 仅生成涨停板战法买入信号（盘前不操作龙回头）
-    zt_only_chains = {k: v for k, v in chains.items() if "lht" not in k}
+    # 2. 仅生成涨停板战法买入信号（盘前不操作龙回头/主升浪）
+    zt_only_chains = {k: v for k, v in chains.items() if k not in ("lht_buy", "zsll_buy")}
     buy_signals = generate_buy_signals(ctx, zt_only_chains)
 
     # 3. 原子执行交易
@@ -378,7 +506,11 @@ def _run_review(raw_data: dict, tail: str, *, lunch: bool) -> str:
 
     # 2. 规则引擎直接决策加自选（不经过 LLM）
     optional_result = _run_rules_for_optional(payload, mode)
-    new_optional = optional_result["added_zt"] + optional_result["added_lht"]
+    new_optional = (
+        optional_result["added_zt"]
+        + optional_result["added_lht"]
+        + optional_result["added_zsll"]
+    )
 
     # 3. 更新自选文件：追加新增标的（去重）
     existing = get_optional()
@@ -413,7 +545,11 @@ def _run_review(raw_data: dict, tail: str, *, lunch: bool) -> str:
 def _build_optional_section(optional_result: dict, *, section_num: str = "九") -> str:
     """从规则引擎结果构建自选更新段落（可读列表格式）。"""
     lines = [f"{section_num}、自选更新"]
-    merged = optional_result["added_zt"] + optional_result["added_lht"]
+    merged = (
+        optional_result["added_zt"]
+        + optional_result["added_lht"]
+        + optional_result["added_zsll"]
+    )
 
     if merged:
         for i, row in enumerate(merged, 1):
@@ -422,6 +558,20 @@ def _build_optional_section(optional_result: dict, *, section_num: str = "九") 
             lines.append(f"{i}、{row['股票名称']}({row['股票代码']}) [{tag}] {reason}")
     else:
         lines.append("本次无新增自选标的。")
+
+    decs = optional_result.get("exclusivity_decisions") or []
+    if decs:
+        lines.append("")
+        lines.append(
+            "战法互斥判断（人气榜扫描范围内逐只至多归入一种战法；优先级："
+            "涨停板战法 > 龙回头战法 > 主升浪战法）："
+        )
+        for d in decs:
+            tag = d.get("入选战法") or "未入选"
+            lines.append(
+                f"  · {d.get('股票名称', '')}({d.get('股票代码', '')}) [{tag}] "
+                f"{d.get('互斥说明', '')}"
+            )
 
     # 追加未更新原因
     if not optional_result["added_zt"]:
@@ -437,6 +587,14 @@ def _build_optional_section(optional_result: dict, *, section_num: str = "九") 
         if rejects:
             lines.append("")
             lines.append("龙回头战法未入选原因：")
+            for r in rejects:
+                lines.append(f"  · {r['股票名称']}({r['股票代码']})：{r['reason']}")
+
+    if not optional_result["added_zsll"]:
+        rejects = optional_result["rejected_zsll"][:5]
+        if rejects:
+            lines.append("")
+            lines.append("主升浪战法未入选原因：")
             for r in rejects:
                 lines.append(f"  · {r['股票名称']}({r['股票代码']})：{r['reason']}")
 

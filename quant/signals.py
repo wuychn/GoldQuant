@@ -18,7 +18,7 @@ class TradeSignal:
     name: str           # 股票名称
     price: float        # 执行价格（盘口最新价）
     quantity: int       # 股数（100 的整数倍）
-    strategy: str       # "涨停板战法" | "龙回头战法"
+    strategy: str       # "涨停板战法" | "龙回头战法" | "主升浪战法"
     reason: str         # 规则引擎给出的综合理由
     sell_type: str = "" # 卖出类型："清仓"|"减半"|"止损"|"止盈"|"时间止损"
 
@@ -42,11 +42,15 @@ def _get_strategy(stock: dict[str, Any]) -> str:
     tag = str(stock.get("战法", "") or "").strip()
     if "涨停" in tag:
         return "涨停板战法"
+    if "主升浪" in tag:
+        return "主升浪战法"
     if "龙回头" in tag:
         return "龙回头战法"
     reason = str(stock.get("加入自选原因", "") or stock.get("买入原因", "") or "").strip()
     if reason.startswith("【涨停板战法】"):
         return "涨停板战法"
+    if reason.startswith("【主升浪战法】"):
+        return "主升浪战法"
     if reason.startswith("【龙回头战法】"):
         return "龙回头战法"
     return tag or "未知"
@@ -76,6 +80,8 @@ def generate_buy_signals(ctx: RuleContext, chains: dict[str, RuleChain]) -> list
         # 选择对应买入链
         if strategy == "涨停板战法":
             chain = chains.get("zt_buy_intraday") or chains.get("zt_buy_pre")
+        elif strategy == "主升浪战法":
+            chain = chains.get("zsll_buy")
         elif strategy == "龙回头战法":
             chain = chains.get("lht_buy")
         else:
@@ -159,6 +165,9 @@ def generate_sell_signals(ctx: RuleContext, chains: dict[str, RuleChain]) -> lis
         if strategy == "涨停板战法":
             hold_chain = chains.get("zt_hold")
             sell_chain = chains.get("zt_sell")
+        elif strategy == "主升浪战法":
+            hold_chain = chains.get("zsll_hold")
+            sell_chain = chains.get("zsll_sell")
         elif strategy == "龙回头战法":
             hold_chain = chains.get("lht_hold")
             sell_chain = chains.get("lht_sell")

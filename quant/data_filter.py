@@ -38,6 +38,8 @@ def _filter_stocks_by_strategy(items: list, strategy: str) -> list:
                 out.append(item)
             elif strategy == "龙回头战法" and reason.startswith("【龙回头战法】"):
                 out.append(item)
+            elif strategy == "主升浪战法" and reason.startswith("【主升浪战法】"):
+                out.append(item)
     return out
 
 
@@ -53,6 +55,11 @@ def _hot_stock_for_lht_optional(item: dict) -> dict:
             "人气排名变化", "所属概念", "连板情况",
             "历史行情", "技术指标", "个股资金流"}
     return {k: v for k, v in item.items() if k in keep}
+
+
+def _hot_stock_for_zsll_optional(item: dict) -> dict:
+    """主升浪加自选与龙回头共用 enrichment 字段。"""
+    return _hot_stock_for_lht_optional(item)
 
 
 def filter_payload(payload: dict, lane: str) -> dict:
@@ -80,6 +87,12 @@ def filter_payload(payload: dict, lane: str) -> dict:
             "概念板块": p.get("概念板块", {}),
         }
 
+    if lane == "zsll_optional":
+        return {
+            "同花顺人气榜": [_hot_stock_for_zsll_optional(h) for h in hot],
+            "概念板块": p.get("概念板块", {}),
+        }
+
     if lane == "overview":
         return {
             "大盘指数": p.get("大盘指数"),
@@ -103,6 +116,12 @@ def filter_payload(payload: dict, lane: str) -> dict:
             "大盘资金流": p.get("大盘资金流"),
         }
 
+    if lane == "zsll_buy":
+        return {
+            "自选股": _filter_stocks_by_strategy(zxg, "主升浪战法"),
+            "大盘资金流": p.get("大盘资金流"),
+        }
+
     if lane == "zt_hold":
         return {
             "持仓股": _filter_stocks_by_strategy(ccg, "涨停板战法"),
@@ -112,6 +131,11 @@ def filter_payload(payload: dict, lane: str) -> dict:
     if lane == "lht_hold":
         return {
             "持仓股": _filter_stocks_by_strategy(ccg, "龙回头战法"),
+        }
+
+    if lane == "zsll_hold":
+        return {
+            "持仓股": _filter_stocks_by_strategy(ccg, "主升浪战法"),
         }
 
     if lane == "positions":
@@ -160,6 +184,11 @@ def filter_payload(payload: dict, lane: str) -> dict:
     if lane == "pre_lht":
         return {
             "自选股": _filter_stocks_by_strategy(zxg, "龙回头战法"),
+        }
+
+    if lane == "pre_zsll":
+        return {
+            "自选股": _filter_stocks_by_strategy(zxg, "主升浪战法"),
         }
 
     return p
