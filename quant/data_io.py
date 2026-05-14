@@ -4,7 +4,7 @@ import json
 import os
 import re
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from quant.config import (
     ACCOUNT_STATE_FILE, DATA_DIR, FUND_FILE, HOLDING_FILE, INITIAL_CAPITAL,
@@ -259,6 +259,42 @@ def _write_jsonl_stock_file(path: str, rows: list) -> None:
 
 def get_holdings() -> list:
     return _read_jsonl_stock_file(HOLDING_FILE)
+
+
+def parse_holding_buy_date(holding: dict) -> date | None:
+    """解析持仓 dict 中「买入时间」的日历日期；无法解析时返回 None。"""
+    if not isinstance(holding, dict):
+        return None
+    raw = holding.get("买入时间")
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if len(s) < 10:
+        return None
+    try:
+        return datetime.strptime(s[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def holding_codes_bought_on_calendar_date(holdings: list, day: date) -> set[str]:
+    """在指定自然日发生过买入的股票代码集合（A 股 T+1：当日买入不得当日卖出）。
+
+    同一代码多行持仓时，任一行买入日期为 ``day`` 即视为该代码当日有买入。
+    """
+    out: set[str] = set()
+    if not holdings:
+        return out
+    for h in holdings:
+        if not isinstance(h, dict):
+            continue
+        code = str(h.get("股票代码", "") or "").strip()
+        if not code:
+            continue
+        bd = parse_holding_buy_date(h)
+        if bd is not None and bd == day:
+            out.add(code)
+    return out
 
 
 def merge_holdings_by_code(holdings: list) -> list:

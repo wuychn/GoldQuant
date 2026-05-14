@@ -13,10 +13,12 @@ from quant.data_io import (
     compute_holdings_market_value,
     get_cash,
     get_holdings,
+    holding_codes_bought_on_calendar_date,
     merge_holdings_by_code,
     sync_profit_md_from_trades,
 )
 from quant.signals import TradeSignal
+from quant.trading_hours import is_a_share_continuous_auction_window
 
 _CASH_EPS = 1e-6
 
@@ -66,12 +68,27 @@ def execute_signals(signals: list[TradeSignal]) -> list[ExecutedTrade]:
     """原子执行所有交易信号。
 
     卖出优先 → 买入；同代码多行持仓先合并；现金全程非负；成交后同步 profit.md。
+    A 股 T+1：任一持仓行「买入时间」为当日则该代码不允许卖出（见 holding_codes_bought_on_calendar_date）。
+    仅当 ``rules_config.yml`` 中 ``trading.enforce_real_workday`` 为 true 时：须在北京时间连续竞价时段
+    （9:30～11:30、13:00～15:00）且为 ``_is_real_workday_single_day_api`` 判定之真实交易日。
+    配置为 false 时不做时段与交易日限制。
     """
     if not signals:
         return []
 
+    if not is_a_share_continuous_auction_window():
+        print(
+            "交易跳过：严格模式下须同时满足——北京时间连续竞价（9:30～11:30、13:00～15:00）"
+            "且为真实交易日（见 _is_real_workday_single_day_api）。"
+            "关闭限制请在 quant/rules_config.yml 中设 trading.enforce_real_workday: false"
+        )
+        return []
+
     cash = max(0.0, get_cash())
-    holdings = merge_holdings_by_code(get_holdings())
+    today_d = datetime.now().date()
+    raw_holdings = get_holdings()
+    t1_locked_codes = holding_codes_bought_on_calendar_date(raw_holdings, today_d)
+    holdings = merge_holdings_by_code(raw_holdings)
     timestamp = datetime.now().strftime("%H:%M:%S")
     date_str = datetime.now().strftime("%Y-%m-%d")
     executed: list[ExecutedTrade] = []
@@ -91,6 +108,13 @@ def execute_signals(signals: list[TradeSignal]) -> list[ExecutedTrade]:
         idx = holdings_idx.get(signal.code)
         if idx is None:
             print(f"卖出跳过：{signal.name}({signal.code}) 不在持仓中")
+            continue
+
+        if signal.code in t1_locked_codes:
+            print(
+                f"卖出跳过：{signal.name}({signal.code}) "
+                "A股T+1：当日买入不可当日卖出"
+            )
             continue
 
         holding = holdings[idx]

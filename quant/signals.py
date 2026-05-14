@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
+from quant.data_io import holding_codes_bought_on_calendar_date
+from quant.trading_hours import is_a_share_continuous_auction_window
 from quant.rules.base import ChainResult, RuleChain, RuleResult, RuleVerdict
 from quant.rules.context import RuleContext
 
@@ -67,6 +70,8 @@ def _round_down_to_lot(shares: int) -> int:
 
 def generate_buy_signals(ctx: RuleContext, chains: dict[str, RuleChain]) -> list[TradeSignal]:
     """遍历自选股，运行买入链，为 all_passed 的标的生成买入信号。"""
+    if not is_a_share_continuous_auction_window():
+        return []
     signals: list[TradeSignal] = []
 
     for stock in ctx.watchlist:
@@ -151,12 +156,20 @@ def _determine_sell_from_chain(result: ChainResult, stock: dict[str, Any]) -> tu
 
 def generate_sell_signals(ctx: RuleContext, chains: dict[str, RuleChain]) -> list[TradeSignal]:
     """遍历持仓股，运行持股监控+卖出链，为触发条件的标的生成卖出信号。"""
+    if not is_a_share_continuous_auction_window():
+        return []
     signals: list[TradeSignal] = []
+    t1_locked = holding_codes_bought_on_calendar_date(
+        ctx.holdings, datetime.now().date()
+    )
 
     for stock in ctx.holdings:
         code = str(stock.get("股票代码", "")).strip()
         name = str(stock.get("股票名称", "")).strip()
         if not code:
+            continue
+
+        if code in t1_locked:
             continue
 
         strategy = _get_strategy(stock)

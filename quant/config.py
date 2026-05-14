@@ -2,13 +2,17 @@
 
 import os
 import re
+from functools import lru_cache
 from pathlib import Path
+
+import yaml
 
 from app.core.config import get_settings
 
 _QUANT_DIR = Path(__file__).resolve().parent
 _PROJECT_ROOT = _QUANT_DIR.parent
 STRATEGY_FILE = _QUANT_DIR / "strategy.md"
+_RULES_CONFIG_YML = _QUANT_DIR / "rules_config.yml"
 
 BASE_URL = "http://localhost:8085"
 
@@ -45,3 +49,37 @@ def get_feishu_config() -> tuple[str, str, str]:
     app_secret = cfg.FEISHU_APP_SECRET or ""
     user_id = cfg.FEISHU_USER_ID or ""
     return app_id, app_secret, user_id
+
+
+def trading_enforce_real_workday() -> bool:
+    """是否启用「严格交易窗口」：连续竞价时段 + 真实交易日。
+
+    读取 ``quant/rules_config.yml`` 顶层 ``trading.enforce_real_workday``（缺省或文件缺失时为 ``true``）。
+    为 ``False`` 时不校验时段与工作日，买卖逻辑可随时执行。
+    """
+    if not _RULES_CONFIG_YML.is_file():
+        return True
+    try:
+        mtime_ns = _RULES_CONFIG_YML.stat().st_mtime_ns
+    except OSError:
+        return True
+    return _trading_enforce_real_workday_from_file(mtime_ns)
+
+
+@lru_cache(maxsize=8)
+def _trading_enforce_real_workday_from_file(_mtime_ns: int) -> bool:
+    """按 rules_config.yml 修改时间缓存解析结果。"""
+    try:
+        with open(_RULES_CONFIG_YML, "r", encoding="utf-8") as f:
+            root = yaml.safe_load(f)
+    except (yaml.YAMLError, OSError):
+        return True
+    if not isinstance(root, dict):
+        return True
+    block = root.get("trading")
+    if not isinstance(block, dict):
+        return True
+    v = block.get("enforce_real_workday", True)
+    if isinstance(v, str):
+        return v.strip().lower() in ("1", "true", "yes", "on")
+    return bool(v)
