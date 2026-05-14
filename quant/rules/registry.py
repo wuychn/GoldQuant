@@ -15,6 +15,7 @@ from quant.rules.common import (
     StopLossCoolingRule,
 )
 from quant.rules.context import RuleContext
+from quant.rules.intraday_10m_buy import Intraday10mTrendGuardRule
 from quant.rules.lht_buy import (
     LHTMainCapitalInflowRule,
     LHTPriceNearMARule,
@@ -212,6 +213,7 @@ def build_zt_buy_intraday_chain() -> RuleChain:
         StopLossCoolingRule(),
         PositionLimitRule(),
         NoBuyGapUpWeakIntradayRule(),
+        Intraday10mTrendGuardRule(),
         ZTIntradayPopularityRule(),
         ZTIntradayConceptRule(),
         ZTAboveAvgPriceRule(),
@@ -270,6 +272,7 @@ def build_lht_buy_chain() -> RuleChain:
         StopLossCoolingRule(),
         PositionLimitRule(),
         NoBuyGapUpWeakIntradayRule(),
+        Intraday10mTrendGuardRule(),
         LHTPriceNearMARule(),
         LHTTimeAfter10Rule(),
         LHTVolumeRatioRule(),
@@ -329,6 +332,7 @@ def build_zsll_buy_chain() -> RuleChain:
         StopLossCoolingRule(),
         PositionLimitRule(),
         NoBuyGapUpWeakIntradayRule(),
+        Intraday10mTrendGuardRule(),
         ZSLPriceRidingMARule(),
         ZSLTimeAfter10Rule(),
         ZSLVolumeRatioRule(),

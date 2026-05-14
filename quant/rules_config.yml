@@ -41,6 +41,20 @@ _no_buy_weak_params: &no_buy_weak_params
   ma_low_ratio: 0.99
   ma_high_ratio: 1.02
 
+# 「盘中10分钟线」当日走势过滤（zt_buy_intraday / lht_buy / zsll_buy 可 <<: 引用）
+_intraday_10m_guard_params: &intraday_10m_guard_params
+  enable_min_bar_count: true
+  min_bar_count: 2
+  enable_max_session_drawdown_pct: false
+  max_session_drawdown_pct: 12.0
+  enable_last_n_bars_bearish: false
+  last_n_bars: 4
+  min_bearish_bars: 3
+  enable_min_session_gain_from_first_open_pct: false
+  min_session_gain_from_first_open_pct: -1.5
+  enable_last_vs_mean_close_ratio: false
+  min_last_vs_mean_close_ratio: 0.998
+
 # --------------------------------------------------------------------------
 # 全局前置条件
 # 这些规则在所有模式下最先执行，任何一条 FAIL 都会在推送中标注风险提示
@@ -186,6 +200,11 @@ zt_buy_intraday:
     params:
       <<: *no_buy_weak_params
 
+  Intraday10mTrendGuard:
+    enabled: true
+    params:
+      <<: *intraday_10m_guard_params
+
   # 情绪退潮时不开涨停板战法新仓
   SentimentDecayWarning:
     enabled: true
@@ -314,6 +333,11 @@ lht_buy:
     enabled: true
     params:
       <<: *no_buy_weak_params
+
+  Intraday10mTrendGuard:
+    enabled: true
+    params:
+      <<: *intraday_10m_guard_params
 
   # 股价接近均线
   LHTPriceNearMA:
@@ -445,6 +469,11 @@ zsll_buy:
     enabled: true
     params:
       <<: *no_buy_weak_params
+
+  Intraday10mTrendGuard:
+    enabled: true
+    params:
+      <<: *intraday_10m_guard_params
 
   ZSLPriceRidingMA:
     enabled: true
