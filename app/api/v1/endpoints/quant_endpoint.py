@@ -930,7 +930,7 @@ async def post_market(settings: SettingsDep, background_tasks: BackgroundTasks) 
         hot_stock,
         more=True,
         list_context=f"{route} | ths.hot_stock",
-        hot_limit=30,
+        hot_limit=10,
         fund_flow_trade_days=3,
     )
 

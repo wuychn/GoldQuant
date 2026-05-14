@@ -35,6 +35,13 @@ from quant.signals import generate_buy_signals, generate_sell_signals
 from quant.trade_executor import ExecutedTrade, execute_signals
 
 
+_NO_OP_REASON_SYSTEM = """你是A股短线交易执行助手。根据用户给出的「事实材料」，用一两句话说明本轮为何没有实际买卖成交。
+硬性要求：
+1. 只输出纯中文一段，30～180字；不要标题、不要用【】、不要markdown、不要分条编号。
+2. 不要写「全局已通过」「前置条件全部通过」等空话；直接写可执行层面的原因（如某股价格/高开/量比/连板条件、现金不足、无持仓、无有效盘口价、可买数量不足一手等）。
+3. 材料里有的股票可点名（名称+代码）；没有的细节不要编造。"""
+
+
 # ---------------------------------------------------------------------------
 # News
 # ---------------------------------------------------------------------------
@@ -425,14 +432,23 @@ def analyze_pre_market(raw_data: dict, timestamp: str) -> str:
     if executed:
         print(f"盘前执行交易 {len(executed)} 笔")
 
-    # 4. LLM 叙述（一~三）
-    rules_tail = f"\n\n【规则引擎预检】\n{global_summary}" if global_summary else ""
-    tail = tail_fund_only() + rules_tail
+    # 4. LLM 叙述（一~三）；全局预检不注入正文，避免与「四、操作」重复堆叠
+    tail = tail_fund_only()
     u = build_user_msg(filter_payload(payload, "pre_market"), tail=tail)
     narrative = call_llm(prompt_pre_market(), u, max_tokens=8000, temperature=0.16)
 
     # 5. 拼接第四节（规则引擎产出）
-    section_four = _build_operation_section(executed, section="四、操作")
+    no_trade = _summarize_no_operation_reason(
+        mode="pre_market",
+        ctx=ctx,
+        buy_signals=buy_signals,
+        sell_signals=[],
+        executed=executed,
+        global_summary=global_summary,
+    )
+    section_four = _build_operation_section(
+        executed, section="四、操作", no_trade_detail=no_trade,
+    )
 
     return narrative.rstrip() + "\n\n" + section_four
 
@@ -463,25 +479,136 @@ def analyze_during_market(raw_data: dict, timestamp: str) -> str:
     if executed:
         print(f"盘中执行交易 {len(executed)} 笔")
 
-    # 4. LLM 叙述（一~四，不做任何买卖决策）
-    rules_tail = f"\n\n【规则引擎预检】\n{global_summary}" if global_summary else ""
-    tail = tail_during_market() + rules_tail
+    # 4. LLM 叙述（一~四）；全局预检不注入正文，避免与「五、操作」重复堆叠
+    tail = tail_during_market()
     u_narrative = build_user_msg(
         filter_payload(payload, "during_narrative"), tail=tail,
     )
     narrative = call_llm(prompt_during_narrative(), u_narrative, max_tokens=6000, temperature=0.16)
 
     # 5. 拼接第五节（纯规则引擎产出）
-    section_five = _build_operation_section(executed)
+    no_trade = _summarize_no_operation_reason(
+        mode="during_market",
+        ctx=ctx,
+        buy_signals=buy_signals,
+        sell_signals=sell_signals,
+        executed=executed,
+        global_summary=global_summary,
+    )
+    section_five = _build_operation_section(executed, no_trade_detail=no_trade)
 
     return narrative.rstrip() + "\n\n" + section_five
 
 
-def _build_operation_section(executed: list[ExecutedTrade], *, section: str = "五、操作") -> str:
+def _compact_stocks_for_llm(stocks: list, *, limit: int = 10) -> str:
+    """抽取少量字段供无操作原因总结，避免整包 JSON 过长。"""
+    lines: list[str] = []
+    for s in (stocks or [])[:limit]:
+        code = str(s.get("股票代码", "") or "").strip()
+        name = str(s.get("股票名称", "") or "").strip()
+        tag = str(s.get("战法", "") or s.get("加入自选原因", "") or "")[:60]
+        pk = s.get("盘口") if isinstance(s.get("盘口"), dict) else {}
+        last = pk.get("最新", pk.get("最新价", ""))
+        zdf = s.get("涨跌幅", "")
+        lines.append(f"{name}({code}) 标签/原因:{tag} 现价:{last} 涨跌:{zdf}")
+    n = len(stocks or [])
+    if n > limit:
+        lines.append(f"(共{n}只，仅列前{limit}只)")
+    return "\n".join(lines) if lines else "(无)"
+
+
+def _fallback_no_operation_reason(
+    *,
+    mode: str,
+    ctx: RuleContext,
+    buy_signals: list,
+    sell_signals: list,
+    nb: int,
+    ns: int,
+) -> str:
+    """LLM 不可用时的短句兜底（不含【】标题）。"""
+    wl = len(ctx.watchlist or [])
+    hl = len(ctx.holdings or [])
+    if nb == 0 and ns == 0:
+        if mode == "pre_market":
+            if wl == 0:
+                return "原因：自选股为空，盘前无买入扫描标的。"
+            return (
+                f"原因：自选股共{wl}只，涨停战法盘前买入条件未全部满足或无法算出可买数量。"
+            )
+        sell_txt = "无持仓故无卖出。" if hl == 0 else f"持仓{hl}只但未触发卖出规则。"
+        buy_txt = "自选股为空。" if wl == 0 else f"自选股{wl}只但未触发买入规则。"
+        return f"原因：{sell_txt}{buy_txt}"
+    return (
+        f"原因：已产生买入{nb}条、卖出{ns}条信号但未成交，多为现金不足或数量取整为0，请查日志。"
+    )
+
+
+def _summarize_no_operation_reason(
+    *,
+    mode: str,
+    ctx: RuleContext,
+    buy_signals: list,
+    sell_signals: list,
+    executed: list[ExecutedTrade],
+    global_summary: str,
+) -> str:
+    """无成交时用 LLM 压缩为一句「原因：…」，飞书不展示【全局预检】等块。"""
+    if executed:
+        return ""
+    wl = ctx.watchlist or []
+    hl = ctx.holdings or []
+    nb, ns = len(buy_signals or []), len(sell_signals or [])
+
+    blocks = [
+        f"场景：{'盘前' if mode == 'pre_market' else '盘中'}",
+        f"总权益约：{ctx.fund:.0f}元",
+        f"自选股：{len(wl)}只；持仓：{len(hl)}只；买入信号：{nb}条；卖出信号：{ns}条",
+        "自选股摘要：\n" + _compact_stocks_for_llm(wl, limit=10),
+    ]
+    if hl:
+        blocks.append("持仓摘要：\n" + _compact_stocks_for_llm(hl, limit=8))
+    gs = (global_summary or "").strip()
+    if gs:
+        blocks.append(
+            "以下为规则引擎内部纪要（从中提炼具体原因，勿原样复述标题与【】）：\n"
+            + gs[:2000]
+        )
+    if nb > 0 or ns > 0:
+        blocks.append("说明：信号已生成但未写入成交，请结合现金、持仓股数、委托数量等说明。")
+
+    user = "\n\n".join(blocks)
+    try:
+        raw = call_llm(_NO_OP_REASON_SYSTEM, user, max_tokens=500, temperature=0.15)
+        text = " ".join(raw.replace("\r", "").split())
+        if text.startswith("原因：") or text.startswith("原因:"):
+            text = text[3:].lstrip(" ：")
+        if len(text) > 200:
+            text = text[:197] + "…"
+        if not text:
+            raise ValueError("LLM 返回空")
+        return f"原因：{text}"
+    except Exception as e:
+        print(f"无操作原因 LLM 总结失败，使用兜底: {e}")
+        return _fallback_no_operation_reason(
+            mode=mode, ctx=ctx, buy_signals=buy_signals, sell_signals=sell_signals, nb=nb, ns=ns,
+        )
+
+
+def _build_operation_section(
+    executed: list[ExecutedTrade],
+    *,
+    section: str = "五、操作",
+    no_trade_detail: str = "",
+) -> str:
     """从已执行交易列表构建操作段落。"""
     lines = [section]
     if not executed:
-        lines.append("本轮无操作信号。")
+        detail = (no_trade_detail or "").strip()
+        if detail:
+            lines.append(f"本轮无操作信号。{detail}")
+        else:
+            lines.append("本轮无操作信号。")
         return "\n".join(lines)
     for e in executed:
         s = e.signal
@@ -553,63 +680,62 @@ def _run_review(raw_data: dict, tail: str, *, lunch: bool) -> str:
     return narrative.rstrip() + "\n\n" + optional_section
 
 
-def _build_optional_section(optional_result: dict, *, section_num: str = "九") -> str:
-    """从规则引擎结果构建自选更新段落（可读列表格式）。"""
-    lines = [f"{section_num}、自选更新"]
-    merged = (
-        optional_result["added_zt"]
-        + optional_result["added_lht"]
-        + optional_result["added_zsll"]
-    )
+def _optional_reject_examples_sentence(rejects: list, *, max_examples: int = 2, reason_max: int = 42) -> str:
+    """无新增时，从拒绝列表摘 1～2 条作「比如」说明。"""
+    if not rejects:
+        return "人气榜侧暂无可举例样本（或该战法链未启用）。"
+    parts: list[str] = []
+    for r in rejects[:max_examples]:
+        name = str(r.get("股票名称", "") or "").strip()
+        reason = str(r.get("reason", "") or "").strip().replace("\n", " ")
+        if len(reason) > reason_max:
+            reason = reason[: reason_max - 1] + "…"
+        if name and reason:
+            parts.append(f"{name}{reason}")
+        elif name:
+            parts.append(name)
+    if not parts:
+        return "人气榜侧暂无可举例样本。"
+    return "比如" + "，".join(parts) + "。"
 
-    if merged:
-        for i, row in enumerate(merged, 1):
-            tag = row.get("战法", "")
-            reason = row.get("加入自选原因", "")
-            lines.append(f"{i}、{row['股票名称']}({row['股票代码']}) [{tag}] {reason}")
+
+def _optional_strategy_lines(
+    banner: str,
+    added: list,
+    rejects: list,
+    strategy_name: str,
+) -> list[str]:
+    """单战法一块：【标题】+ 若干 · 名称 或 一行不满足说明。"""
+    out = [f"【{banner}】"]
+    if added:
+        for row in added:
+            nm = str(row.get("股票名称", "") or "").strip()
+            if nm:
+                out.append(f"· {nm}")
     else:
-        lines.append("本次无新增自选标的。")
+        ex = _optional_reject_examples_sentence(rejects)
+        out.append(f"所有股票均不满足{strategy_name}策略，{ex}")
+    return out
 
-    decs = optional_result.get("exclusivity_decisions") or []
-    if decs:
-        lines.append("")
-        lines.append(
-            "战法互斥判断（人气榜扫描范围内逐只至多归入一种战法；优先级："
-            "涨停板战法 > 龙回头战法 > 主升浪战法）："
-        )
-        for d in decs:
-            tag = d.get("入选战法") or "未入选"
-            lines.append(
-                f"  · {d.get('股票名称', '')}({d.get('股票代码', '')}) [{tag}] "
-                f"{d.get('互斥说明', '')}"
-            )
 
-    # 追加未更新原因
-    if not optional_result["added_zt"]:
-        rejects = optional_result["rejected_zt"][:5]
-        if rejects:
-            lines.append("")
-            lines.append("涨停板战法未入选原因：")
-            for r in rejects:
-                lines.append(f"  · {r['股票名称']}({r['股票代码']})：{r['reason']}")
+def _build_optional_section(optional_result: dict, *, section_num: str = "九") -> str:
+    """复盘自选更新：按战法分块，有自选为列表，无自选为「比如」短说明。"""
+    lines: list[str] = [f"{section_num}、自选更新", ""]
 
-    if not optional_result["added_lht"]:
-        rejects = optional_result["rejected_lht"][:5]
-        if rejects:
-            lines.append("")
-            lines.append("龙回头战法未入选原因：")
-            for r in rejects:
-                lines.append(f"  · {r['股票名称']}({r['股票代码']})：{r['reason']}")
+    zt_added = optional_result.get("added_zt") or []
+    lht_added = optional_result.get("added_lht") or []
+    zsll_added = optional_result.get("added_zsll") or []
+    zt_rej = optional_result.get("rejected_zt") or []
+    lht_rej = optional_result.get("rejected_lht") or []
+    zsll_rej = optional_result.get("rejected_zsll") or []
 
-    if not optional_result["added_zsll"]:
-        rejects = optional_result["rejected_zsll"][:5]
-        if rejects:
-            lines.append("")
-            lines.append("主升浪战法未入选原因：")
-            for r in rejects:
-                lines.append(f"  · {r['股票名称']}({r['股票代码']})：{r['reason']}")
+    lines.extend(_optional_strategy_lines("涨停板战法", zt_added, zt_rej, "涨停板战法"))
+    lines.append("")
+    lines.extend(_optional_strategy_lines("龙回头战法", lht_added, lht_rej, "龙回头战法"))
+    lines.append("")
+    lines.extend(_optional_strategy_lines("主升浪战法", zsll_added, zsll_rej, "主升浪战法"))
 
-    return "\n".join(lines)
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def analyze_lunch_market(raw_data: dict, timestamp: str) -> str:
