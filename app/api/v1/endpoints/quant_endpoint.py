@@ -314,10 +314,37 @@ def _slim_xw_list(xw: object, *, limit: int = 3) -> list[dict[str, Any]]:
     return out
 
 
+# 规则引擎「强势」硬门槛依赖这些键，须优先保留（避免 list(zqxy) 截断时丢失）
+_EARNING_EFFECT_PRIORITY_KEYS: tuple[str, ...] = (
+    "上涨",
+    "下跌",
+    "涨停",
+    "跌停",
+    "真实涨停",
+    "真实跌停",
+    "st st*涨停",
+    "st st*跌停",
+    "平盘",
+    "停牌",
+    "活跃度",
+    "统计日期",
+)
+
+
 def _slim_earning_effect_dict(zqxy: object, *, max_pairs: int = 22) -> dict[str, Any] | None:
     if not isinstance(zqxy, dict) or not zqxy:
         return None
-    return dict(list(zqxy.items())[:max_pairs])
+    out: dict[str, Any] = {}
+    for k in _EARNING_EFFECT_PRIORITY_KEYS:
+        if k in zqxy:
+            out[k] = zqxy[k]
+    for k, v in zqxy.items():
+        if k in out:
+            continue
+        out[k] = v
+        if len(out) >= max_pairs:
+            break
+    return out
 
 
 def _merge_concept_boards(jzf: list | None, jzj: list | None, *, limit: int = 10) -> dict[str, Any]:
@@ -533,8 +560,6 @@ async def _enrich_ths_stock_list(
             hist_out = _rows_last_n_trade_days(hist_, n=30)
 
             item["盘口"] = pk_raw if isinstance(pk_raw, dict) else {}
-            zj_list = zj_raw if isinstance(zj_raw, list) else []
-            item["个股资金流"] = _rows_last_n_trade_days(zj_list, n=fund_flow_trade_days)
             item["历史行情"] = hist_out
 
             tzh: dict[str, Any] | None = None
@@ -573,11 +598,16 @@ async def _enrich_ths_stock_list(
                     item["盘前实时快照"] = snap
 
             if more:
-                xw_ = _sync_call_or_none(
-                    f"{list_context} dfcf.xw symbol={symbol!r}",
-                    lambda: xw(symbol),
-                )
-                item["个股新闻"] = _slim_xw_list(xw_)
+                # 对于规则引擎，新闻数据没有价值，后续可以通过LLM评分后给规则引擎（TODO）
+                # xw_ = _sync_call_or_none(
+                #     f"{list_context} dfcf.xw symbol={symbol!r}",
+                #     lambda: xw(symbol),
+                # )
+                # item["个股新闻"] = _slim_xw_list(xw_)
+
+                # 个股资金流只能统计到T-1日，盘中不能用（复盘时能否拿到当天的？TODO）
+                zj_list = zj_raw if isinstance(zj_raw, list) else []
+                item["个股资金流"] = _rows_last_n_trade_days(zj_list, n=fund_flow_trade_days)
 
             out.append(item)
     except Exception:

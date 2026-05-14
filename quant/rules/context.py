@@ -159,6 +159,35 @@ class RuleContext:
                 return None
         return None
 
+    def _profit_effect_int(self, key: str) -> int | None:
+        """从 JSON「赚钱效应」读取整型字段（接口常为 float）。"""
+        pe = self.profit_effect
+        if not isinstance(pe, dict):
+            return None
+        v = pe.get(key)
+        if v is None or v == "":
+            return None
+        try:
+            return int(float(v))
+        except (TypeError, ValueError):
+            return None
+
+    def get_profit_effect_advancers(self) -> int | None:
+        """赚钱效应：上涨家数。"""
+        return self._profit_effect_int("上涨")
+
+    def get_profit_effect_decliners(self) -> int | None:
+        """赚钱效应：下跌家数。"""
+        return self._profit_effect_int("下跌")
+
+    def get_profit_effect_limit_up(self) -> int | None:
+        """赚钱效应：涨停家数（字段「涨停」）。"""
+        return self._profit_effect_int("涨停")
+
+    def get_profit_effect_limit_down(self) -> int | None:
+        """赚钱效应：跌停家数（字段「跌停」）。"""
+        return self._profit_effect_int("跌停")
+
     def find_in_limit_up(self, code: str) -> dict[str, Any] | None:
         """在涨停统计中查找某股票。"""
         code_clean = code.strip()

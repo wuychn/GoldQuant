@@ -15,10 +15,14 @@ global_preconditions:
   MarketStateDetermination:
     enabled: true
     params:
-      # 6项指标各自权重（总和不限定，按比例计算）
-      # 指标: 涨跌比、涨停跌停比、成交量变化、主力资金、情绪温度、板块轮动
-      weak_threshold: 2        # 总分<=此值判定为弱势
-      strong_threshold: 4      # 总分>=此值判定为强势
+      # 软评分：6 项各投强势/震荡/弱势一票后计数（见 quant/rules/market_state.py）
+      weak_threshold: 2        # 弱势票≥weak_threshold+1 时判弱势
+      strong_threshold: 4      # 强势票≥此值时先判强势，再验硬门槛
+      # 判「强势」硬条件（须同时满足；任一不满足则从强势降为震荡）
+      strong_gate_index_min: 0.5   # 上证涨跌幅≥此值(%)；数据来自大盘指数/市场状态机
+      strong_gate_zt_min: 50        # 涨停家数≥；须 JSON「赚钱效应.涨停」
+      strong_gate_dt_max: 30       # 跌停家数≤；须 JSON「赚钱效应.跌停」
+      # 硬条件另须：上涨家数>下跌家数（赚钱效应「上涨」「下跌」）
 
   # 情绪退潮预警（连续缩量或跌停增加时触发）
   SentimentDecayWarning:
