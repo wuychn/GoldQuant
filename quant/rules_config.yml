@@ -13,6 +13,34 @@ trading:
   # true：仅真实工作日且在沪深连续竞价时段内允许触发买卖；false：不限制时间与交易日（便于回测/联调）
   enforce_real_workday: false
 
+# 「回避高开低走弱势」默认参数（zt_buy_intraday / lht_buy / zsll_buy 通过 YAML 合并引用；单链可写 params 覆盖任意键）
+_no_buy_weak_params: &no_buy_weak_params
+  enable_earliest_buy_clock: false
+  earliest_buy_hour: 10
+  earliest_buy_minute: 30
+  enable_market_advancers_gt_decliners: false
+  enable_min_change_pct: false
+  min_change_pct: 0.0
+  enable_latest_above_avg: false
+  latest_vs_avg_min_ratio: 1.0
+  enable_main_net_inflow_positive: false
+  enable_ma_bull_stack: false
+  enable_max_upper_shadow_pct: false
+  max_upper_shadow_vs_prev_pct: 4.0
+  enable_min_pullback_from_high_pct: false
+  min_pullback_from_high_pct: 3.0
+  pullback_from_high_only_when_below_open: true
+  enable_max_gap_fill_pct: false
+  max_gap_fill_pct: 65.0
+  enable_min_volume_ratio: false
+  min_volume_ratio: 1.0
+  enable_core_gap_below_open: true
+  min_gap_up_pct: 0.8
+  require_latest_below_open: true
+  require_ma_touch_zone: false
+  ma_low_ratio: 0.99
+  ma_high_ratio: 1.02
+
 # --------------------------------------------------------------------------
 # 全局前置条件
 # 这些规则在所有模式下最先执行，任何一条 FAIL 都会在推送中标注风险提示
@@ -153,6 +181,11 @@ zt_buy_pre:
 # 盘中实时监控，符合条件的标的触发买入信号
 # --------------------------------------------------------------------------
 zt_buy_intraday:
+  NoBuyGapUpWeakIntraday:
+    enabled: true
+    params:
+      <<: *no_buy_weak_params
+
   # 情绪退潮时不开涨停板战法新仓
   SentimentDecayWarning:
     enabled: true
@@ -276,6 +309,12 @@ lht_watchlist:
 # 龙回头战法 - 买入
 # --------------------------------------------------------------------------
 lht_buy:
+  # 显著高开但已跌破今开：回避「高开低走」接均线弱势盘（见 NoBuyGapUpWeakIntradayRule）
+  NoBuyGapUpWeakIntraday:
+    enabled: true
+    params:
+      <<: *no_buy_weak_params
+
   # 股价接近均线
   LHTPriceNearMA:
     enabled: true
@@ -402,6 +441,11 @@ zsll_watchlist:
 # 主升浪战法 - 买入
 # --------------------------------------------------------------------------
 zsll_buy:
+  NoBuyGapUpWeakIntraday:
+    enabled: true
+    params:
+      <<: *no_buy_weak_params
+
   ZSLPriceRidingMA:
     enabled: true
     params:

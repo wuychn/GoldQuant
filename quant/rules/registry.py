@@ -10,6 +10,7 @@ import yaml
 from quant.rules.base import Rule, RuleChain
 from quant.rules.common import (
     ExtremeMarketCircuitBreakerRule,
+    NoBuyGapUpWeakIntradayRule,
     StockPoolFilterRule,
     StopLossCoolingRule,
 )
@@ -210,6 +211,7 @@ def build_zt_buy_intraday_chain() -> RuleChain:
         SentimentDecayWarningRule(),
         StopLossCoolingRule(),
         PositionLimitRule(),
+        NoBuyGapUpWeakIntradayRule(),
         ZTIntradayPopularityRule(),
         ZTIntradayConceptRule(),
         ZTAboveAvgPriceRule(),
@@ -267,6 +269,7 @@ def build_lht_buy_chain() -> RuleChain:
         StockPoolFilterRule(),
         StopLossCoolingRule(),
         PositionLimitRule(),
+        NoBuyGapUpWeakIntradayRule(),
         LHTPriceNearMARule(),
         LHTTimeAfter10Rule(),
         LHTVolumeRatioRule(),
@@ -325,6 +328,7 @@ def build_zsll_buy_chain() -> RuleChain:
         StockPoolFilterRule(),
         StopLossCoolingRule(),
         PositionLimitRule(),
+        NoBuyGapUpWeakIntradayRule(),
         ZSLPriceRidingMARule(),
         ZSLTimeAfter10Rule(),
         ZSLVolumeRatioRule(),
