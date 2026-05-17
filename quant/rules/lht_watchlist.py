@@ -5,6 +5,7 @@ from __future__ import annotations
 from quant.rules.base import Rule, RuleResult
 from quant.rules.context import RuleContext
 from quant.rules.daily_bar_zt import max_consecutive_limit_up_days
+from quant.rules.lht_dragon import evaluate_lht_dragon_watchlist
 
 
 class LHTPopularityRule(Rule):
@@ -76,6 +77,8 @@ class LHTMaxConsecutiveZTRunRule(Rule):
             lookback_days=lookback,
             main_pct=main_pct,
             cyb_pct=cyb_pct,
+            exclude_one_word=bool(self.params.get("exclude_one_word_from_zt_run", True)),
+            one_word_amp_pct_max=float(self.params.get("one_word_amp_pct_max", 0.12)),
         )
 
         if best >= need:
@@ -357,3 +360,68 @@ class LHTMACDRule(Rule):
         if dif_f <= 0:
             reasons.append(f"DIF={dif_f:.4f}≤0")
         return self._fail("；".join(reasons))
+
+
+def _hist_bar_date(bar: dict) -> str:
+    raw = bar.get("日期", bar.get("date", ""))
+    s = str(raw).strip().replace("/", "-")
+    return s[:10] if len(s) >= 10 else s
+
+
+class LHTDragonReturnWatchlistRule(Rule):
+    """龙回头：≥N 连板(T0)+固定观察日内出现单日急跌/急涨，禁阴跌、禁有效破位 MA(D)。"""
+
+    def default_params(self) -> dict:
+        return {
+            "lookback_days": 120,
+            "observation_days": 30,
+            "min_zt_run_days": 5,
+            "main_board_zt_pct": 9.8,
+            "cyb_zt_pct": 19.8,
+            "exclude_one_word_from_zt_run": True,
+            "one_word_amp_pct_max": 0.12,
+            "sharp_down_pct": 7.0,
+            "sharp_up_pct": 7.0,
+            "yin_die_min_consecutive_bearish_bars": 4,
+            "ma_window": 20,
+            "effective_break_below_ma_consecutive_days": 2,
+        }
+
+    @property
+    def name(self) -> str:
+        return "LHT龙回头形态"
+
+    def evaluate(self, ctx: RuleContext) -> RuleResult:
+        stock = ctx.target_stock
+        code = str(stock.get("股票代码", "")).strip()
+        name = str(stock.get("股票名称", "")).strip()
+        history = stock.get("历史行情", [])
+
+        ok, detail, extras = evaluate_lht_dragon_watchlist(
+            history,
+            code,
+            self.params,
+        )
+        if not ok:
+            return self._fail(detail)
+
+        od = int(self.params.get("observation_days", 30))
+        t0idx_raw = extras.get("T0_index")
+        meta: dict = {
+            "股票代码": code,
+            "股票名称": name,
+            "战法细分": "龙回头战法·观察入库",
+        }
+        if t0idx_raw is not None and isinstance(history, list):
+            t0idx = int(t0idx_raw)
+            if 0 <= t0idx < len(history) and isinstance(history[t0idx], dict):
+                meta["观察T0日期"] = _hist_bar_date(history[t0idx])
+            last_i = min(len(history) - 1, t0idx + od - 1)
+            if 0 <= last_i < len(history) and isinstance(history[last_i], dict):
+                meta["观察到期日锚点"] = _hist_bar_date(history[last_i])
+            meta["观察说明"] = (
+                f"最后一轮非一字连板后首根非涨停日(bar#{t0idx})起{od}个交易日内；"
+                f"急跌后出现急涨且无有效破位MA。"
+            )
+
+        return self._pass(detail, observation_meta=meta)

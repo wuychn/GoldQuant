@@ -28,7 +28,7 @@ from app.utils.common_util import (
     list_to_dict,
 )
 from app.utils.dataframe import dataframe_to_records
-from app.utils.dfcf_util import hsgtzj, pk, zj, ztgc, hist, xw, all_stocks
+from app.utils.dfcf_util import hsgtzj, pk, zj, ztgc, hist, xw, all_stocks, jbxx
 from app.utils.quant_archive import (
     archive_market_sync,
     daily_hist_fetch_start_date,
@@ -479,8 +479,9 @@ async def _enrich_ths_stock_list(
     out: list = []
     try:
         rows = await fetch_stocks(settings=settings)
-        if hot_limit > 0:
-            rows = rows[:hot_limit]
+        # 不能在这里阶段，要在具体的获取方法中去阶段，因为hot_limit只是针对同花顺人气股，不是针对所有获取逻辑
+        # if hot_limit > 0:
+        #     rows = rows[:hot_limit]
         spot_effective: dict[str, dict[str, object]] = {}
         if include_pre_snapshot and settings.QUANT_SPOT_EM_FULL_TABLE:
             codes_set = {
@@ -505,19 +506,26 @@ async def _enrich_ths_stock_list(
                 _log_api_error(f"{list_context} read_symbol item_keys={list(item)!r}")
                 continue
 
-            # jbxx_ = _sync_call_or_none(
-            #     f"{list_context} dfcf.jbxx symbol={symbol!r}",
-            #     lambda: jbxx(symbol),
-            # )
+            # 基本信息
+            jbxx_ = _sync_call_or_none(
+                f"{list_context} dfcf.jbxx symbol={symbol!r}",
+                lambda: jbxx(symbol),
+            )
+            if jbxx_:
+                item['总股本'] = jbxx_['总股本']
+                item['流通股'] = jbxx_['流通股']
+                item['总市值'] = jbxx_['总市值']
+                item['流通市值'] = jbxx_['流通市值']
+                item['上市时间'] = jbxx_['上市时间']
+
+            # 盘口
             pk_raw = _sync_call_or_none(
                 f"{list_context} dfcf.pk symbol={symbol!r}",
                 lambda: pk(symbol),
             )
-            zj_raw = _sync_call_or_none(
-                f"{list_context} dfcf.zj symbol={symbol!r}",
-                lambda: zj(symbol),
-            )
+            item["盘口"] = pk_raw if isinstance(pk_raw, dict) else {}
 
+            # 历史行情，哪些需要历史行情 TODO
             if settings.QUANT_ARCHIVE_ENABLED:
                 start_d = daily_hist_fetch_start_date(settings, symbol)
                 hist_api = _sync_call_or_none(
@@ -538,29 +546,28 @@ async def _enrich_ths_stock_list(
                     f"{list_context} dfcf.hist symbol={symbol!r}",
                     _hist_no_archive,
                 )
-
             if not hist_:
                 hist_ = []
+            hist_out = _rows_last_n_trade_days(hist_, n=30)
+            item["历史行情"] = hist_out
 
+            # 五日线
             avg_5: float | None = None
             hist_5 = hist_[-5:]
             if hist_5 and len(hist_5) >= 5:
                 avg_5 = cal_avg(hist_5, "收盘")
 
+            # 十日线
             avg_10: float | None = None
             hist_10 = hist_[-10:]
             if hist_10 and len(hist_10) >= 10:
                 avg_10 = cal_avg(hist_10, "收盘")
 
+            # 20日线
             avg_20: float | None = None
             hist_20 = hist_[-20:]
             if hist_20 and len(hist_20) >= 20:
                 avg_20 = cal_avg(hist_20, "收盘")
-
-            hist_out = _rows_last_n_trade_days(hist_, n=30)
-
-            item["盘口"] = pk_raw if isinstance(pk_raw, dict) else {}
-            item["历史行情"] = hist_out
 
             tzh: dict[str, Any] | None = None
             if settings.QUANT_ARCHIVE_ENABLED:
@@ -575,6 +582,7 @@ async def _enrich_ths_stock_list(
             if not (isinstance(tzh, dict) and tzh.get("均线20日") is not None) and avg_20 is not None:
                 item["20日线"] = avg_20
 
+            # 这个时靠自己记录的10分钟线
             if record_and_attach_10m_bars:
                 px = _spot_price_from_pk_for_10m(item["盘口"])
                 if px is not None:
@@ -606,6 +614,11 @@ async def _enrich_ths_stock_list(
                 # item["个股新闻"] = _slim_xw_list(xw_)
 
                 # 个股资金流只能统计到T-1日，盘中不能用（复盘时能否拿到当天的？TODO）
+                # 资金，非实时，复盘时能否用？TODO
+                zj_raw = _sync_call_or_none(
+                    f"{list_context} dfcf.zj symbol={symbol!r}",
+                    lambda: zj(symbol),
+                )
                 zj_list = zj_raw if isinstance(zj_raw, list) else []
                 item["个股资金流"] = _rows_last_n_trade_days(zj_list, n=fund_flow_trade_days)
 
@@ -819,12 +832,16 @@ async def pre_market(settings: SettingsDep, background_tasks: BackgroundTasks) -
     # if (blocked := await _guard_real_workday_or_non_trading_response()) is not None:
     #     return blocked
     route = "GET /quant/market/pre_market"
+    # 大盘指数
     dpzs = await _important_index_spot(f"{route} | ak.stock_zh_index_spot_em")
-    # TODO 开盘时获取到的是昨天的数据
+
+    # 资金流，开盘时获取到的是昨天的数据？TODO
     # zjl = await _last_market_fund_flow_row(f"{route} | ak.stock_market_fund_flow")
+
+    # 赚钱效应，开盘时获取到的是昨天的数据？TODO
     # zqxy = await _earning_effect_pre_market(f"{route} | ak.stock_market_activity_legu")
 
-    # 从 ~/.quant/optional.jsonl 获取自选股（每行 {"股票代码","股票名称",...}）
+    # 自选，从 ~/.quant/optional.jsonl 获取（每行 {"股票代码","股票名称",...}）
     zxg = await _enrich_ths_stock_list(
         settings,
         _zx,
@@ -834,7 +851,7 @@ async def pre_market(settings: SettingsDep, background_tasks: BackgroundTasks) -
         fund_flow_trade_days=1,
     )
 
-    # 从 ~/.quant/holding.jsonl 获取持仓股（每行一条 JSON，含 股票代码、买入时间 等）
+    # 持仓，从 ~/.quant/holding.jsonl 获取持仓股（每行一条 JSON，含 股票代码、买入时间 等）
     ccg = await _enrich_ths_stock_list(
         settings,
         _cc,
@@ -844,14 +861,18 @@ async def pre_market(settings: SettingsDep, background_tasks: BackgroundTasks) -
         fund_flow_trade_days=1,
     )
 
+    # 市场状态机，需要确认是否是实时数据且是否需要优化这些数据，TODO
     bundle = await _market_bundle_zh(route, realtime_index_spot=dpzs)
+
     result = {
         "大盘指数": dpzs,
         "自选股": zxg,
         "持仓股": ccg,
         **bundle,
     }
+    # TODO，这是干啥的
     _schedule_quant_archive(background_tasks, settings, "pre", result)
+
     return Response(data=_finalize_quant_payload(result))
 
 

@@ -176,14 +176,22 @@ class MarketStateDeterminationRule(Rule):
 
 
 class SentimentDecayWarningRule(Rule):
-    """情绪退潮预警：昨日涨停表现均值<0% 且最高连板数较前日下降。
+    """情绪退潮预警：昨日涨停表现涨跌幅均值低于门槛则拦截（默认门槛 0%）。
 
-    退潮时涨停板战法当日不开新仓。
-    结果写入 ctx.extra["sentiment_decay"] = True/False。
+    「昨日涨停表现」来自市场状态机，见 RuleContext.get_yesterday_zt_avg_change。
+    YAML 键：min_yesterday_zt_avg_pct（单位与其它涨跌幅字段一致：百分点的数值）。
+    volume_decay_days / limit_down_surge 为扩展预留字段，当前 evaluate 未使用。
+
+    退潮判定为真时涨停板相关链 Fail，结果写入 ctx.extra["sentiment_decay"]。
     """
 
     def default_params(self):
-        return {"volume_decay_days": 3, "limit_down_surge": 2.0}
+        return {
+            "volume_decay_days": 3,
+            "limit_down_surge": 2.0,
+            # 均值 >= 此值视为未退潮；低于则 Fail（拦住加自选涨停板链、买入前置等）。
+            "min_yesterday_zt_avg_pct": 0.0,
+        }
 
     @property
     def name(self) -> str:
@@ -191,17 +199,16 @@ class SentimentDecayWarningRule(Rule):
 
     def evaluate(self, ctx: RuleContext) -> RuleResult:
         zt_avg = ctx.get_yesterday_zt_avg_change()
+        floor = float(self.params.get("min_yesterday_zt_avg_pct", 0.0))
         if zt_avg is None:
             ctx.extra["sentiment_decay"] = False
             return self._skip("昨日涨停表现数据缺失，无法判定")
 
-        # 情绪退潮核心指标：昨日涨停表现涨跌幅均值<0%
-        if zt_avg >= 0:
+        if zt_avg >= floor:
             ctx.extra["sentiment_decay"] = False
-            return self._pass(f"昨日涨停表现均值={zt_avg:.2f}%≥0%，未退潮")
+            return self._pass(f"昨日涨停表现均值={zt_avg:.2f}%≥门槛{floor}%，未退潮")
 
-        # 退潮确认
         ctx.extra["sentiment_decay"] = True
         return self._fail(
-            f"昨日涨停表现均值={zt_avg:.2f}%<0%，情绪退潮，涨停板战法不开新仓"
+            f"昨日涨停表现均值={zt_avg:.2f}%<{floor}%，情绪退潮，涨停板战法不开新仓"
         )

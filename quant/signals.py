@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any
 
 from quant.data_io import holding_codes_bought_on_calendar_date
+from quant.rules.registry import build_global_preconditions
 from quant.trading_hours import is_a_share_continuous_auction_window
 from quant.rules.base import ChainResult, RuleChain, RuleResult, RuleVerdict
 from quant.rules.context import RuleContext
@@ -72,6 +73,11 @@ def generate_buy_signals(ctx: RuleContext, chains: dict[str, RuleChain]) -> list
     """遍历自选股，运行买入链，为 all_passed 的标的生成买入信号。"""
     if not is_a_share_continuous_auction_window():
         return []
+
+    gpre = build_global_preconditions().evaluate(ctx)
+    if any(r.failed for r in gpre.results):
+        return []
+
     signals: list[TradeSignal] = []
 
     for stock in ctx.watchlist:

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from quant.config import trading_enforce_real_workday
+from quant.config import trading_time_checks_enabled
 
 _CN_TZ = ZoneInfo("Asia/Shanghai")
 
@@ -34,18 +34,20 @@ def is_a_share_continuous_auction_window(
     *,
     enforce_real_workday: bool | None = None,
 ) -> bool:
-    """是否允许程序化触发买卖（由 ``quant/rules_config.yml`` 的 ``trading.enforce_real_workday`` 控制严格模式）。
+    """是否允许程序化触发买卖（由 ``quant/rules_config.yml`` 的 ``trading.time_validation_enabled`` 控制；
+
+    兼容旧键 ``trading.enforce_real_workday``。未配置时默认严格。
 
     - **False**：始终返回 ``True``，不限制工作日与连续竞价时段，便于任意时刻联调/回测。
     - **True**（默认）：须同时满足——北京时间连续竞价 9:30～11:30、13:00～15:00，
-      且 ``app.utils.common_util._is_real_workday_single_day_api`` 对当日为工作日。
+      且 ``app.utils.common_util._is_real_workday_single_day_api`` 对当日为真实交易日。
 
     参数 ``enforce_real_workday`` 为 ``None`` 时读取 YAML；显式传入 ``True``/``False`` 可覆盖配置（单测等）。
 
     - ``now`` 在非严格模式下可省略；严格模式下 ``None`` 表示当前北京时间。
     """
     if enforce_real_workday is None:
-        enforce_real_workday = trading_enforce_real_workday()
+        enforce_real_workday = trading_time_checks_enabled()
 
     if not enforce_real_workday:
         return True

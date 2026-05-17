@@ -11,6 +11,7 @@ from quant.config import (
     MEMORY_COMPRESS_THRESHOLD_CHARS,
     MEMORY_COMPRESS_THRESHOLD_ENTRIES, MEMORY_FILE, MEMORY_MAX_INJECT_CHARS,
     NEWS_IMPACT_SUMMARY_FILE, OPTIONAL_FILE, OPTIONAL_HISTORY_FILE,
+    OPTIONAL_MD_FILE, OBSERVATION_POOL_FILE, OBSERVATION_POOL_MD_FILE,
     POPULARITY_FILE, POSITION_MV_FILE, STOPLOSS_FILE,
 )
 
@@ -343,9 +344,94 @@ def get_optional() -> list:
     return _read_jsonl_stock_file(OPTIONAL_FILE)
 
 
+def _write_text_file(path: str, text: str) -> None:
+    dn = os.path.dirname(path)
+    if dn:
+        os.makedirs(dn, exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+
+def sync_optional_md_from_list(optional_rows: list) -> None:
+    """将自选股写入 ``optional.md``（与 optional.jsonl 同步）。"""
+    lines = ["# 自选股（与 optional.jsonl 同步）", ""]
+    try:
+        from quant.parsers import optional_to_readable
+    except ImportError:
+
+        def optional_to_readable(o: dict) -> str:
+            code = o.get("股票代码", "")
+            name = o.get("股票名称", "")
+            tag = str(o.get("战法", "") or "").strip()
+            pool = str(o.get("自选池", "") or "").strip()
+            reason = o.get("加入自选原因", "")
+            extra = f"，自选池：{pool}" if pool else ""
+            if tag:
+                return f"{name}（{code}）战法「{tag}」{extra}；{reason}"
+            return f"{name}（{code}）{extra}；{reason}"
+
+    for i, row in enumerate(optional_rows or [], start=1):
+        lines.append(f"{i}. {optional_to_readable(row)}")
+    _write_text_file(OPTIONAL_MD_FILE, "\n".join(lines) + "\n")
+
+
+def upsert_observation_pool_rows(rows: list[dict]) -> None:
+    """更新观察池（按股票代码去重；写 jsonl + md）。"""
+    if not rows:
+        return
+    os.makedirs(os.path.dirname(OBSERVATION_POOL_FILE), exist_ok=True)
+    existing: dict[str, dict] = {}
+    cur = []
+    try:
+        with open(OBSERVATION_POOL_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    o = json.loads(line)
+                    if isinstance(o, dict) and o.get("股票代码"):
+                        code = str(o["股票代码"]).strip()
+                        existing[code] = o
+                        cur.append(o)
+                except json.JSONDecodeError:
+                    continue
+    except FileNotFoundError:
+        cur = []
+
+    for r in rows:
+        code = str(r.get("股票代码", "")).strip()
+        if not code:
+            continue
+        merged = dict(existing.get(code, {}))
+        merged.update(r)
+        existing[code] = merged
+
+    out_list = list(existing.values())
+    tmp = OBSERVATION_POOL_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        for o in out_list:
+            f.write(json.dumps(o, ensure_ascii=False) + "\n")
+    os.replace(tmp, OBSERVATION_POOL_FILE)
+
+    md_lines = ["# 观察股池（龙回头形态：连板后 T0 起 30 交易日内跟踪）", ""]
+    for i, o in enumerate(out_list, start=1):
+        code = o.get("股票代码", "")
+        name = o.get("股票名称", "")
+        t0 = o.get("观察T0日期", "")
+        until = o.get("观察到期日锚点", "") or o.get("观察说明", "")
+        md_lines.append(
+            f"{i}. **{name}**（{code}）观测起点 {t0} {until}".strip()
+        )
+    _write_text_file(OBSERVATION_POOL_MD_FILE, "\n".join(md_lines) + "\n")
+
+
 def save_optional(optional: list):
     os.makedirs(DATA_DIR, exist_ok=True)
     _write_jsonl_stock_file(OPTIONAL_FILE, optional)
+    sync_optional_md_from_list(optional)
 
 
 # ---------------------------------------------------------------------------

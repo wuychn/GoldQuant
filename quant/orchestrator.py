@@ -18,6 +18,7 @@ from quant.data_io import (
     tail_evening_review,
     tail_fund_only, tail_lunch_review, unwrap_payload,
     update_popularity_history, read_popularity_summary,
+    upsert_observation_pool_rows,
 )
 from quant.feishu import get_token, send_msg
 from quant.llm import call_llm
@@ -30,7 +31,7 @@ from quant.prompts import (
 from quant.push_format import format_push_message
 from quant.rules.base import ChainResult
 from quant.rules.context import RuleContext
-from quant.rules.registry import get_chains_for_mode, run_global_check, run_stock_chain
+from quant.rules.registry import build_global_preconditions, get_chains_for_mode, run_global_check, run_stock_chain
 from quant.signals import generate_buy_signals, generate_sell_signals
 from quant.trade_executor import ExecutedTrade, execute_signals
 
@@ -241,6 +242,17 @@ def _run_rules_for_optional(payload: dict, mode: str) -> dict:
     }
     try:
         ctx = _build_rule_context(payload, mode)
+        pre = build_global_preconditions().evaluate(ctx)
+        gfs = [r for r in pre.results if r.failed]
+        if gfs:
+            result["summary"] = (
+                "【全局前置未通过】本次暂停新增自选；原因："
+                + "；".join(r.reason or r.rule_name for r in gfs)
+            )
+            return result
+
+        obs_collect: list[dict] = []
+
         chains = get_chains_for_mode(mode)
         zt_chain = chains.get("zt_watchlist")
         lht_chain = chains.get("lht_watchlist")
@@ -287,12 +299,23 @@ def _run_rules_for_optional(payload: dict, mode: str) -> dict:
                 lht_res = lht_chain.evaluate(ctx)
                 if lht_res.all_passed:
                     lht_reasons = "; ".join(r.reason for r in lht_res.passes if r.reason)
-                    result["added_lht"].append({
+                    obs_meta_union = None
+                    for r in lht_res.results:
+                        if isinstance(r.data, dict) and r.data.get("observation_meta"):
+                            om = r.data.get("observation_meta")
+                            if isinstance(om, dict):
+                                obs_meta_union = om
+                    optional_row_lht = {
                         "股票代码": code,
                         "股票名称": name,
                         "战法": "龙回头战法",
                         "加入自选原因": f"【龙回头战法】{lht_reasons}",
-                    })
+                        "自选池": "观察池",
+                    }
+                    if obs_meta_union:
+                        optional_row_lht["观察元信息"] = obs_meta_union
+                        obs_collect.append(dict(obs_meta_union))
+                    result["added_lht"].append(optional_row_lht)
                     zt_txt = _prior_chain_caption(zt_res, bool(zt_chain))
                     result["exclusivity_decisions"].append({
                         "股票代码": code,
@@ -349,6 +372,9 @@ def _run_rules_for_optional(payload: dict, mode: str) -> dict:
                     f"三板战法均未入选。涨停板：{zt_txt}；龙回头：{lht_txt}；主升浪：{zsll_txt}"
                 ),
             })
+
+        if obs_collect:
+            upsert_observation_pool_rows(obs_collect)
 
         # 生成摘要
         parts = []

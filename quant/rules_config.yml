@@ -7,11 +7,14 @@
 # ============================================================================
 
 # --------------------------------------------------------------------------
-# 程序化交易时段（与 FastAPI / 数据接口的 .env 无关，见 quant/trading_hours.py）
+# 程序化交易时段（实盘：须为真实交易日 + 沪深连续竞价；回测可调 off）
+# - time_validation_enabled：主开关（未配置时回退 legacy 键 enforce_real_workday）
 # --------------------------------------------------------------------------
 trading:
-  # true：仅真实工作日且在沪深连续竞价时段内允许触发买卖；false：不限制时间与交易日（便于回测/联调）
-  enforce_real_workday: false
+  # true：启用「时间校验」——须 is_real_workday_cn 且北京时间连续竞价时段
+  # false：不限制时间与交易日（便于回测；规则链仍可照常评估）
+  time_validation_enabled: false
+  enforce_real_workday: false  # legacy 兼容别名；仅当未写 time_validation_enabled 时使用
 
 # 「回避高开低走弱势」默认参数（zt_buy_intraday / lht_buy / zsll_buy 通过 YAML 合并引用；单链可写 params 覆盖任意键）
 _no_buy_weak_params: &no_buy_weak_params
@@ -73,12 +76,13 @@ global_preconditions:
       strong_gate_dt_max: 30       # 跌停家数≤；须 JSON「赚钱效应.跌停」
       # 硬条件另须：上涨家数>下跌家数（赚钱效应「上涨」「下跌」）
 
-  # 情绪退潮预警（连续缩量或跌停增加时触发）
+  # 情绪退潮预警（阈值见 common.SentimentDecayWarning；此处可单独覆盖全局前置里的该规则）
   SentimentDecayWarning:
     enabled: true
     params:
-      volume_decay_days: 3     # 连续缩量天数触发预警
-      limit_down_surge: 2.0    # 跌停数较前日倍增触发预警
+      volume_decay_days: 3     # 预留：evaluate 暂未使用
+      limit_down_surge: 2.0    # 预留：evaluate 暂未使用
+      min_yesterday_zt_avg_pct: 0.0   # 不填则与其它链同上 common 默认值
 
   # 极端行情熔断（大盘单日跌幅超阈值，禁止新开仓）
   ExtremeMarketCircuitBreaker:
@@ -109,6 +113,13 @@ position:
 # 共用约束
 # --------------------------------------------------------------------------
 common:
+  # 情绪退潮：沿用一条门槛（并入所有含「情绪退潮预警」的规则链）。
+  SentimentDecayWarning:
+    enabled: true
+    params:
+      # 昨日涨停表现涨跌幅均值（%）须 ≥ 此值，否则整条链 Fail；默认等价于原先的「≥0%」。
+      min_yesterday_zt_avg_pct: 0.0
+
   # 标的池过滤（排除ST、科创板、北交所、次新股等）
   StockPoolFilter:
     enabled: true
@@ -132,6 +143,12 @@ zt_watchlist:
   SentimentDecayWarning:
     enabled: true
 
+  # 市场炸板率门禁（赚钱效应近似口径）：(涨停−真实涨停)/涨停
+  ZTMarketBlastRateGate:
+    enabled: true
+    params:
+      max_market_blast_rate_pct: 52.0
+
   # 人气排名要求
   ZTPopularity:
     enabled: true
@@ -145,12 +162,18 @@ zt_watchlist:
       min_cap_yi: 50           # 最低流通市值(亿)
       max_cap_yi: 1000         # 最高流通市值(亿)
 
-  # 连板情况
+  # 连板情况（连板高度上下限；标的池已排除 ST/科创/北交所/次新股）
   ZTConsecutiveBoards:
     enabled: true
     params:
       min_boards: 2            # 最少连板数（含首板则设1）
       max_boards: 7            # 最多连板数（过高风险大）
+
+  # 非一字板（一字涨停通常无法接力买入）
+  ZTWatchlistNotOneBoard:
+    enabled: true
+    params:
+      open_limit_epsilon: 0.002
 
   # 概念共振（所属概念是否有板块效应）
   ZTConceptResonance:
@@ -278,7 +301,7 @@ zt_sell:
       max_hold_days: 5         # 最大持仓天数
 
 # --------------------------------------------------------------------------
-# 龙回头战法 - 加自选（第二波：前期连板辨识度 + 深调企稳）
+# 龙回头战法 - 加自选（连板收尾后固定观察日内：急跌+急涨；阴跌 / 有效跌破 MA20 否决）
 # --------------------------------------------------------------------------
 lht_watchlist:
   LHTPopularity:
@@ -286,43 +309,21 @@ lht_watchlist:
     params:
       max_rank: 100
 
-  # 回看窗口内「连续涨停」最大天数（日线涨跌幅达到涨停阈值）
-  LHTMaxConsecutiveZTRun:
+  LHTDragonReturnWatchlist:
     enabled: true
     params:
-      lookback_days: 15
-      min_consecutive_zt_days: 2   # 至少连续 N 个涨停日，刻画前期龙头
+      lookback_days: 120                         # 连板段须在近期窗口内收尾
+      observation_days: 30                       # T0（连板收尾后首日非涨停）起算的交易日上限
+      min_zt_run_days: 5                         # 至少 N 连板（非一字可配）
       main_board_zt_pct: 9.8
       cyb_zt_pct: 19.8
-
-  # 从阶段高点回落（深调）
-  LHTPullback:
-    enabled: true
-    params:
-      min_pullback_pct: 10.0      # 最小回落幅度(%)，与主升浪阶段回撤上限配合使用
-      lookback_days: 30
-
-  # 回踩均线企稳区间 + 多头结构
-  LHTMASupport:
-    enabled: true
-    params:
-      ma_low_ratio: 0.98
-      ma_high_ratio: 1.10
-      require_ma5_ge_ma10: false  # true 时要求 MA5≥MA10≥MA20 严格多头排列
-
-  LHTConsecutiveUp:
-    enabled: true
-    params:
-      min_consecutive_days: 2
-
-  LHTVolume:
-    enabled: true
-    params:
-      min_ratio: 1.0
-      max_ratio: 3.0
-
-  LHTMACD:
-    enabled: true
+      exclude_one_word_from_zt_run: true        # 连板计数剔除一字近似板
+      one_word_amp_pct_max: 0.12               # 「一字近似」振幅阈值(%，相对昨收)
+      sharp_down_pct: 7.0                       # 急跌阈值（较前收单日跌幅≤−该值）
+      sharp_up_pct: 7.0                         # 急涨阈值（较前收单日涨幅≥该值）
+      yin_die_min_consecutive_bearish_bars: 4    # 连续阴线≥此视为阴跌环境
+      ma_window: 20                             # 有效破位均线窗口
+      effective_break_below_ma_consecutive_days: 2  # 连续 N 日收盘低于当期 MA ⇒ 破位
 
 # --------------------------------------------------------------------------
 # 龙回头战法 - 买入
@@ -401,12 +402,13 @@ lht_sell:
     params:
       target_profit_pct: 15.0  # 目标盈利百分比(%)
 
-  # 均线止损（跌破关键均线卖出）
+  # 均线止损（跌破 MA20 且连续多日确认——见下方参数）
   LHTMAStopLoss:
     enabled: true
     params:
-      stoploss_ma: 20          # 跌破此均线止损
-      tolerance_pct: 1.0       # 允许短暂假破(%)
+      stoploss_ma: 20          # MA 周期
+      tolerance_pct: 0.8       # 收盘低于 MA*(1−tolerance%) 计入『破位』缓冲
+      confirm_days_below_ma: 2 # 尾部连续多日确认后才触发卖出
 
   # 时间止损
   LHTTimeStopLoss:

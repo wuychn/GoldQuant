@@ -32,13 +32,8 @@ from quant.rules.lht_sell import (
     LHTTimeStopLossRule,
 )
 from quant.rules.lht_watchlist import (
-    LHTConsecutiveUpRule,
-    LHTMACDRule,
-    LHTMASupportRule,
-    LHTMaxConsecutiveZTRunRule,
+    LHTDragonReturnWatchlistRule,
     LHTPopularityRule,
-    LHTPullbackRule,
-    LHTVolumeRule,
 )
 from quant.rules.zsll_buy import (
     ZSLMainCapitalInflowRule,
@@ -92,6 +87,10 @@ from quant.rules.zt_watchlist import (
     ZTConsecutiveBoardsRule,
     ZTMarketCapRule,
     ZTPopularityRule,
+)
+from quant.rules.zt_watchlist_extra import (
+    ZTMarketBlastRateGateRule,
+    ZTWatchlistNotOneBoardRule,
 )
 
 # 配置文件路径：优先项目目录下的 quant/rules_config.yml
@@ -179,9 +178,11 @@ def build_zt_watchlist_chain() -> RuleChain:
     rules: list[Rule] = [
         StockPoolFilterRule(),
         SentimentDecayWarningRule(),
+        ZTMarketBlastRateGateRule(),
         ZTPopularityRule(),
         ZTMarketCapRule(),
         ZTConsecutiveBoardsRule(),
+        ZTWatchlistNotOneBoardRule(),
         ZTConceptResonanceRule(),
     ]
     _apply_config("zt_watchlist", rules, config)
@@ -253,12 +254,7 @@ def build_lht_watchlist_chain() -> RuleChain:
     rules: list[Rule] = [
         StockPoolFilterRule(),
         LHTPopularityRule(),
-        LHTMaxConsecutiveZTRunRule(),
-        LHTPullbackRule(),
-        LHTMASupportRule(),
-        LHTConsecutiveUpRule(),
-        LHTVolumeRule(),
-        LHTMACDRule(),
+        LHTDragonReturnWatchlistRule(),
     ]
     _apply_config("lht_watchlist", rules, config)
     return RuleChain("龙回头-加自选", rules, halt_on_first_failure=True)

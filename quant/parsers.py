@@ -235,9 +235,14 @@ def optional_to_readable(o: dict) -> str:
     name = o.get("股票名称", "")
     reason = o.get("加入自选原因", "")
     tag = str(o.get("战法", "") or "").strip()
-    if tag and tag != "未标注":
-        return f"股票名称：{name}，股票代码：{code}，战法：{tag}，加入自选原因：{reason}"
-    return f"股票名称：{name}，股票代码：{code}，加入自选原因：{reason}"
+    pool = str(o.get("自选池", "") or "").strip()
+    parts = []
+    if tag:
+        parts.append(f"战法「{tag}」")
+    if pool:
+        parts.append(f"自选池「{pool}」")
+    extra = "".join(parts) if not parts else "，".join(parts) + "，"
+    return f"股票名称：{name}，股票代码：{code}，{extra}加入自选原因：{reason}"
 
 
 def build_readable_block(lines: list[str]) -> str:

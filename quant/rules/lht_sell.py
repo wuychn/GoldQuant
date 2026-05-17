@@ -205,7 +205,14 @@ class LHTProfitTargetRule(Rule):
 
 
 class LHTMAStopLossRule(Rule):
-    """止损：最新收盘≤均线5日×0.98则次日开盘卖出。"""
+    """止损：最近若干根日K *连续* 收盘低于 MA×(1−容差)，确认破位后触发。"""
+
+    def default_params(self) -> dict:
+        return {
+            "stoploss_ma": 20,
+            "tolerance_pct": 0.0,
+            "confirm_days_below_ma": 2,
+        }
 
     @property
     def name(self) -> str:
@@ -214,38 +221,51 @@ class LHTMAStopLossRule(Rule):
     def evaluate(self, ctx: RuleContext) -> RuleResult:
         stock = ctx.target_stock
         name = str(stock.get("股票名称", "")).strip()
-        tech = stock.get("技术指标", {})
         history = stock.get("历史行情", [])
 
-        ma5 = tech.get("均线5日")
-        if ma5 is None:
-            return self._skip(f"{name}无MA5数据")
+        ma_n = int(self.params.get("stoploss_ma", 20))
+        tol_pct = float(self.params.get("tolerance_pct", 0.0))
+        need_below = int(self.params.get("confirm_days_below_ma", 2))
 
-        try:
-            ma5_f = float(ma5)
-        except (TypeError, ValueError):
-            return self._skip(f"{name}MA5格式异常")
+        if (
+            need_below <= 0
+            or not history
+            or not isinstance(history, list)
+            or len(history) < ma_n + need_below
+        ):
+            return self._skip(f"{name}历史或参数不足以计算MA{ma_n}破位确认")
 
-        # 取最新收盘
-        latest_close = None
-        if history and isinstance(history, list) and isinstance(history[-1], dict):
-            latest_close = history[-1].get("收盘")
+        closes: list[float] = []
+        for bar in history:
+            if not isinstance(bar, dict):
+                return self._skip(f"{name}K线结构异常")
+            c = bar.get("收盘")
+            if c is None:
+                return self._skip(f"{name}缺少收盘")
+            try:
+                closes.append(float(c))
+            except (TypeError, ValueError):
+                return self._skip(f"{name}收盘数据异常")
 
-        if latest_close is None:
-            return self._skip(f"{name}无最新收盘价")
+        n = len(closes)
+        fac = max(0.0, 1.0 - tol_pct / 100.0)
 
-        try:
-            close_f = float(latest_close)
-        except (TypeError, ValueError):
-            return self._skip(f"{name}收盘价格式异常")
+        def close_vs_ma(i: int) -> tuple[float, float]:
+            s = sum(closes[i - ma_n + 1 : i + 1]) / ma_n
+            return closes[i], s * fac
 
-        threshold = ma5_f * 0.98
-        if close_f <= threshold:
-            return self._fail(
-                f"最新收盘{close_f:.2f}≤MA5×98%={threshold:.2f}，次日开盘应止损卖出",
-                sell_type="止损",
-            )
-        return self._pass(f"最新收盘{close_f:.2f}>MA5×98%={threshold:.2f}，未触发止损")
+        for i in range(n - need_below, n):
+            c, line = close_vs_ma(i)
+            if c >= line - 1e-9:
+                return self._pass(
+                    f"近{need_below}日未收盘持续低于 MA{ma_n}×(1−容差{tol_pct}%)"
+                )
+
+        last_c, last_line = close_vs_ma(n - 1)
+        return self._fail(
+            f"最近{need_below}日收盘均低于 MA{ma_n}×(1−{tol_pct}%)（末收{last_c:.2f}<线{last_line:.2f}），触发均线止损",
+            sell_type="止损",
+        )
 
 
 class LHTTimeStopLossRule(Rule):

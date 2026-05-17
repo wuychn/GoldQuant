@@ -188,6 +188,37 @@ class RuleContext:
         """赚钱效应：跌停家数（字段「跌停」）。"""
         return self._profit_effect_int("跌停")
 
+    def _profit_effect_float(self, key: str) -> float | None:
+        pe = self.profit_effect
+        if not isinstance(pe, dict):
+            return None
+        v = pe.get(key)
+        if v is None or v == "":
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    def get_touch_limit_up_candidates_count(self) -> float | None:
+        """赚钱效应中『涨停』计数（常为触板口径，依数据源而异）。"""
+        v = self._profit_effect_float("涨停")
+        return v if v is not None and v >= 0 else None
+
+    def get_sealed_limit_up_close_count(self) -> float | None:
+        """赚钱效应中『真实涨停』计数（收盘封死涨停）。"""
+        v = self._profit_effect_float("真实涨停")
+        return v if v is not None and v >= 0 else None
+
+    def get_market_blast_rate_pct(self) -> float | None:
+        """市场炸板率近似：(『涨停』-『真实涨停』)/『涨停』×100 （仅当数据源提供两字段且有正分母）。"""
+        touched = self.get_touch_limit_up_candidates_count()
+        sealed = self.get_sealed_limit_up_close_count()
+        if touched is None or sealed is None or touched <= 0:
+            return None
+        br = max(0.0, (touched - sealed) / touched * 100.0)
+        return round(br, 3)
+
     def find_in_limit_up(self, code: str) -> dict[str, Any] | None:
         """在涨停统计中查找某股票。"""
         code_clean = code.strip()
