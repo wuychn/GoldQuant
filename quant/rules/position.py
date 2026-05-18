@@ -101,7 +101,7 @@ class PositionLimitRule(Rule):
 
 
 class DailyLossLimitRule(Rule):
-    """每日亏损限额：`ctx.daily_pnl` 为当日已实现盈亏（成交汇总）占当前总权益比例达阈值则触发。"""
+    """每日亏损限额：`ctx.daily_pnl` 为当日已实现盈亏（成交汇总）占当前总资产比例达阈值则触发。"""
 
     def default_params(self):
         return {"max_daily_loss_pct": -3.0}
@@ -111,11 +111,11 @@ class DailyLossLimitRule(Rule):
         return "每日亏损限额"
 
     def evaluate(self, ctx: RuleContext) -> RuleResult:
-        if ctx.fund <= 0:
-            return self._skip("总资金数据缺失")
+        if ctx.total_assets <= 0:
+            return self._skip("总资产数据缺失")
 
         threshold = float(self.params["max_daily_loss_pct"]) / 100.0
-        loss_ratio = ctx.daily_pnl / ctx.fund
+        loss_ratio = ctx.daily_pnl / ctx.total_assets
 
         if loss_ratio <= threshold:
             return self._fail(

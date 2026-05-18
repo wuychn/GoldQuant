@@ -39,7 +39,7 @@ from quant.trade_executor import ExecutedTrade, execute_signals
 _NO_OP_REASON_SYSTEM = """你是A股短线交易执行助手。根据用户给出的「事实材料」，用一两句话说明本轮为何没有实际买卖成交。
 硬性要求：
 1. 只输出纯中文一段，30～180字；不要标题、不要用【】、不要markdown、不要分条编号。
-2. 不要写「全局已通过」「前置条件全部通过」等空话；直接写可执行层面的原因（如某股价格/高开/量比/连板条件、现金不足、无持仓、无有效盘口价、可买数量不足一手等）。
+2. 不要写「全局已通过」「前置条件全部通过」等空话；直接写可执行层面的原因（如某股价格/高开/量比/连板条件、可用不足、无持仓、无有效盘口价、可买数量不足一手等）。
 3. 材料里有的股票可点名（名称+代码）；没有的细节不要编造。"""
 
 
@@ -115,8 +115,8 @@ def process_news(raw_data: dict, timestamp: str) -> str:
 def _build_rule_context(payload: dict, mode: str) -> RuleContext:
     """从 payload 构建规则引擎上下文。"""
     holdings_live = payload.get("持仓股", [])
-    # 总权益 = 磁盘现金（成交唯一写入源）+ 本帧 payload 持仓按盘口估算市值，避免盘中仍用过期快照
-    fund_live = get_cash() + compute_holdings_market_value(holdings_live)
+    # 总资产 = 可用（磁盘，成交写入）+ 本帧 payload 持仓按盘口估算的总市值，避免盘中仍用过期快照
+    total_assets_live = get_cash() + compute_holdings_market_value(holdings_live)
     today_str = datetime.now().strftime("%Y-%m-%d")
     daily_realized = sum_today_realized_pnl(today_str)
     return RuleContext(
@@ -128,7 +128,7 @@ def _build_rule_context(payload: dict, mode: str) -> RuleContext:
         concept_sectors=payload.get("概念板块", {}),
         watchlist=payload.get("自选股", []),
         holdings=holdings_live,
-        fund=fund_live,
+        total_assets=total_assets_live,
         stoploss_records=read_recent_stoploss(),
         profit_effect=payload.get("赚钱效应", {}),
         daily_pnl=daily_realized,
@@ -566,7 +566,7 @@ def _fallback_no_operation_reason(
         buy_txt = "自选股为空。" if wl == 0 else f"自选股{wl}只但未触发买入规则。"
         return f"原因：{sell_txt}{buy_txt}"
     return (
-        f"原因：已产生买入{nb}条、卖出{ns}条信号但未成交，多为现金不足或数量取整为0，请查日志。"
+        f"原因：已产生买入{nb}条、卖出{ns}条信号但未成交，多为可用不足或数量取整为0，请查日志。"
     )
 
 
@@ -588,7 +588,7 @@ def _summarize_no_operation_reason(
 
     blocks = [
         f"场景：{'盘前' if mode == 'pre_market' else '盘中'}",
-        f"总权益约：{ctx.fund:.0f}元",
+        f"总资产约：{ctx.total_assets:.0f}元",
         f"自选股：{len(wl)}只；持仓：{len(hl)}只；买入信号：{nb}条；卖出信号：{ns}条",
         "自选股摘要：\n" + _compact_stocks_for_llm(wl, limit=10),
     ]
@@ -601,7 +601,7 @@ def _summarize_no_operation_reason(
             + gs[:2000]
         )
     if nb > 0 or ns > 0:
-        blocks.append("说明：信号已生成但未写入成交，请结合现金、持仓股数、委托数量等说明。")
+        blocks.append("说明：信号已生成但未写入成交，请结合可用、持仓股数、委托数量等说明。")
 
     user = "\n\n".join(blocks)
     try:

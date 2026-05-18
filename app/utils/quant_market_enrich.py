@@ -72,7 +72,7 @@ def pre_auction_minute_zh(context: str, symbol: str) -> list[dict[str, Any]] | N
 
 
 def today_zt_pool_full_zh(context: str) -> list[dict[str, Any]] | None:
-    """东财当日涨停股池（不过滤连板），列名为中文。"""
+    """东财当日涨停股池（不过滤连板），列名为中文。TODO 与dfcf_util的ztgc合并"""
     try:
         df = ak.stock_zt_pool_em(date=today())
         if df is None or df.empty:

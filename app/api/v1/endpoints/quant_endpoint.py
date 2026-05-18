@@ -42,7 +42,7 @@ from app.utils.quant_market_enrich import (
     spot_snapshot_for_codes,
     today_zt_pool_full_zh,
 )
-from app.utils.ths_util import stock_fund_flow_concept, hot_stock
+from app.utils.ths_util import stock_fund_flow_concept, hot_stock, zdfb
 
 logger = logging.getLogger(__name__)
 
@@ -387,7 +387,10 @@ async def _important_index_spot(context: str) -> list | None:
 
 
 async def _market_fund_flow_last_n(context: str, n: int) -> list | None:
-    """大盘资金流：``ak.stock_market_fund_flow`` 取最近 ``n`` 条（复盘接口用 3；盘中/盘前用 1）。"""
+    """
+    大盘资金流：``ak.stock_market_fund_flow`` 取最近 ``n`` 条（复盘接口用 3；盘中/盘前用 1）。
+    经过测试，盘中获取到的可能都是上一个交易日的数据，需要确认盘后能否获取到当天的数据 TODO
+    """
     try:
         recs = dataframe_to_records(await run_in_threadpool(ak.stock_market_fund_flow))
         if not recs:
@@ -833,42 +836,44 @@ async def pre_market(settings: SettingsDep, background_tasks: BackgroundTasks) -
     #     return blocked
     route = "GET /quant/market/pre_market"
     # 大盘指数
-    dpzs = await _important_index_spot(f"{route} | ak.stock_zh_index_spot_em")
+    # dpzs = await _important_index_spot(f"{route} | ak.stock_zh_index_spot_em")
 
-    # 资金流，开盘时获取到的是昨天的数据？TODO
-    # zjl = await _last_market_fund_flow_row(f"{route} | ak.stock_market_fund_flow")
+    # 涨跌分布，同花顺接口，需要Cookie，且访问不能太频繁？ TODO
+    zdfb_ = await zdfb(settings)
 
     # 赚钱效应，开盘时获取到的是昨天的数据？TODO
-    # zqxy = await _earning_effect_pre_market(f"{route} | ak.stock_market_activity_legu")
+    zqxy = await _earning_effect_pre_market(f"{route} | ak.stock_market_activity_legu")
 
     # 自选，从 ~/.quant/optional.jsonl 获取（每行 {"股票代码","股票名称",...}）
-    zxg = await _enrich_ths_stock_list(
-        settings,
-        _zx,
-        more=False,
-        list_context=f"{route} | _zx",
-        include_pre_snapshot=True,
-        fund_flow_trade_days=1,
-    )
+    # zxg = await _enrich_ths_stock_list(
+    #     settings,
+    #     _zx,
+    #     more=False,
+    #     list_context=f"{route} | _zx",
+    #     include_pre_snapshot=True,
+    #     fund_flow_trade_days=1,
+    # )
 
     # 持仓，从 ~/.quant/holding.jsonl 获取持仓股（每行一条 JSON，含 股票代码、买入时间 等）
-    ccg = await _enrich_ths_stock_list(
-        settings,
-        _cc,
-        more=False,
-        list_context=f"{route} | _cc",
-        include_pre_snapshot=True,
-        fund_flow_trade_days=1,
-    )
+    # ccg = await _enrich_ths_stock_list(
+    #     settings,
+    #     _cc,
+    #     more=False,
+    #     list_context=f"{route} | _cc",
+    #     include_pre_snapshot=True,
+    #     fund_flow_trade_days=1,
+    # )
 
     # 市场状态机，需要确认是否是实时数据且是否需要优化这些数据，TODO
-    bundle = await _market_bundle_zh(route, realtime_index_spot=dpzs)
+    # bundle = await _market_bundle_zh(route, realtime_index_spot=dpzs)
 
     result = {
-        "大盘指数": dpzs,
-        "自选股": zxg,
-        "持仓股": ccg,
-        **bundle,
+        # "大盘指数": dpzs,
+        # "自选股": zxg,
+        # "持仓股": ccg,
+        '涨跌分布': zdfb_,
+        '赚钱效应': zqxy,
+        # **bundle,
     }
     # TODO，这是干啥的
     _schedule_quant_archive(background_tasks, settings, "pre", result)

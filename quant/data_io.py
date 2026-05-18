@@ -1,4 +1,4 @@
-"""文件读写：资金、持仓、自选、止损、交易记录、记忆。"""
+"""文件读写：可用、总市值、总资产、持仓、自选、止损、交易记录、记忆。"""
 
 import json
 import os
@@ -37,10 +37,10 @@ def unwrap_payload(raw: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Fund / account state
-# fund.md = 现金（纯数字），position_market_value.md = 持仓总市值（纯数字），
+# 账户状态（可用 / 总市值 / 总资产）
+# fund.md = 可用资金（纯数字），position_market_value.md = 总市值（纯数字），
 # account_state.json = 与上次原子写入一致的快照。
-# get_fund() = 现金 + 持仓市值（磁盘口径）。
+# 总资产 = 可用 + 总市值（磁盘口径由 get_total_assets / get_fund 读取）。
 # ---------------------------------------------------------------------------
 
 def _format_plain_balance(value: float) -> str:
@@ -91,7 +91,7 @@ def _read_account_state_json() -> tuple[float, float] | None:
 
 
 def _read_plain_cash_mv_files() -> tuple[float, float] | None:
-    """无 account_state 时读两镜像个位数；fund.md 必填一条有效数字才认。"""
+    """无 account_state 时读两镜像个位数；fund.md（可用）必填一条有效数字才认。"""
     if not os.path.isfile(FUND_FILE):
         return None
     try:
@@ -113,7 +113,7 @@ def _read_plain_cash_mv_files() -> tuple[float, float] | None:
 
 
 def _load_cash_mv_pair() -> tuple[float, float]:
-    """优先 account_state.json，否则 fund.md + position_market_value.md，否则初始本金。"""
+    """优先 account_state.json，否则 fund.md（可用）+ position_market_value.md（总市值），否则初始本金。"""
     got = _read_account_state_json()
     if got is not None:
         return got
@@ -124,21 +124,24 @@ def _load_cash_mv_pair() -> tuple[float, float]:
 
 
 def get_cash() -> float:
+    """可用资金（元），来自磁盘 account_state / fund.md。"""
     return _load_cash_mv_pair()[0]
 
 
 def get_position_market_value() -> float:
+    """总市值（元），来自磁盘 account_state / position_market_value.md。"""
     return _load_cash_mv_pair()[1]
 
 
-def get_total_equity() -> float:
+def get_total_assets() -> float:
+    """总资产（可用 + 总市值，元；磁盘口径）。"""
     c, m = _load_cash_mv_pair()
     return c + m
 
 
 def get_fund() -> float:
-    """账户总权益（现金 + 磁盘持仓市值快照），用于 tail/提示等。"""
-    return get_total_equity()
+    """同 get_total_assets()，保留旧名供脚本兼容。"""
+    return get_total_assets()
 
 
 def atomic_save_holdings_and_account_state(
@@ -152,12 +155,12 @@ def atomic_save_holdings_and_account_state(
     os.makedirs(DATA_DIR, exist_ok=True)
     cash = max(0.0, float(cash))
     position_mv = max(0.0, float(position_mv))
-    equity = cash + position_mv
+    total_assets = cash + position_mv
     ts = datetime.now().isoformat(timespec="seconds")
     state = {
         "cash": cash,
         "position_market_value": position_mv,
-        "total_equity": equity,
+        "total_assets": total_assets,
         "updated_at": ts,
     }
     if last_batch_realized_pnl is not None:
@@ -185,7 +188,7 @@ def persist_account_cash_and_mv(
     *,
     last_batch_realized_pnl: float | None = None,
 ) -> None:
-    """不写持仓时，仅同步现金与市值快照（须与 holding.jsonl 一致，由调用方保证）。"""
+    """不写持仓时，仅同步可用与总市值快照（须与 holding.jsonl 一致，由调用方保证）。"""
     holdings = get_holdings()
     atomic_save_holdings_and_account_state(
         holdings,
@@ -195,11 +198,11 @@ def persist_account_cash_and_mv(
     )
 
 
-def set_total_equity(equity: float) -> None:
-    """按目标总权益反推现金（总权益−当前持仓市值）；现金不低于 0。"""
+def set_total_assets(total_assets: float) -> None:
+    """按目标总资产反推可用（总资产 − 当前总市值）；可用不低于 0。"""
     holdings = get_holdings()
     mv = compute_holdings_market_value(holdings)
-    cash = max(0.0, float(equity) - mv)
+    cash = max(0.0, float(total_assets) - mv)
     atomic_save_holdings_and_account_state(
         holdings,
         cash,
@@ -209,7 +212,7 @@ def set_total_equity(equity: float) -> None:
 
 
 def update_fund(profit: float) -> None:
-    """在现金上叠加盈亏（复盘外少用）；现金不低于 0。"""
+    """在可用资金上叠加盈亏（复盘外少用）；可用不低于 0。"""
     rows = get_holdings()
     cash = max(0.0, get_cash() + float(profit))
     mv = compute_holdings_market_value(rows)
@@ -848,7 +851,7 @@ def _account_context_tail() -> str:
     c, m = _load_cash_mv_pair()
     te = c + m
     return (
-        f"【现金】{c:.2f} 元 【持仓市值】{m:.2f} 元 【总权益】{te:.2f} 元"
+        f"【可用】{c:.2f} 元 【总市值】{m:.2f} 元 【总资产】{te:.2f} 元"
     )
 
 

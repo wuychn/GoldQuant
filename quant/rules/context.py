@@ -40,8 +40,8 @@ class RuleContext:
     # 持仓股列表
     holdings: list[dict[str, Any]] = field(default_factory=list)
 
-    # 总权益（现金 + 持仓市值，元）；与 data_io.get_fund() 一致
-    fund: float = 0.0
+    # 总资产（可用 + 总市值，元）；与 data_io.get_total_assets() / get_fund() 一致
+    total_assets: float = 0.0
 
     # 近期止损记录 [{股票代码, 股票名称, 止损时间, 原因}]
     stoploss_records: list[dict[str, Any]] = field(default_factory=list)
@@ -270,10 +270,10 @@ class RuleContext:
         return False
 
     def current_position_ratio(self) -> float:
-        """当前持仓市值 / 总权益（0~1）。"""
-        if self.fund <= 0:
+        """当前总市值 / 总资产（0~1）。"""
+        if self.total_assets <= 0:
             return 0.0
         if self.extra.get("position_amount") is not None:
-            return float(self.extra["position_amount"]) / self.fund
+            return float(self.extra["position_amount"]) / self.total_assets
         mv = compute_holdings_market_value(self.holdings)
-        return mv / self.fund
+        return mv / self.total_assets

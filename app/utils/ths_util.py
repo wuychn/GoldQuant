@@ -7,6 +7,7 @@ import httpx
 from fastapi import HTTPException
 
 from app.api.deps import SettingsDep
+from app.core.ths_headers import merge_ths_headers_for_url
 from app.utils.common_util import format_percent, sort_by_field_desc_and_limit, filter_exclude_by_key
 from app.utils.dataframe import dataframe_to_records
 
@@ -22,6 +23,7 @@ async def call_ths_api(
         "User-Agent": settings.THS_DEFAULT_USER_AGENT,
         "Accept": "application/json",
     }
+    headers = merge_ths_headers_for_url(url, headers)
     client_kw: dict[str, Any] = {"timeout": settings.HTTP_CLIENT_TIMEOUT}
     if px := settings.httpx_proxy_url():
         client_kw["proxy"] = px
@@ -114,6 +116,16 @@ async def stock_fund_flow_concept(type_, sort_key):
     return sort_by_field_desc_and_limit(filter_exclude_by_key(records, '行业', ['融资融券', '深股通', '沪股通']),
                                         sort_key, 10)
 
+async def zdfb(settings):
+    """
+        同花顺人气飙升榜
+        """
+    r = await call_ths_api(
+        settings,
+        "https://q.10jqka.com.cn/api.php?t=indexflash&"
+    )
+    result = []
+    return r
 
 if __name__ == "__main__":
     # 个股资金流

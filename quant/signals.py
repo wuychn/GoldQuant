@@ -115,7 +115,7 @@ def generate_buy_signals(ctx: RuleContext, chains: dict[str, RuleChain]) -> list
 
         # 从 ctx.extra 读取仓位比例（由 PositionLimitRule 写入）
         max_single = ctx.extra.get("max_single_position", 0.10)
-        amount = ctx.fund * max_single
+        amount = ctx.total_assets * max_single
         quantity = _round_down_to_lot(int(amount / price))
 
         if quantity <= 0:

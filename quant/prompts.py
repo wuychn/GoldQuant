@@ -5,7 +5,7 @@ import os
 from datetime import datetime
 
 from quant.config import LLM_OUTPUT_FORMAT, NEWS_IMPACT_SUMMARY_FILE
-from quant.data_io import get_fund, read_user_text
+from quant.data_io import get_total_assets, read_user_text
 from quant.strategy_loader import load_sections
 
 
@@ -13,10 +13,10 @@ from quant.strategy_loader import load_sections
 # Persona & Isolation
 # ---------------------------------------------------------------------------
 
-def _persona(fund: float | None = None) -> str:
-    f = fund if fund is not None else get_fund()
+def _persona(total_assets: float | None = None) -> str:
+    f = total_assets if total_assets is not None else get_total_assets()
     return (
-        f"你是一名 A 股实盘短线高手，比肩，操盘资金 {f:.0f} 元。"
+        f"你是一名 A 股实盘短线高手，比肩，当前总资产约 {f:.0f} 元。"
         "你严格执行策略条文，纪律严明、知行合一，目标是资产大幅增值。\n"
     )
 

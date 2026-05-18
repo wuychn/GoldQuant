@@ -67,7 +67,7 @@ def _executed_to_record(trade: ExecutedTrade, *, date_str: str) -> dict:
 def execute_signals(signals: list[TradeSignal]) -> list[ExecutedTrade]:
     """原子执行所有交易信号。
 
-    卖出优先 → 买入；同代码多行持仓先合并；现金全程非负；成交后同步 profit.md。
+    卖出优先 → 买入；同代码多行持仓先合并；可用全程非负；成交后同步 profit.md。
     A 股 T+1：任一持仓行「买入时间」为当日则该代码不允许卖出（见 holding_codes_bought_on_calendar_date）。
     仅当 ``rules_config.yml`` 中 ``trading.enforce_real_workday`` 为 true 时：须在北京时间连续竞价时段
     （9:30～11:30、13:00～15:00）且为 ``_is_real_workday_single_day_api`` 判定之真实交易日。
@@ -164,7 +164,7 @@ def execute_signals(signals: list[TradeSignal]) -> list[ExecutedTrade]:
         cost = signal.price * signal.quantity
         if cost > cash + _CASH_EPS:
             print(
-                f"买入跳过：{signal.name}({signal.code}) 现金不足（需{cost:.2f}，"
+                f"买入跳过：{signal.name}({signal.code}) 可用不足（需{cost:.2f}，"
                 f"余{cash:.2f}）"
             )
             continue

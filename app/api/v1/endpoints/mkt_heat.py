@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 from typing import Any
+from urllib.parse import urlencode
 
 import akshare as ak
 import httpx
@@ -11,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
 
 from app.api.deps import SettingsDep
+from app.core.ths_headers import merge_ths_headers_for_url
 from app.schemas.ak_openapi import (
     EmPopularityOut,
     EmSurgeOut,
@@ -84,6 +86,8 @@ async def hot_list_direct(
         "User-Agent": settings.THS_DEFAULT_USER_AGENT,
         "Accept": "application/json",
     }
+    url_for_match = f"{HOT_STOCK_LIST_API}?{urlencode(params)}"
+    headers = merge_ths_headers_for_url(url_for_match, headers)
     client_kw: dict[str, Any] = {"timeout": settings.HTTP_CLIENT_TIMEOUT}
     if px := settings.httpx_proxy_url():
         client_kw["proxy"] = px
