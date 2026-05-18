@@ -482,7 +482,7 @@ async def _enrich_ths_stock_list(
     out: list = []
     try:
         rows = await fetch_stocks(settings=settings)
-        # 不能在这里阶段，要在具体的获取方法中去阶段，因为hot_limit只是针对同花顺人气股，不是针对所有获取逻辑
+        # 不能在这里截断，要在具体的获取方法中去阶段，因为hot_limit只是针对同花顺人气股，不是针对所有获取逻辑
         # if hot_limit > 0:
         #     rows = rows[:hot_limit]
         spot_effective: dict[str, dict[str, object]] = {}
@@ -836,13 +836,13 @@ async def pre_market(settings: SettingsDep, background_tasks: BackgroundTasks) -
     #     return blocked
     route = "GET /quant/market/pre_market"
     # 大盘指数
-    # dpzs = await _important_index_spot(f"{route} | ak.stock_zh_index_spot_em")
+    dpzs = await _important_index_spot(f"{route} | ak.stock_zh_index_spot_em")
 
-    # 涨跌分布，同花顺接口，需要Cookie，且访问不能太频繁？ TODO
+    # 涨跌分布，同花顺接口，需要Cookie，且访问不能太频繁？ TODO 替换为52etf
     zdfb_ = await zdfb(settings)
 
     # 赚钱效应，开盘时获取到的是昨天的数据？TODO
-    zqxy = await _earning_effect_pre_market(f"{route} | ak.stock_market_activity_legu")
+    # zqxy = await _earning_effect_pre_market(f"{route} | ak.stock_market_activity_legu")
 
     # 自选，从 ~/.quant/optional.jsonl 获取（每行 {"股票代码","股票名称",...}）
     # zxg = await _enrich_ths_stock_list(
@@ -897,9 +897,9 @@ async def during_market(settings: SettingsDep, background_tasks: BackgroundTasks
     dpzs = await _important_index_spot(f"{route} | ak.stock_zh_index_spot_em")
 
     # TODO 数据延迟太大，可能是昨天的数据
-    zqxy_raw = await _earning_effect_intraday(f"{route} | ak.stock_market_activity_legu()")
-    zqxy = _slim_earning_effect_dict(zqxy_raw)
-    zjl = await _market_fund_flow_last_n(f"{route} | ak.stock_market_fund_flow", 1)
+    # zqxy_raw = await _earning_effect_intraday(f"{route} | ak.stock_market_activity_legu()")
+    # zqxy = _slim_earning_effect_dict(zqxy_raw)
+    # zjl = await _market_fund_flow_last_n(f"{route} | ak.stock_market_fund_flow", 1)
 
     jrzfqsgn = await _stock_fund_flow_concept_or_none(
         f"{route} | ths.stock_fund_flow_concept",

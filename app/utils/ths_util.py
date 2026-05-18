@@ -23,7 +23,8 @@ async def call_ths_api(
         "User-Agent": settings.THS_DEFAULT_USER_AGENT,
         "Accept": "application/json",
     }
-    headers = merge_ths_headers_for_url(url, headers)
+    # 这里是添加同花顺的请求头，现在同花顺接口的Cookie还不知道怎么绕过 TODO
+    # headers = merge_ths_headers_for_url(url, headers)
     client_kw: dict[str, Any] = {"timeout": settings.HTTP_CLIENT_TIMEOUT}
     if px := settings.httpx_proxy_url():
         client_kw["proxy"] = px

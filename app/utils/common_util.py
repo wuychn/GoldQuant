@@ -39,6 +39,29 @@ def list_to_dict(data_list: list[dict]) -> dict:
     return result
 
 
+def list_to_dict_v2(data_list: list[dict], key: str = "key", value: str = "value") -> dict:
+    """
+    工具方法：
+    列表中每个 dict 取【key】作为 key
+                【value】作为 value
+    最终合并成一个字典
+
+    与list_to_dict的区别是，本方法指定key、value
+
+    """
+    result = {}
+
+    if not isinstance(data_list, list):
+        return result
+
+    for item in data_list:
+        if not isinstance(item, dict) or key not in item or value not in item:
+            continue
+        result[item[key]] = item[value]
+
+    return result
+
+
 def format_percent(num):
     """
      四舍五入保留2位小数，并在最后追加%
