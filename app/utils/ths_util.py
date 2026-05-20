@@ -117,9 +117,9 @@ async def stock_fund_flow_concept(type_, sort_key):
     return sort_by_field_desc_and_limit(filter_exclude_by_key(records, '行业', ['融资融券', '深股通', '沪股通']),
                                         sort_key, 10)
 
-async def zdfb(settings):
+async def zdfb_ths(settings):
     """
-        同花顺人气飙升榜
+        涨跌分布
         """
     r = await call_ths_api(
         settings,

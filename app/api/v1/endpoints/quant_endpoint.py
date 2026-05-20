@@ -28,7 +28,8 @@ from app.utils.common_util import (
     list_to_dict,
 )
 from app.utils.dataframe import dataframe_to_records
-from app.utils.dfcf_util import hsgtzj, pk, zj, ztgc, hist, xw, all_stocks, jbxx
+from app.utils.dfcf_util import hsgtzj, pk, zj, ztgc, hist, all_stocks, jbxx
+from app.utils.etf52_util import zdfb_52etf
 from app.utils.quant_archive import (
     archive_market_sync,
     daily_hist_fetch_start_date,
@@ -42,7 +43,7 @@ from app.utils.quant_market_enrich import (
     spot_snapshot_for_codes,
     today_zt_pool_full_zh,
 )
-from app.utils.ths_util import stock_fund_flow_concept, hot_stock, zdfb
+from app.utils.ths_util import stock_fund_flow_concept, hot_stock, zdfb_ths
 
 logger = logging.getLogger(__name__)
 
@@ -370,17 +371,6 @@ def _sync_call_or_none(context: str, fn: Callable[[], object]) -> object | None:
 async def _dataframe_records_or_none(context: str, fetch: Callable[..., object]) -> list | None:
     try:
         return dataframe_to_records(await run_in_threadpool(fetch))
-    except Exception:
-        _log_api_error(context)
-        return None
-
-
-async def _important_index_spot(context: str) -> list | None:
-    try:
-        raw = dataframe_to_records(
-            await run_in_threadpool(lambda: ak.stock_zh_index_spot_em(symbol="沪深重要指数"))
-        )
-        return [item for item in raw if item["序号"] in _INDEX_SERIAL_WHITELIST]
     except Exception:
         _log_api_error(context)
         return None
@@ -822,6 +812,47 @@ async def news(settings: SettingsDep) -> Response:
     return Response(data=_finalize_quant_payload(news))
 
 
+async def _dpzs(route: str = ''):
+    """
+    获取大盘指数
+    :param route:
+    :return:
+    """
+    try:
+        # 东方财富渠道
+        raw = dataframe_to_records(
+            await run_in_threadpool(lambda: ak.stock_zh_index_spot_em(symbol="沪深重要指数"))
+        )
+        return [item for item in raw if item["序号"] in _INDEX_SERIAL_WHITELIST]
+    except Exception:
+        _log_api_error(f"{route} | ak.stock_zh_index_spot_em")
+        return None
+
+
+async def _zdfb(route, settings):
+    """
+    涨跌分布
+    :param route:
+    :return:
+    """
+    try:
+        # 同花顺渠道
+        return await zdfb_ths(settings)
+    except Exception:
+        _log_api_error(f"{route} | 同花顺涨跌分布")
+
+    try:
+        # 52etf渠道
+        return await zdfb_52etf()
+    except:
+        _log_api_error(f"{route} | 52etf涨跌分布")
+
+    # legu渠道
+    # 开盘时获取到的是昨天的数据，且现在执行在报错，就暂时不添加
+    # zqxy = await _earning_effect_pre_market(f"{route} | ak.stock_market_activity_legu")
+    return None
+
+
 @router.get(
     "/quant/market/pre_market",
     response_model=Response,
@@ -830,51 +861,48 @@ async def news(settings: SettingsDep) -> Response:
 )
 async def pre_market(settings: SettingsDep, background_tasks: BackgroundTasks) -> Response:
     """
-    盘前：「大盘指数」、文件自选/持仓（`optional.jsonl` / `holding.jsonl`）enrichment，含「集合竞价分钟行情」「盘前实时快照」、全量「盘口」、**最近 1 个交易日**的「个股资金流」、**市场状态机**。
+    盘前：
+    「大盘指数」
     """
-    # if (blocked := await _guard_real_workday_or_non_trading_response()) is not None:
-    #     return blocked
     route = "GET /quant/market/pre_market"
+    
     # 大盘指数
-    dpzs = await _important_index_spot(f"{route} | ak.stock_zh_index_spot_em")
+    dpzs_ = await _dpzs(f"{route}")
 
     # 涨跌分布，同花顺接口，需要Cookie，且访问不能太频繁？ TODO 替换为52etf
-    zdfb_ = await zdfb(settings)
-
-    # 赚钱效应，开盘时获取到的是昨天的数据？TODO
-    # zqxy = await _earning_effect_pre_market(f"{route} | ak.stock_market_activity_legu")
+    zdfb_ = await _zdfb(route, settings)
 
     # 自选，从 ~/.quant/optional.jsonl 获取（每行 {"股票代码","股票名称",...}）
-    # zxg = await _enrich_ths_stock_list(
-    #     settings,
-    #     _zx,
-    #     more=False,
-    #     list_context=f"{route} | _zx",
-    #     include_pre_snapshot=True,
-    #     fund_flow_trade_days=1,
-    # )
+    zxg_ = await _enrich_ths_stock_list(
+        settings,
+        _zx,
+        more=False,
+        list_context=f"{route} | _zx",
+        include_pre_snapshot=True,
+        fund_flow_trade_days=1,
+    )
 
     # 持仓，从 ~/.quant/holding.jsonl 获取持仓股（每行一条 JSON，含 股票代码、买入时间 等）
-    # ccg = await _enrich_ths_stock_list(
-    #     settings,
-    #     _cc,
-    #     more=False,
-    #     list_context=f"{route} | _cc",
-    #     include_pre_snapshot=True,
-    #     fund_flow_trade_days=1,
-    # )
+    ccg_ = await _enrich_ths_stock_list(
+        settings,
+        _cc,
+        more=False,
+        list_context=f"{route} | _cc",
+        include_pre_snapshot=True,
+        fund_flow_trade_days=1,
+    )
 
     # 市场状态机，需要确认是否是实时数据且是否需要优化这些数据，TODO
-    # bundle = await _market_bundle_zh(route, realtime_index_spot=dpzs)
+    bundle = await _market_bundle_zh(route, realtime_index_spot=dpzs_)
 
     result = {
-        # "大盘指数": dpzs,
-        # "自选股": zxg,
-        # "持仓股": ccg,
+        "大盘指数": dpzs_,
         '涨跌分布': zdfb_,
-        '赚钱效应': zqxy,
-        # **bundle,
+        "自选股": zxg_,
+        "持仓股": ccg_,
+        **bundle,
     }
+
     # TODO，这是干啥的
     _schedule_quant_archive(background_tasks, settings, "pre", result)
 
@@ -894,7 +922,7 @@ async def during_market(settings: SettingsDep, background_tasks: BackgroundTasks
     # if (blocked := await _guard_real_workday_or_non_trading_response()) is not None:
     #     return blocked
     route = "GET /quant/market/during_market"
-    dpzs = await _important_index_spot(f"{route} | ak.stock_zh_index_spot_em")
+    dpzs = await _dpzs(f"{route}")
 
     # TODO 数据延迟太大，可能是昨天的数据
     # zqxy_raw = await _earning_effect_intraday(f"{route} | ak.stock_market_activity_legu()")
@@ -967,7 +995,7 @@ async def post_market(settings: SettingsDep, background_tasks: BackgroundTasks) 
     # if (blocked := await _guard_real_workday_or_non_trading_response()) is not None:
     #     return blocked
     route = "GET /quant/market/post_market"
-    dpzs = await _important_index_spot(f"{route} | ak.stock_zh_index_spot_em")
+    dpzs = await _dpzs(f"{route} | ak.stock_zh_index_spot_em")
     zqxy_raw = await _earning_effect_intraday(f"{route} | ak.stock_market_activity_legu()")
     zqxy = _slim_earning_effect_dict(zqxy_raw)
     zjl = await _market_fund_flow_last_n(f"{route} | ak.stock_market_fund_flow", 3)

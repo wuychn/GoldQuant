@@ -5,7 +5,7 @@ from app.utils.common_util import list_to_dict, list_to_dict_v2
 from app.utils.http_util import get_api
 
 
-async def zdfb():
+async def zdfb_52etf():
     """
     这个接口可以获取很多数据，包括上证、深证、创业板等，以及涨跌数据、成交数据
     https://52etf.site/api/market/topstock
@@ -38,5 +38,5 @@ async def zdfb():
 
 
 if __name__ == "__main__":
-    r = asyncio.run(zdfb())
+    r = asyncio.run(zdfb_52etf())
     print(json.dumps(r, ensure_ascii=False, indent=2))
