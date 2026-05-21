@@ -72,16 +72,23 @@ def xw(symbol):
     return dataframe_to_records(ak.stock_news_em(symbol=str(symbol)))
 
 
-def ztgc():
+def ztgc_with_date(trade_date):
+    records = dataframe_to_records(ak.stock_zt_pool_previous_em(date=trade_date))
+    for item in records:
+        val = get_val(item, "涨停统计", '')
+        set_field_value(item, "涨停统计", val.replace("/", "天") + "板")
+    return sort_by_field_desc_and_limit(records, "连板数", limit=1000)
+
+
+def ztgc(filter_first: bool = False):
     """
-    当日涨停股池（东财 ``stock_zt_pool_em``）：**剔除首板**，仅保留连板数≥2，与 strategy.md §2.1
-    「涨停池口径」及 ``quant_endpoint`` 的「涨停统计」一致。
+    当日涨停股池（东财 ``stock_zt_pool_em``），如果 filter_first 为 True 则过滤首板 TODO 需要注意是不是实时的
     """
     records = dataframe_to_records(ak.stock_zt_pool_em(date=today()))
 
     filtered_records = [
         item for item in records
-        if get_val(item, "连板数", 0) > 1
+        if not filter_first or get_val(item, "连板数", 0) > 1
     ]
 
     for item in filtered_records:

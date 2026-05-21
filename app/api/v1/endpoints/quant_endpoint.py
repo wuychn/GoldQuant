@@ -24,24 +24,19 @@ from app.utils.common_util import (
     cal_avg,
     get_n_workdays_ago,
     get_val,
-    is_real_workday_cn,
     list_to_dict,
 )
 from app.utils.dataframe import dataframe_to_records
-from app.utils.dfcf_util import hsgtzj, pk, zj, ztgc, hist, all_stocks, jbxx
+from app.utils.dfcf_util import hsgtzj, pk, zj, ztgc, hist, all_stocks, jbxx, ztgc_with_date
 from app.utils.etf52_util import zdfb_52etf
 from app.utils.quant_archive import (
-    archive_market_sync,
     daily_hist_fetch_start_date,
     load_computed_metrics_zh,
     load_merge_write_daily_bars,
     quant_archive_base,
 )
 from app.utils.quant_market_enrich import (
-    build_market_state_machine_zh,
     pre_auction_minute_zh,
-    spot_snapshot_for_codes,
-    today_zt_pool_full_zh,
 )
 from app.utils.ths_util import stock_fund_flow_concept, hot_stock, zdfb_ths
 
@@ -91,6 +86,14 @@ def _normalize_quant_datetime_string(s: str) -> str:
         except ValueError:
             return s
     return s
+
+
+def _sync_call_or_none(context: str, fn: Callable[[], object]) -> object | None:
+    try:
+        return fn()
+    except Exception:
+        _log_api_error(context)
+        return None
 
 
 def _should_normalize_datetime_like_string(s: str) -> bool:
@@ -360,11 +363,19 @@ def _log_api_error(context: str) -> None:
     logger.exception("量化数据接口异常 [%s]", context)
 
 
-def _sync_call_or_none(context: str, fn: Callable[[], object]) -> object | None:
+def _jbxx(route, symbol):
     try:
-        return fn()
+        return jbxx(symbol)
     except Exception:
-        _log_api_error(context)
+        _log_api_error(f"{route} | ak.stock_individual_info_em")
+        return None
+
+
+def _pk(route, symbol):
+    try:
+        return pk(symbol)
+    except Exception:
+        _log_api_error(f"{route} | ak.stock_bid_ask_em")
         return None
 
 
@@ -445,53 +456,20 @@ async def _hsgtzj_or_none(context: str):
         return None
 
 
-async def _market_bundle_zh(route: str, *, realtime_index_spot: list | None = None) -> dict[str, object]:
-    """仅返回「市场状态机」聚合块（涨停全表、昨日涨停明细不再下发，避免干扰模型）。"""
-    zt_full = await run_in_threadpool(lambda: today_zt_pool_full_zh(f"{route}|今日涨停股池全量"))
-    sc_zh = await run_in_threadpool(
-        lambda: build_market_state_machine_zh(
-            f"{route}|市场状态机",
-            zt_pool_full=zt_full,
-            realtime_index_spot=realtime_index_spot,
-        ),
-    )
-    return {"市场状态机": sc_zh}
-
-
-async def _enrich_ths_stock_list(
+async def _enrich_stock_list(
+        route,
         settings: SettingsDep,
         fetch_stocks: Callable[..., Awaitable[list]],
         *,
         more: bool,
         list_context: str,
         include_pre_snapshot: bool = False,
-        hot_limit: int = 20,
         record_and_attach_10m_bars: bool = False,
         fund_flow_trade_days: int = 3,
 ) -> list:
     out: list = []
     try:
         rows = await fetch_stocks(settings=settings)
-        # 不能在这里截断，要在具体的获取方法中去阶段，因为hot_limit只是针对同花顺人气股，不是针对所有获取逻辑
-        # if hot_limit > 0:
-        #     rows = rows[:hot_limit]
-        spot_effective: dict[str, dict[str, object]] = {}
-        if include_pre_snapshot and settings.QUANT_SPOT_EM_FULL_TABLE:
-            codes_set = {
-                str(item.get("股票代码", "")).strip()
-                for item in rows
-                if item.get("股票代码")
-            }
-            if codes_set:
-                cs = frozenset(codes_set)
-                ctx = list_context
-                spot_effective = await run_in_threadpool(
-                    lambda: spot_snapshot_for_codes(f"{ctx}|盘前实时快照", set(cs)),
-                )
-
-        # 获取所有股票实时数据 TODO 接口多次调用，频率可能有点高，有问题，可以在夜间低频去请求
-        # all_stocks_ = _all_stocks_or_none("all_stocks")
-
         for item in rows:
             try:
                 symbol = item["股票代码"]
@@ -500,10 +478,7 @@ async def _enrich_ths_stock_list(
                 continue
 
             # 基本信息
-            jbxx_ = _sync_call_or_none(
-                f"{list_context} dfcf.jbxx symbol={symbol!r}",
-                lambda: jbxx(symbol),
-            )
+            jbxx_ = _jbxx(route, symbol)
             if jbxx_:
                 item['总股本'] = jbxx_['总股本']
                 item['流通股'] = jbxx_['流通股']
@@ -512,13 +487,10 @@ async def _enrich_ths_stock_list(
                 item['上市时间'] = jbxx_['上市时间']
 
             # 盘口
-            pk_raw = _sync_call_or_none(
-                f"{list_context} dfcf.pk symbol={symbol!r}",
-                lambda: pk(symbol),
-            )
+            pk_raw = _pk(route, symbol)
             item["盘口"] = pk_raw if isinstance(pk_raw, dict) else {}
 
-            # 历史行情，哪些需要历史行情 TODO
+            # 历史行情 TODO
             if settings.QUANT_ARCHIVE_ENABLED:
                 start_d = daily_hist_fetch_start_date(settings, symbol)
                 hist_api = _sync_call_or_none(
@@ -662,6 +634,25 @@ def _normalize_quant_stock_rows(raw: list | None) -> list:
     return out
 
 
+def _zt_height(pool: list[dict[str, Any]] | None):
+    """
+    计算市场连扳高度
+    :param pool:
+    :return:
+    """
+    if not pool:
+        return None
+    mx = 0
+    for r in pool:
+        v = r.get("连板数")
+        try:
+            if v is not None and v != "":
+                mx = max(mx, int(float(v)))
+        except (TypeError, ValueError):
+            continue
+    return mx
+
+
 def _load_stock_rows_from_quant_file(filename: str) -> list:
     """读取 ``~/.quant/{filename}``，仅支持 JSONL（一行一条 JSON）。"""
     path = _quant_data_file(filename)
@@ -676,29 +667,6 @@ def _load_stock_rows_from_quant_file(filename: str) -> list:
 
 
 _NOT_TRADING_DAY_RESPONSE = Response(code=1, message="今天不是交易日", data=None)
-
-
-def _schedule_quant_archive(
-        background_tasks: BackgroundTasks,
-        settings: Settings,
-        phase: str,
-        result: dict,
-) -> None:
-    if not getattr(settings, "QUANT_ARCHIVE_ENABLED", True):
-        return
-    try:
-        payload = copy.deepcopy(result)
-    except Exception:
-        logger.exception("量化归档跳过：result 无法深拷贝 phase=%s", phase)
-        return
-    background_tasks.add_task(archive_market_sync, phase, payload, settings)
-
-
-async def _guard_real_workday_or_non_trading_response() -> Response | None:
-    ok = await run_in_threadpool(is_real_workday_cn)
-    if not ok:
-        return _NOT_TRADING_DAY_RESPONSE
-    return None
 
 
 async def _zx(settings):
@@ -829,28 +797,49 @@ async def _dpzs(route: str = ''):
         return None
 
 
-async def _zdfb(route, settings):
+async def _zqxy(route, settings):
     """
     涨跌分布
     :param route:
     :return:
     """
     try:
-        # 同花顺渠道
-        return await zdfb_ths(settings)
-    except Exception:
-        _log_api_error(f"{route} | 同花顺涨跌分布")
-
-    try:
         # 52etf渠道
         return await zdfb_52etf()
     except:
         _log_api_error(f"{route} | 52etf涨跌分布")
 
+    try:
+        # 同花顺渠道，访问不能太频繁，且需要token，需要想办法解决
+        return await zdfb_ths(settings)
+    except Exception:
+        _log_api_error(f"{route} | 同花顺涨跌分布")
+
     # legu渠道
     # 开盘时获取到的是昨天的数据，且现在执行在报错，就暂时不添加
     # zqxy = await _earning_effect_pre_market(f"{route} | ak.stock_market_activity_legu")
     return None
+
+
+async def _ztgk(route, more: bool = False):
+    result = {}
+    try:
+        zt_full = await run_in_threadpool(lambda: ztgc())
+        height = _zt_height(zt_full)
+        result['今日涨停'] = zt_full
+        result['市场高度'] = str(height) + '连扳'
+    except:
+        _log_api_error(f"{route}|今日涨停股池全量")
+
+    if more:
+        try:
+            # 昨日涨停，复盘时保存当日涨停，优先从保存的读，没有再调用这个接口 TODO
+            zrzt = ztgc_with_date(get_n_workdays_ago(n=1))
+            result['昨日涨停'] = zrzt
+        except:
+            _log_api_error(f"{route}|昨日涨停股池全量")
+
+    return result
 
 
 @router.get(
@@ -865,46 +854,43 @@ async def pre_market(settings: SettingsDep, background_tasks: BackgroundTasks) -
     「大盘指数」
     """
     route = "GET /quant/market/pre_market"
-    
+
     # 大盘指数
     dpzs_ = await _dpzs(f"{route}")
 
-    # 涨跌分布，同花顺接口，需要Cookie，且访问不能太频繁？ TODO 替换为52etf
-    zdfb_ = await _zdfb(route, settings)
+    # 赚钱效应
+    zqxy_ = await _zqxy(route, settings)
+
+    # 涨停概况
+    ztgk_ = await _ztgk(route)
 
     # 自选，从 ~/.quant/optional.jsonl 获取（每行 {"股票代码","股票名称",...}）
-    zxg_ = await _enrich_ths_stock_list(
+    zxg_ = await _enrich_stock_list(
         settings,
         _zx,
         more=False,
-        list_context=f"{route} | _zx",
+        list_context=f"{route} | 自选",
         include_pre_snapshot=True,
         fund_flow_trade_days=1,
     )
 
     # 持仓，从 ~/.quant/holding.jsonl 获取持仓股（每行一条 JSON，含 股票代码、买入时间 等）
-    ccg_ = await _enrich_ths_stock_list(
+    ccg_ = await _enrich_stock_list(
         settings,
         _cc,
         more=False,
-        list_context=f"{route} | _cc",
+        list_context=f"{route} | 持仓",
         include_pre_snapshot=True,
         fund_flow_trade_days=1,
     )
 
-    # 市场状态机，需要确认是否是实时数据且是否需要优化这些数据，TODO
-    bundle = await _market_bundle_zh(route, realtime_index_spot=dpzs_)
-
     result = {
         "大盘指数": dpzs_,
-        '涨跌分布': zdfb_,
+        '赚钱效应': zqxy_,
+        '涨停概况': ztgk_,
         "自选股": zxg_,
-        "持仓股": ccg_,
-        **bundle,
+        "持仓股": ccg_
     }
-
-    # TODO，这是干啥的
-    _schedule_quant_archive(background_tasks, settings, "pre", result)
 
     return Response(data=_finalize_quant_payload(result))
 
@@ -917,7 +903,7 @@ async def pre_market(settings: SettingsDep, background_tasks: BackgroundTasks) -
 )
 async def during_market(settings: SettingsDep, background_tasks: BackgroundTasks) -> Response:
     """
-    盘中：「大盘指数」「赚钱效应」「大盘资金流」（**最近 1 个交易日**）、「概念板块」「涨停统计」「同花顺人气榜」（**前 20 条**，同花顺原生字段，**不经** `_enrich_ths_stock_list`）、自选/持仓全量「盘口」、每次调用追加当日 10 分钟 K 并返回「盘中10分钟线」（**仅当日**）、「市场状态机」。个股资金流为 **最近 1 个交易日**。
+    盘中：「大盘指数」「赚钱效应」「大盘资金流」（**最近 1 个交易日**）、「概念板块」「涨停统计」「同花顺人气榜」（**前 20 条**，同花顺原生字段，**不经** `_enrich_stock_list`）、自选/持仓全量「盘口」、每次调用追加当日 10 分钟 K 并返回「盘中10分钟线」（**仅当日**）、「市场状态机」。个股资金流为 **最近 1 个交易日**。
     """
     # if (blocked := await _guard_real_workday_or_non_trading_response()) is not None:
     #     return blocked
@@ -947,7 +933,7 @@ async def during_market(settings: SettingsDep, background_tasks: BackgroundTasks
         thsrqg = []
 
     # 从 ~/.quant/optional.jsonl 获取自选股；全量盘口；每次 during_market 调用追加一根 10 分钟 K 并返回「盘中10分钟线」
-    zxg = await _enrich_ths_stock_list(
+    zxg = await _enrich_stock_list(
         settings,
         _zx,
         more=False,
@@ -957,7 +943,7 @@ async def during_market(settings: SettingsDep, background_tasks: BackgroundTasks
     )
 
     # 从 ~/.quant/holding.jsonl 获取持仓股（同上）
-    ccg = await _enrich_ths_stock_list(
+    ccg = await _enrich_stock_list(
         settings,
         _cc,
         more=False,
@@ -966,7 +952,6 @@ async def during_market(settings: SettingsDep, background_tasks: BackgroundTasks
         fund_flow_trade_days=1,
     )
 
-    bundle = await _market_bundle_zh(route, realtime_index_spot=dpzs)
     result = {
         "大盘指数": dpzs,
         "赚钱效应": zqxy,
@@ -978,7 +963,6 @@ async def during_market(settings: SettingsDep, background_tasks: BackgroundTasks
         "持仓股": ccg,
         **bundle,
     }
-    _schedule_quant_archive(background_tasks, settings, "during", result)
     return Response(data=_finalize_quant_payload(result))
 
 
@@ -1009,7 +993,7 @@ async def post_market(settings: SettingsDep, background_tasks: BackgroundTasks) 
     )
     gn_bk = _merge_concept_boards(jrzfqsgn, jrzjlrqsgn)
     zttj = await _ztgc_or_none(f"{route} | dfcf.ztgc")
-    thsrqg = await _enrich_ths_stock_list(
+    thsrqg = await _enrich_stock_list(
         settings,
         hot_stock,
         more=True,
@@ -1019,7 +1003,7 @@ async def post_market(settings: SettingsDep, background_tasks: BackgroundTasks) 
     )
 
     # 从 ~/.quant/optional.jsonl 获取自选股（每行 {"股票代码","股票名称",...}）
-    zxg = await _enrich_ths_stock_list(
+    zxg = await _enrich_stock_list(
         settings,
         _zx,
         more=False,
@@ -1028,7 +1012,7 @@ async def post_market(settings: SettingsDep, background_tasks: BackgroundTasks) 
     )
 
     # 从 ~/.quant/holding.jsonl 获取持仓股（每行一条 JSON，含 股票代码、买入时间 等）
-    ccg = await _enrich_ths_stock_list(
+    ccg = await _enrich_stock_list(
         settings,
         _cc,
         more=False,
@@ -1036,7 +1020,6 @@ async def post_market(settings: SettingsDep, background_tasks: BackgroundTasks) 
         fund_flow_trade_days=3,
     )
 
-    bundle = await _market_bundle_zh(route, realtime_index_spot=dpzs)
     result = {
         "大盘指数": dpzs,
         "赚钱效应": zqxy,
@@ -1046,7 +1029,5 @@ async def post_market(settings: SettingsDep, background_tasks: BackgroundTasks) 
         "同花顺人气榜": thsrqg,
         "自选股": zxg,
         "持仓股": ccg,
-        **bundle,
     }
-    _schedule_quant_archive(background_tasks, settings, "post", result)
     return Response(data=_finalize_quant_payload(result))

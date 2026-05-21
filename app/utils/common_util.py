@@ -2,6 +2,7 @@ import datetime
 import threading
 import time
 from datetime import datetime, timedelta, date
+from decimal import Decimal, ROUND_HALF_UP
 from functools import lru_cache
 from typing import Any, List
 from typing import Optional
@@ -376,6 +377,9 @@ def get_n_workdays_ago(date_input: Optional[str] = None, n: int = 5) -> Optional
 
     return None
 
+def round_half_up(value, decimals=2):
+    factor = Decimal('0.' + '0' * decimals)
+    return Decimal(str(value)).quantize(factor, rounding=ROUND_HALF_UP)
 
 if __name__ == "__main__":
     # 测试用例（具体日期依赖节假日接口）

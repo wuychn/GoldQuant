@@ -1,7 +1,7 @@
 import asyncio
 import json
 
-from app.utils.common_util import list_to_dict, list_to_dict_v2
+from app.utils.common_util import list_to_dict_v2, round_half_up
 from app.utils.http_util import get_api
 
 
@@ -14,6 +14,7 @@ async def zdfb_52etf():
     r = await get_api(url)
     # 涨跌家数等数据
     upDownData = r['thsData']['upDownData']
+    trading = r['thsData']['trading']
     zdfb_ = list_to_dict_v2(upDownData['table'], 'key', 'value')
     result = {
         "下跌": upDownData['down'],
@@ -21,6 +22,10 @@ async def zdfb_52etf():
         "平盘": upDownData['flat'],
         "涨停": upDownData['limit_up'],
         "跌停": upDownData['limit_down'],
+        "今日成交额": str(round_half_up(trading['turnover'] / 100000000, 2)) + '亿',
+        "昨日成交额": str(round_half_up(trading['turnover_pre'] / 100000000, 2)) + '亿',
+        "较昨日变动": ('放量' if round_half_up(trading['turnover_change'] / 100000000, 2) > 0 else '缩量') + str(
+            round_half_up(trading['turnover_change'] / 100000000, 2)) + '亿',
         "涨跌分布": {
             '>10%': zdfb_['>10%'],
             '7%~10%': zdfb_['7~10'],
