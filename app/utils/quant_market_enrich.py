@@ -60,7 +60,7 @@ def pre_auction_minute_zh(context: str, symbol: str) -> list[dict[str, Any]] | N
         df = ak.stock_zh_a_hist_pre_min_em(
             symbol=str(symbol).strip(),
             start_time="09:15:00",
-            end_time="09:25:00",
+            end_time="15:00:00",
         )
         if df is None or df.empty:
             return []

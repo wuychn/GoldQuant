@@ -346,6 +346,7 @@ def recompute_symbol_metrics(bars_path: Path) -> dict[str, Any] | None:
         "MA5": _ma_last(closes, 5),
         "MA10": _ma_last(closes, 10),
         "MA20": _ma_last(closes, 20),
+        "MA30": _ma_last(closes, 30),
         "ATR14": round(atr14, 6) if atr14 is not None else None,
         "MACD": macd,
         "computed_at": datetime.now().isoformat(timespec="seconds"),
@@ -369,6 +370,7 @@ def load_computed_metrics_zh(settings: Settings, symbol: str) -> dict[str, Any] 
         "均线5日": raw.get("MA5"),
         "均线10日": raw.get("MA10"),
         "均线20日": raw.get("MA20"),
+        "均线30日": raw.get("MA30"), # 没有获取到，是在哪里计算的？ TODO
         "ATR14": raw.get("ATR14"),
         "MACD": {
             "差离值": macd.get("dif"),

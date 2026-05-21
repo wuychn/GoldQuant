@@ -456,15 +456,41 @@ async def _hsgtzj_or_none(context: str):
         return None
 
 
+def _hist(route, settings, symbol):
+    # TODO 保存、加载历史逻辑，settings.QUANT_ARCHIVE_ENABLED 可以去掉，默认就要保存历史，不要留太多配置
+    if settings.QUANT_ARCHIVE_ENABLED:
+        start_d = daily_hist_fetch_start_date(settings, symbol)
+        hist_api = _sync_call_or_none(
+            f"{route} ak.stock_zh_a_hist symbol={symbol!r}",
+            lambda: hist(symbol, period="daily", start_date=start_d),
+        )
+        if not isinstance(hist_api, list):
+            hist_api = []
+        hist_ = load_merge_write_daily_bars(settings, symbol, hist_api)
+    else:
+        def _hist_no_archive() -> object:
+            start = get_n_workdays_ago(None, 60)
+            if start:
+                return hist(symbol, start_date=start)
+            return hist(symbol)
+
+        hist_ = _sync_call_or_none(
+            f"{route} ak.stock_zh_a_hist symbol={symbol!r}",
+            _hist_no_archive,
+        )
+    if not hist_:
+        hist_ = []
+
+    return _rows_last_n_trade_days(hist_, n=30)
+
+
 async def _enrich_stock_list(
         route,
         settings: SettingsDep,
         fetch_stocks: Callable[..., Awaitable[list]],
         *,
         more: bool,
-        list_context: str,
         include_pre_snapshot: bool = False,
-        record_and_attach_10m_bars: bool = False,
         fund_flow_trade_days: int = 3,
 ) -> list:
     out: list = []
@@ -474,7 +500,7 @@ async def _enrich_stock_list(
             try:
                 symbol = item["股票代码"]
             except Exception:
-                _log_api_error(f"{list_context} read_symbol item_keys={list(item)!r}")
+                _log_api_error(f"{route} read_symbol item_keys={list(item)!r}")
                 continue
 
             # 基本信息
@@ -491,32 +517,10 @@ async def _enrich_stock_list(
             item["盘口"] = pk_raw if isinstance(pk_raw, dict) else {}
 
             # 历史行情 TODO
-            if settings.QUANT_ARCHIVE_ENABLED:
-                start_d = daily_hist_fetch_start_date(settings, symbol)
-                hist_api = _sync_call_or_none(
-                    f"{list_context} dfcf.hist symbol={symbol!r}",
-                    lambda: hist(symbol, period="daily", start_date=start_d),
-                )
-                if not isinstance(hist_api, list):
-                    hist_api = []
-                hist_ = load_merge_write_daily_bars(settings, symbol, hist_api)
-            else:
-                def _hist_no_archive() -> object:
-                    start = get_n_workdays_ago(None, 60)
-                    if start:
-                        return hist(symbol, start_date=start)
-                    return hist(symbol)
+            hist_ = _hist(route, settings, symbol)
+            item["历史行情"] = hist_
 
-                hist_ = _sync_call_or_none(
-                    f"{list_context} dfcf.hist symbol={symbol!r}",
-                    _hist_no_archive,
-                )
-            if not hist_:
-                hist_ = []
-            hist_out = _rows_last_n_trade_days(hist_, n=30)
-            item["历史行情"] = hist_out
-
-            # 五日线
+            # 五日线 TODO 这些指标在 load_computed_metrics_zh里面会进行计算，这里就不需要了
             avg_5: float | None = None
             hist_5 = hist_[-5:]
             if hist_5 and len(hist_5) >= 5:
@@ -534,41 +538,47 @@ async def _enrich_stock_list(
             if hist_20 and len(hist_20) >= 20:
                 avg_20 = cal_avg(hist_20, "收盘")
 
+            # 30日线
+            avg_30: float | None = None
+            if hist_ and len(hist_) >= 30:
+                avg_30 = cal_avg(hist_, "收盘")
+
             tzh: dict[str, Any] | None = None
             if settings.QUANT_ARCHIVE_ENABLED:
                 tzh = load_computed_metrics_zh(settings, symbol)
                 if tzh:
                     item["技术指标"] = tzh
 
+            # 简化代码 TODO
             if not (isinstance(tzh, dict) and tzh.get("均线5日") is not None) and avg_5 is not None:
                 item["5日线"] = avg_5
             if not (isinstance(tzh, dict) and tzh.get("均线10日") is not None) and avg_10 is not None:
                 item["10日线"] = avg_10
             if not (isinstance(tzh, dict) and tzh.get("均线20日") is not None) and avg_20 is not None:
                 item["20日线"] = avg_20
+            if not (isinstance(tzh, dict) and tzh.get("均线30日") is not None) and avg_30 is not None:
+                item["30日线"] = avg_30
 
-            # 这个时靠自己记录的10分钟线
-            if record_and_attach_10m_bars:
-                px = _spot_price_from_pk_for_10m(item["盘口"])
-                if px is not None:
-                    await run_in_threadpool(
-                        lambda s=settings, sym=symbol, p=px: append_intraday_10m_bar_on_request(s, sym, p),
-                    )
-                item["盘中10分钟线"] = await run_in_threadpool(
-                    lambda s=settings, sym=symbol: load_intraday_10m_bars_tail(s, sym, max_bars=48),
-                )
+            # 这个时靠自己记录的10分钟线 TODO，能否用下面的分钟行情替代？
+            # if record_and_attach_10m_bars:
+            #     px = _spot_price_from_pk_for_10m(item["盘口"])
+            #     if px is not None:
+            #         await run_in_threadpool(
+            #             lambda s=settings, sym=symbol, p=px: append_intraday_10m_bar_on_request(s, sym, p),
+            #         )
+            #     item["盘中10分钟线"] = await run_in_threadpool(
+            #         lambda s=settings, sym=symbol: load_intraday_10m_bars_tail(s, sym, max_bars=48),
+            #     )
 
+            # 使用机器学习模型根据分钟行情进行判断 TODO
             if include_pre_snapshot:
-                pm = pre_auction_minute_zh(f"{list_context}|集合竞价分钟", symbol)
+                pm = pre_auction_minute_zh(f"{route} | 分钟行情", symbol)
                 if pm is None:
-                    item["集合竞价分钟行情"] = []
+                    item["分钟行情"] = []
                 elif isinstance(pm, list):
-                    item["集合竞价分钟行情"] = pm[-5:] if len(pm) > 5 else pm
+                    item["分钟行情"] = pm
                 else:
-                    item["集合竞价分钟行情"] = []
-                snap = spot_effective.get(str(symbol).strip())
-                if snap:
-                    item["盘前实时快照"] = snap
+                    item["分钟行情"] = []
 
             if more:
                 # 对于规则引擎，新闻数据没有价值，后续可以通过LLM评分后给规则引擎（TODO）
@@ -580,8 +590,15 @@ async def _enrich_stock_list(
 
                 # 个股资金流只能统计到T-1日，盘中不能用（复盘时能否拿到当天的？TODO）
                 # 资金，非实时，复盘时能否用？TODO
+                # 可以使用童话顺的代替，同花顺里面有获取V，可以试一试 TODO
+                # ak.stock_fund_flow_individual() 这个是获取所有，下面的是获取某只个股资金
+                # 页面 https://stockpage.10jqka.com.cn/002580/funds/#funds_sszjlx
+                # 接口 https://stockpage.10jqka.com.cn/spService/002580/Funds/realFunds/free/1/
+                # 也是有hexin-v这个header
+
+
                 zj_raw = _sync_call_or_none(
-                    f"{list_context} dfcf.zj symbol={symbol!r}",
+                    f"{route} 个股资金流 symbol={symbol!r}",
                     lambda: zj(symbol),
                 )
                 zj_list = zj_raw if isinstance(zj_raw, list) else []
@@ -589,7 +606,7 @@ async def _enrich_stock_list(
 
             out.append(item)
     except Exception:
-        _log_api_error(f"{list_context}.fetch_list")
+        _log_api_error(f"{route}.fetch_list")
         out = []
     return out
 
@@ -866,20 +883,20 @@ async def pre_market(settings: SettingsDep, background_tasks: BackgroundTasks) -
 
     # 自选，从 ~/.quant/optional.jsonl 获取（每行 {"股票代码","股票名称",...}）
     zxg_ = await _enrich_stock_list(
+        route,
         settings,
         _zx,
         more=False,
-        list_context=f"{route} | 自选",
         include_pre_snapshot=True,
         fund_flow_trade_days=1,
     )
 
     # 持仓，从 ~/.quant/holding.jsonl 获取持仓股（每行一条 JSON，含 股票代码、买入时间 等）
     ccg_ = await _enrich_stock_list(
+        route,
         settings,
         _cc,
         more=False,
-        list_context=f"{route} | 持仓",
         include_pre_snapshot=True,
         fund_flow_trade_days=1,
     )
