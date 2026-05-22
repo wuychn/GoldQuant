@@ -4,12 +4,20 @@ from typing import Any
 
 import akshare as ak
 import httpx
+import py_mini_racer
+from akshare.stock_feature.stock_fund_flow import _get_file_content_ths
 from fastapi import HTTPException
 
 from app.api.deps import SettingsDep
-from app.core.ths_headers import merge_ths_headers_for_url
 from app.utils.common_util import format_percent, sort_by_field_desc_and_limit, filter_exclude_by_key
 from app.utils.dataframe import dataframe_to_records
+
+
+def get_v():
+    js_code = py_mini_racer.MiniRacer()
+    js_content = _get_file_content_ths("ths.js")
+    js_code.eval(js_content)
+    return js_code.call("v")
 
 
 async def call_ths_api(
@@ -28,6 +36,40 @@ async def call_ths_api(
     client_kw: dict[str, Any] = {"timeout": settings.HTTP_CLIENT_TIMEOUT}
     if px := settings.httpx_proxy_url():
         client_kw["proxy"] = px
+    try:
+        async with httpx.AsyncClient(**client_kw) as client:
+            r = await client.get(url, headers=headers)
+            r.raise_for_status()
+            return r.json()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+async def call_ths_api_with_header(
+        url: str
+):
+    """
+    直接调用同花顺接口
+    """
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "Accept-Encoding": "gzip, deflate, br, zstd",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8,en-US;q=0.7,ko;q=0.6",
+        "Connection": "keep-alive",
+        "Cookie": "keep-alive",
+        "Hexin-V": get_v(),
+        "Host": "stockpage.10jqka.com.cn",
+        "Referer": "https://stockpage.10jqka.com.cn/002580/funds/",
+        "Sec-Ch-Ua": '"Chromium";v="148", "Google Chrome";v="148", "Not/A)Brand";v="99"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"Windows"',
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-origin",
+        "x-requested-with": "XMLHttpRequest"
+    }
+    client_kw: dict[str, Any] = {"timeout": 30}
     try:
         async with httpx.AsyncClient(**client_kw) as client:
             r = await client.get(url, headers=headers)
@@ -117,16 +159,24 @@ async def stock_fund_flow_concept(type_, sort_key):
     return sort_by_field_desc_and_limit(filter_exclude_by_key(records, '行业', ['融资融券', '深股通', '沪股通']),
                                         sort_key, 10)
 
-async def zdfb_ths(settings):
+
+async def zdfb_ths():
     """
-        涨跌分布
-        """
-    r = await call_ths_api(
-        settings,
+    涨跌分布，换成了call_ths_api_with_header，这个会添加hexin-v，但是这个接口是不是添加的是v？TODO 还没测试
+    """
+    r = await call_ths_api_with_header(
         "https://q.10jqka.com.cn/api.php?t=indexflash&"
     )
-    result = []
     return r
+
+
+async def ggzjl(symbol):
+    """
+    个股资金流
+    :return:
+    """
+    return await call_ths_api_with_header(f'https://stockpage.10jqka.com.cn/spService/{symbol}/Funds/realFunds/free/1/')
+
 
 if __name__ == "__main__":
     # 个股资金流

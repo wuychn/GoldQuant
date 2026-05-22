@@ -1,4 +1,5 @@
 import datetime
+import re
 import threading
 import time
 from datetime import datetime, timedelta, date
@@ -312,6 +313,60 @@ def is_real_workday_cn(d: Optional[date] = None) -> bool:
     return _is_real_workday_cn(d)
 
 
+_ISO_DT_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T")
+_BUCKET_COMPACT_RE = re.compile(r"^(\d{8})T(\d{2})(\d{2})$")
+
+
+def _should_normalize_datetime_like_string(s: str) -> bool:
+    if _ISO_DT_PREFIX_RE.match(s):
+        return True
+    if _BUCKET_COMPACT_RE.match(s):
+        return True
+    if re.match(r"^\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2}(:\d{2})?$", s.strip()):
+        return True
+    return False
+
+
+def _normalize_quant_datetime_string(s: str) -> str:
+    """统一为 ``yyyy-MM-dd HH:mm:ss``；已是 ``yyyy-MM-dd`` 的保持不变。"""
+    s = str(s).strip()
+    if not s:
+        return s
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", s):
+        return s
+    if re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$", s):
+        return s
+    m_space = re.match(
+        r"^(\d{4}-\d{2}-\d{2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?$",
+        s,
+    )
+    if m_space:
+        dd, hh, mm, ss = m_space.group(1), m_space.group(2), m_space.group(3), m_space.group(4)
+        sec = ss if ss else "00"
+        return f"{dd} {int(hh):02d}:{mm}:{sec}"
+    m = _BUCKET_COMPACT_RE.match(s)
+    if m:
+        d8, hh, mm = m.group(1), m.group(2), m.group(3)
+        return f"{d8[:4]}-{d8[4:6]}-{d8[6:8]} {hh}:{mm}:00"
+    if _ISO_DT_PREFIX_RE.match(s):
+        try:
+            base = s.replace("Z", "+00:00")
+            if "." in base and "T" in base:
+                base = base.split(".")[0]
+            dt = datetime.fromisoformat(base)
+            return dt.strftime("%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            return s
+    return s
+
+
+def _yyyymmdd_to_iso(d8: str) -> str | None:
+    s = str(d8).strip().replace("-", "").replace("/", "")
+    if len(s) < 8 or not s[:8].isdigit():
+        return None
+    return f"{s[:4]}-{s[4:6]}-{s[6:8]}"
+
+
 def get_n_workdays_ago(date_input: Optional[str] = None, n: int = 5) -> Optional[str]:
     """
     求基准日之前（不含基准日）第 n 个真实工作日：
@@ -377,9 +432,11 @@ def get_n_workdays_ago(date_input: Optional[str] = None, n: int = 5) -> Optional
 
     return None
 
+
 def round_half_up(value, decimals=2):
     factor = Decimal('0.' + '0' * decimals)
     return Decimal(str(value)).quantize(factor, rounding=ROUND_HALF_UP)
+
 
 if __name__ == "__main__":
     # 测试用例（具体日期依赖节假日接口）

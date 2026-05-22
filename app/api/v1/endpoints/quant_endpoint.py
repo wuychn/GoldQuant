@@ -24,21 +24,20 @@ from app.utils.common_util import (
     cal_avg,
     get_n_workdays_ago,
     get_val,
-    list_to_dict,
+    list_to_dict, list_to_dict_v2, _normalize_quant_datetime_string, _should_normalize_datetime_like_string,
+    _yyyymmdd_to_iso,
 )
 from app.utils.dataframe import dataframe_to_records
-from app.utils.dfcf_util import hsgtzj, pk, zj, ztgc, hist, all_stocks, jbxx, ztgc_with_date
+from app.utils.dfcf_util import hsgtzj, pk, ztgc, hist, all_stocks, jbxx, ztgc_with_date
 from app.utils.etf52_util import zdfb_52etf
 from app.utils.quant_archive import (
-    daily_hist_fetch_start_date,
     load_computed_metrics_zh,
-    load_merge_write_daily_bars,
-    quant_archive_base,
+    quant_archive_base, daily_hist_fetch_start_date,
 )
 from app.utils.quant_market_enrich import (
     pre_auction_minute_zh,
 )
-from app.utils.ths_util import stock_fund_flow_concept, hot_stock, zdfb_ths
+from app.utils.ths_util import stock_fund_flow_concept, hot_stock, zdfb_ths, ggzjl
 
 logger = logging.getLogger(__name__)
 
@@ -51,42 +50,6 @@ QUANT_HOLDING_FILENAME = "holding.jsonl"
 
 _SH_TZ = ZoneInfo("Asia/Shanghai")
 
-_ISO_DT_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T")
-_BUCKET_COMPACT_RE = re.compile(r"^(\d{8})T(\d{2})(\d{2})$")
-
-
-def _normalize_quant_datetime_string(s: str) -> str:
-    """统一为 ``yyyy-MM-dd HH:mm:ss``；已是 ``yyyy-MM-dd`` 的保持不变。"""
-    s = str(s).strip()
-    if not s:
-        return s
-    if re.match(r"^\d{4}-\d{2}-\d{2}$", s):
-        return s
-    if re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$", s):
-        return s
-    m_space = re.match(
-        r"^(\d{4}-\d{2}-\d{2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?$",
-        s,
-    )
-    if m_space:
-        dd, hh, mm, ss = m_space.group(1), m_space.group(2), m_space.group(3), m_space.group(4)
-        sec = ss if ss else "00"
-        return f"{dd} {int(hh):02d}:{mm}:{sec}"
-    m = _BUCKET_COMPACT_RE.match(s)
-    if m:
-        d8, hh, mm = m.group(1), m.group(2), m.group(3)
-        return f"{d8[:4]}-{d8[4:6]}-{d8[6:8]} {hh}:{mm}:00"
-    if _ISO_DT_PREFIX_RE.match(s):
-        try:
-            base = s.replace("Z", "+00:00")
-            if "." in base and "T" in base:
-                base = base.split(".")[0]
-            dt = datetime.fromisoformat(base)
-            return dt.strftime("%Y-%m-%d %H:%M:%S")
-        except ValueError:
-            return s
-    return s
-
 
 def _sync_call_or_none(context: str, fn: Callable[[], object]) -> object | None:
     try:
@@ -94,16 +57,6 @@ def _sync_call_or_none(context: str, fn: Callable[[], object]) -> object | None:
     except Exception:
         _log_api_error(context)
         return None
-
-
-def _should_normalize_datetime_like_string(s: str) -> bool:
-    if _ISO_DT_PREFIX_RE.match(s):
-        return True
-    if _BUCKET_COMPACT_RE.match(s):
-        return True
-    if re.match(r"^\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2}(:\d{2})?$", s.strip()):
-        return True
-    return False
 
 
 def _normalize_quant_datetimes(obj: Any) -> Any:
@@ -177,61 +130,6 @@ def _intraday_10m_last_bucket_key(jl_path: Path) -> str | None:
         if isinstance(b, str):
             return b
     return None
-
-
-def append_intraday_10m_bar_on_request(settings: Settings, symbol: str, price: float) -> None:
-    """在 ``during_market`` 被调用时追加一根 10 分钟 K；约定调用间隔约 10 分钟，同 ``bucket_start`` 不重复写入。"""
-    symbol = str(symbol).strip()
-    if not symbol or price <= 0:
-        return
-    now = datetime.now(_SH_TZ)
-    floored = (now.minute // 10) * 10
-    start = now.replace(minute=floored, second=0, microsecond=0)
-    bucket_key = start.strftime("%Y%m%dT%H%M")
-    jl_path = _bars_10m_dir(settings) / f"{symbol}.jsonl"
-    if _intraday_10m_last_bucket_key(jl_path) == bucket_key:
-        return
-    line = {
-        "bucket_start": bucket_key,
-        "open": price,
-        "high": price,
-        "low": price,
-        "close": price,
-        "saved_at": start.strftime("%Y-%m-%d %H:%M:%S"),
-    }
-    try:
-        with open(jl_path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(line, ensure_ascii=False) + "\n")
-    except OSError as e:
-        logger.warning("写入 10m 线失败 symbol=%s path=%s: %s", symbol, jl_path, e)
-
-
-def load_intraday_10m_bars_tail(settings: Settings, symbol: str, *, max_bars: int = 48) -> list[dict[str, Any]]:
-    """仅返回**交易日当日**的 10 分钟 K（按 ``bucket_start`` 的 ``YYYYMMDD`` 前缀过滤）。"""
-    symbol = str(symbol).strip()
-    jl_path = _bars_10m_dir(settings) / f"{symbol}.jsonl"
-    rows: list[dict[str, Any]] = []
-    today_prefix = datetime.now(_SH_TZ).strftime("%Y%m%d")
-    if jl_path.is_file():
-        try:
-            for ln in jl_path.read_text(encoding="utf-8").splitlines():
-                ln = ln.strip()
-                if not ln:
-                    continue
-                row = json.loads(ln)
-                bk = row.get("bucket_start")
-                if isinstance(bk, str) and bk.startswith(today_prefix):
-                    rows.append(row)
-        except (json.JSONDecodeError, OSError) as e:
-            logger.warning("读取 10m 线失败 path=%s: %s", jl_path, e)
-    return rows[-max_bars:] if len(rows) > max_bars else rows
-
-
-def _yyyymmdd_to_iso(d8: str) -> str | None:
-    s = str(d8).strip().replace("-", "").replace("/", "")
-    if len(s) < 8 or not s[:8].isdigit():
-        return None
-    return f"{s[:4]}-{s[4:6]}-{s[6:8]}"
 
 
 def _row_date_yyyymmdd(row: dict, *, date_key: str = "日期") -> str | None:
@@ -363,19 +261,44 @@ def _log_api_error(context: str) -> None:
     logger.exception("量化数据接口异常 [%s]", context)
 
 
-def _jbxx(route, symbol):
+def _jbxx(symbol):
     try:
         return jbxx(symbol)
     except Exception:
-        _log_api_error(f"{route} | ak.stock_individual_info_em")
+        _log_api_error(f"股票基本信息 | ak.stock_individual_info_em")
         return None
 
 
-def _pk(route, symbol):
+async def _ggzjl(symbol):
+    try:
+        # ak.stock_fund_flow_individual() 这个是获取所有
+        # 下面是获取指定个股的资金，也是有hexin-v这个header
+        # 页面 https://stockpage.10jqka.com.cn/002580/funds/#funds_sszjlx
+        # 接口 https://stockpage.10jqka.com.cn/spService/002580/Funds/realFunds/free/1/
+        # 本接口还可以获取到行业资金流入、行业涨跌幅、行业资金流入/流出靠前个股
+        r = await ggzjl(symbol)
+        flash_ = r['flash']
+        v_ = list_to_dict_v2(flash_, 'name', 'sr')
+        v_['大单流出'] = str(v_['大单流出']) + ' 万元',
+        v_['中单流出'] = str(v_['中单流出']) + ' 万元',
+        v_['小单流出'] = str(v_['小单流出']) + ' 万元',
+        v_['小单流入'] = str(v_['小单流入']) + ' 万元',
+        v_['中单流入'] = str(v_['中单流入']) + ' 万元',
+        v_['大单流入'] = str(v_['大单流入']) + ' 万元',
+        v_['总流入'] = r['title']['zlr'] + ' 万元',
+        v_['总流出'] = r['title']['zlc'] + ' 万元'
+        v_['净额'] = r['title']['je'] + ' 万元'
+        return v_
+    except Exception:
+        _log_api_error(f"个股资金流 symbol={symbol!r}")
+        return None
+
+
+def _pk(symbol):
     try:
         return pk(symbol)
     except Exception:
-        _log_api_error(f"{route} | ak.stock_bid_ask_em")
+        _log_api_error(f"盘口 | ak.stock_bid_ask_em")
         return None
 
 
@@ -456,12 +379,12 @@ async def _hsgtzj_or_none(context: str):
         return None
 
 
-def _hist(route, settings, symbol):
-    # TODO 保存、加载历史逻辑，settings.QUANT_ARCHIVE_ENABLED 可以去掉，默认就要保存历史，不要留太多配置
+def _hist(settings, symbol):
+    # 历史行情 TODO
     if settings.QUANT_ARCHIVE_ENABLED:
         start_d = daily_hist_fetch_start_date(settings, symbol)
         hist_api = _sync_call_or_none(
-            f"{route} ak.stock_zh_a_hist symbol={symbol!r}",
+            f"{list_context} dfcf.hist symbol={symbol!r}",
             lambda: hist(symbol, period="daily", start_date=start_d),
         )
         if not isinstance(hist_api, list):
@@ -475,17 +398,16 @@ def _hist(route, settings, symbol):
             return hist(symbol)
 
         hist_ = _sync_call_or_none(
-            f"{route} ak.stock_zh_a_hist symbol={symbol!r}",
+            f"{list_context} dfcf.hist symbol={symbol!r}",
             _hist_no_archive,
         )
     if not hist_:
         hist_ = []
-
-    return _rows_last_n_trade_days(hist_, n=30)
+    hist_out = _rows_last_n_trade_days(hist_, n=30)
+    return hist_out
 
 
 async def _enrich_stock_list(
-        route,
         settings: SettingsDep,
         fetch_stocks: Callable[..., Awaitable[list]],
         *,
@@ -500,11 +422,11 @@ async def _enrich_stock_list(
             try:
                 symbol = item["股票代码"]
             except Exception:
-                _log_api_error(f"{route} read_symbol item_keys={list(item)!r}")
+                _log_api_error(f"获取股票代码")
                 continue
 
             # 基本信息
-            jbxx_ = _jbxx(route, symbol)
+            jbxx_ = _jbxx(symbol)
             if jbxx_:
                 item['总股本'] = jbxx_['总股本']
                 item['流通股'] = jbxx_['流通股']
@@ -513,11 +435,12 @@ async def _enrich_stock_list(
                 item['上市时间'] = jbxx_['上市时间']
 
             # 盘口
-            pk_raw = _pk(route, symbol)
+            pk_raw = _pk(symbol)
             item["盘口"] = pk_raw if isinstance(pk_raw, dict) else {}
 
-            # 历史行情 TODO
-            hist_ = _hist(route, settings, symbol)
+            # 历史行情，优化代码，不需要配置，默认就保存，优先从本地获取，盘中需要根据当前价格计算 TODO
+            # macd等指标需要历史K线，但是历史K线可能错误，直接找其他接口代替吧 TODO
+            hist_ = _hist(settings, symbol)
             item["历史行情"] = hist_
 
             # 五日线 TODO 这些指标在 load_computed_metrics_zh里面会进行计算，这里就不需要了
@@ -559,17 +482,6 @@ async def _enrich_stock_list(
             if not (isinstance(tzh, dict) and tzh.get("均线30日") is not None) and avg_30 is not None:
                 item["30日线"] = avg_30
 
-            # 这个时靠自己记录的10分钟线 TODO，能否用下面的分钟行情替代？
-            # if record_and_attach_10m_bars:
-            #     px = _spot_price_from_pk_for_10m(item["盘口"])
-            #     if px is not None:
-            #         await run_in_threadpool(
-            #             lambda s=settings, sym=symbol, p=px: append_intraday_10m_bar_on_request(s, sym, p),
-            #         )
-            #     item["盘中10分钟线"] = await run_in_threadpool(
-            #         lambda s=settings, sym=symbol: load_intraday_10m_bars_tail(s, sym, max_bars=48),
-            #     )
-
             # 使用机器学习模型根据分钟行情进行判断 TODO
             if include_pre_snapshot:
                 pm = pre_auction_minute_zh(f"{route} | 分钟行情", symbol)
@@ -580,6 +492,12 @@ async def _enrich_stock_list(
                 else:
                     item["分钟行情"] = []
 
+            # 个股资金流 TODO 是否是实时数据？
+            zj_raw = await _ggzjl(symbol)
+            item["个股资金流"] = zj_raw
+
+            # 振幅，换手 TODO
+
             if more:
                 # 对于规则引擎，新闻数据没有价值，后续可以通过LLM评分后给规则引擎（TODO）
                 # xw_ = _sync_call_or_none(
@@ -588,21 +506,7 @@ async def _enrich_stock_list(
                 # )
                 # item["个股新闻"] = _slim_xw_list(xw_)
 
-                # 个股资金流只能统计到T-1日，盘中不能用（复盘时能否拿到当天的？TODO）
-                # 资金，非实时，复盘时能否用？TODO
-                # 可以使用童话顺的代替，同花顺里面有获取V，可以试一试 TODO
-                # ak.stock_fund_flow_individual() 这个是获取所有，下面的是获取某只个股资金
-                # 页面 https://stockpage.10jqka.com.cn/002580/funds/#funds_sszjlx
-                # 接口 https://stockpage.10jqka.com.cn/spService/002580/Funds/realFunds/free/1/
-                # 也是有hexin-v这个header
-
-
-                zj_raw = _sync_call_or_none(
-                    f"{route} 个股资金流 symbol={symbol!r}",
-                    lambda: zj(symbol),
-                )
-                zj_list = zj_raw if isinstance(zj_raw, list) else []
-                item["个股资金流"] = _rows_last_n_trade_days(zj_list, n=fund_flow_trade_days)
+                pass
 
             out.append(item)
     except Exception:
@@ -797,7 +701,7 @@ async def news(settings: SettingsDep) -> Response:
     return Response(data=_finalize_quant_payload(news))
 
 
-async def _dpzs(route: str = ''):
+async def _dpzs():
     """
     获取大盘指数
     :param route:
@@ -810,35 +714,34 @@ async def _dpzs(route: str = ''):
         )
         return [item for item in raw if item["序号"] in _INDEX_SERIAL_WHITELIST]
     except Exception:
-        _log_api_error(f"{route} | ak.stock_zh_index_spot_em")
+        _log_api_error(f"大盘指数 | ak.stock_zh_index_spot_em")
         return None
 
 
-async def _zqxy(route, settings):
+async def _zqxy():
     """
     涨跌分布
-    :param route:
     :return:
     """
     try:
         # 52etf渠道
         return await zdfb_52etf()
     except:
-        _log_api_error(f"{route} | 52etf涨跌分布")
+        _log_api_error(f"赚钱效应 | 52etf涨跌分布")
 
     try:
-        # 同花顺渠道，访问不能太频繁，且需要token，需要想办法解决
-        return await zdfb_ths(settings)
+        # 同花顺渠道
+        return await zdfb_ths()
     except Exception:
-        _log_api_error(f"{route} | 同花顺涨跌分布")
+        _log_api_error(f"赚钱效应 | 同花顺涨跌分布")
 
     # legu渠道
     # 开盘时获取到的是昨天的数据，且现在执行在报错，就暂时不添加
-    # zqxy = await _earning_effect_pre_market(f"{route} | ak.stock_market_activity_legu")
+    # zqxy = await _earning_effect_pre_market(f"赚钱效应 | ak.stock_market_activity_legu")
     return None
 
 
-async def _ztgk(route, more: bool = False):
+async def _ztgk(more: bool = False):
     result = {}
     try:
         zt_full = await run_in_threadpool(lambda: ztgc())
@@ -846,7 +749,7 @@ async def _ztgk(route, more: bool = False):
         result['今日涨停'] = zt_full
         result['市场高度'] = str(height) + '连扳'
     except:
-        _log_api_error(f"{route}|今日涨停股池全量")
+        _log_api_error(f"今日涨停股全量 | ak.stock_zt_pool_em")
 
     if more:
         try:
@@ -854,7 +757,7 @@ async def _ztgk(route, more: bool = False):
             zrzt = ztgc_with_date(get_n_workdays_ago(n=1))
             result['昨日涨停'] = zrzt
         except:
-            _log_api_error(f"{route}|昨日涨停股池全量")
+            _log_api_error(f"昨日涨停股池全量 | ak.stock_zt_pool_em")
 
     return result
 
@@ -867,23 +770,19 @@ async def _ztgk(route, more: bool = False):
 )
 async def pre_market(settings: SettingsDep, background_tasks: BackgroundTasks) -> Response:
     """
-    盘前：
-    「大盘指数」
+    盘前
     """
-    route = "GET /quant/market/pre_market"
-
     # 大盘指数
-    dpzs_ = await _dpzs(f"{route}")
+    dpzs_ = await _dpzs()
 
     # 赚钱效应
-    zqxy_ = await _zqxy(route, settings)
+    zqxy_ = await _zqxy()
 
     # 涨停概况
-    ztgk_ = await _ztgk(route)
+    ztgk_ = await _ztgk()
 
     # 自选，从 ~/.quant/optional.jsonl 获取（每行 {"股票代码","股票名称",...}）
     zxg_ = await _enrich_stock_list(
-        route,
         settings,
         _zx,
         more=False,
@@ -920,10 +819,8 @@ async def pre_market(settings: SettingsDep, background_tasks: BackgroundTasks) -
 )
 async def during_market(settings: SettingsDep, background_tasks: BackgroundTasks) -> Response:
     """
-    盘中：「大盘指数」「赚钱效应」「大盘资金流」（**最近 1 个交易日**）、「概念板块」「涨停统计」「同花顺人气榜」（**前 20 条**，同花顺原生字段，**不经** `_enrich_stock_list`）、自选/持仓全量「盘口」、每次调用追加当日 10 分钟 K 并返回「盘中10分钟线」（**仅当日**）、「市场状态机」。个股资金流为 **最近 1 个交易日**。
+    盘中
     """
-    # if (blocked := await _guard_real_workday_or_non_trading_response()) is not None:
-    #     return blocked
     route = "GET /quant/market/during_market"
     dpzs = await _dpzs(f"{route}")
 
