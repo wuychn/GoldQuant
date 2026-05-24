@@ -21,7 +21,6 @@ from app.api.deps import SettingsDep
 from app.core.config import Settings
 from app.schemas.response import Response
 from app.utils.common_util import (
-    cal_avg,
     get_n_workdays_ago,
     get_val,
     list_to_dict, list_to_dict_v2, _normalize_quant_datetime_string, _should_normalize_datetime_like_string,
@@ -279,15 +278,16 @@ async def _ggzjl(symbol):
         r = await ggzjl(symbol)
         flash_ = r['flash']
         v_ = list_to_dict_v2(flash_, 'name', 'sr')
-        v_['大单流出'] = str(v_['大单流出']) + ' 万元',
-        v_['中单流出'] = str(v_['中单流出']) + ' 万元',
-        v_['小单流出'] = str(v_['小单流出']) + ' 万元',
-        v_['小单流入'] = str(v_['小单流入']) + ' 万元',
-        v_['中单流入'] = str(v_['中单流入']) + ' 万元',
-        v_['大单流入'] = str(v_['大单流入']) + ' 万元',
-        v_['总流入'] = r['title']['zlr'] + ' 万元',
-        v_['总流出'] = r['title']['zlc'] + ' 万元'
-        v_['净额'] = r['title']['je'] + ' 万元'
+        # TODO 得到的是tuple，导致最终数据是json
+        v_ ['大单流出'] = str(v_['大单流出']) + ' 万元',
+        v_ ['中单流出'] = str(v_['中单流出']) + ' 万元',
+        v_ ['小单流出'] = str(v_['小单流出']) + ' 万元',
+        v_ ['小单流入'] = str(v_['小单流入']) + ' 万元',
+        v_ ['中单流入'] = str(v_['中单流入']) + ' 万元',
+        v_ ['大单流入'] = str(v_['大单流入']) + ' 万元',
+        v_ ['总流入'] = str(r['title']['zlr']) + ' 万元',
+        v_ ['总流出'] = str(r['title']['zlc']) + ' 万元'
+        v_ ['净额'] = str(r['title']['je']) + ' 万元'
         return v_
     except Exception:
         _log_api_error(f"个股资金流 symbol={symbol!r}")
@@ -310,9 +310,9 @@ async def _dataframe_records_or_none(context: str, fetch: Callable[..., object])
         return None
 
 
-async def _market_fund_flow_last_n(context: str, n: int) -> list | None:
+async def zjl_(n: int) -> list | None:
     """
-    大盘资金流：``ak.stock_market_fund_flow`` 取最近 ``n`` 条（复盘接口用 3；盘中/盘前用 1）。
+    大盘资金流
     经过测试，盘中获取到的可能都是上一个交易日的数据，需要确认盘后能否获取到当天的数据 TODO
     """
     try:
@@ -323,7 +323,7 @@ async def _market_fund_flow_last_n(context: str, n: int) -> list | None:
             return []
         return recs[-n:] if len(recs) >= n else recs
     except Exception:
-        _log_api_error(context)
+        _log_api_error("大盘资金流 | ak.stock_market_fund_flow")
         return None
 
 
@@ -335,7 +335,7 @@ async def _earning_effect_pre_market(context: str) -> dict | None:
     except Exception:
         _log_api_error(context)
         return None
-d
+
 
 async def _earning_effect_intraday(context: str) -> dict | None:
     try:
@@ -417,7 +417,9 @@ async def _enrich_stock_list(
 ) -> list:
     out: list = []
     try:
-        rows = await fetch_stocks(settings=settings)
+        # 与各 fetcher 对齐：形如 async def f(settings): ...（须支持位置参数，
+        # 勿用仅用 lambda: xxx，否则易出现 unexpected keyword argument 'settings'）
+        rows = await fetch_stocks(settings)
         for item in rows:
             try:
                 symbol = item["股票代码"]
@@ -493,7 +495,7 @@ async def _enrich_stock_list(
                 else:
                     item["分钟行情"] = []
 
-            # 个股资金流 TODO 是否是实时数据？
+            # 个股资金流
             zj_raw = await _ggzjl(symbol)
             item["个股资金流"] = zj_raw
 
@@ -793,7 +795,6 @@ async def pre_market(settings: SettingsDep, background_tasks: BackgroundTasks) -
 
     # 持仓，从 ~/.quant/holding.jsonl 获取持仓股（每行一条 JSON，含 股票代码、买入时间 等）
     ccg_ = await _enrich_stock_list(
-        route,
         settings,
         _cc,
         more=False,
@@ -812,6 +813,15 @@ async def pre_market(settings: SettingsDep, background_tasks: BackgroundTasks) -
     return Response(data=_finalize_quant_payload(result))
 
 
+async def _hot(settings, limit: int=5):
+    try:
+        raw_hot = await hot_stock(settings, limit)
+        return raw_hot[:20] if isinstance(raw_hot, list) else []
+    except Exception:
+        _log_api_error(f"同花顺人气股 | ths.hot_stock (no enrich)")
+        return []
+
+
 @router.get(
     "/quant/market/during_market",
     response_model=Response,
@@ -826,13 +836,16 @@ async def during_market(settings: SettingsDep, background_tasks: BackgroundTasks
     # 大盘指数
     dpzs = await _dpzs()
 
-    # 涨幅前十
+    # 赚钱效应
+    zqxy_ = await _zqxy()
+
+    # 涨幅前十概念
     jrzfqsgn = await _stock_fund_flow_concept_or_none(
         f"涨幅前十概念 | ths.stock_fund_flow_concept",
         "行业-涨跌幅",
     )
 
-    # 资金流入前十
+    # 资金流入前十概念
     jrzjlrqsgn = await _stock_fund_flow_concept_or_none(
         f"资金流入前十概念 | ths.stock_fund_flow_concept",
         "流入资金",
@@ -842,45 +855,37 @@ async def during_market(settings: SettingsDep, background_tasks: BackgroundTasks
     gn_bk = _merge_concept_boards(jrzfqsgn, jrzjlrqsgn)
 
     # 涨停概况
-    zttj = _ztgk(True)
+    zttj = await _ztgk(True)
 
-    try:
-        raw_hot = await hot_stock(settings)
-        thsrqg = raw_hot[:20] if isinstance(raw_hot, list) else []
-    except Exception:
-        _log_api_error(f"{route} | ths.hot_stock (no enrich)")
-        thsrqg = []
+    # 人气股
+    hot_ = await _hot(settings)
 
-    # 从 ~/.quant/optional.jsonl 获取自选股；全量盘口；每次 during_market 调用追加一根 10 分钟 K 并返回「盘中10分钟线」
-    zxg = await _enrich_stock_list(
+    # 自选，从 ~/.quant/optional.jsonl 获取（每行 {"股票代码","股票名称",...}）
+    zxg_ = await _enrich_stock_list(
         settings,
         _zx,
         more=False,
-        list_context=f"{route} | _zx",
-        record_and_attach_10m_bars=True,
+        include_pre_snapshot=True,
         fund_flow_trade_days=1,
     )
 
-    # 从 ~/.quant/holding.jsonl 获取持仓股（同上）
-    ccg = await _enrich_stock_list(
+    # 持仓，从 ~/.quant/holding.jsonl 获取持仓股（每行一条 JSON，含 股票代码、买入时间 等）
+    ccg_ = await _enrich_stock_list(
         settings,
         _cc,
         more=False,
-        list_context=f"{route} | _cc",
-        record_and_attach_10m_bars=True,
+        include_pre_snapshot=True,
         fund_flow_trade_days=1,
     )
 
     result = {
         "大盘指数": dpzs,
-        "赚钱效应": zqxy,
-        "大盘资金流": zjl,
+        "赚钱效应": zqxy_,
         "概念板块": gn_bk,
         "涨停统计": zttj,
-        "同花顺人气榜": thsrqg,
-        "自选股": zxg,
-        "持仓股": ccg,
-        **bundle,
+        "同花顺人气榜": hot_,
+        "自选股": zxg_,
+        "持仓股": ccg_
     }
     return Response(data=_finalize_quant_payload(result))
 
@@ -893,60 +898,70 @@ async def during_market(settings: SettingsDep, background_tasks: BackgroundTasks
 )
 async def post_market(settings: SettingsDep, background_tasks: BackgroundTasks) -> Response:
     """
-    盘后：结构同盘中为主增「同花顺人气榜」约 50 条；「大盘资金流」「个股资金流」均为 **最近 3 个交易日**。
+    盘后
     """
-    # if (blocked := await _guard_real_workday_or_non_trading_response()) is not None:
-    #     return blocked
-    route = "GET /quant/market/post_market"
-    dpzs = await _dpzs(f"{route} | ak.stock_zh_index_spot_em")
-    zqxy_raw = await _earning_effect_intraday(f"{route} | ak.stock_market_activity_legu()")
-    zqxy = _slim_earning_effect_dict(zqxy_raw)
-    zjl = await _market_fund_flow_last_n(f"{route} | ak.stock_market_fund_flow", 3)
+    # 大盘指数
+    dpzs = await _dpzs()
+
+    # 赚钱效应
+    zqxy_ = await _zqxy()
+
+    # 大盘资金流
+    zjl = await zjl_(3)
+
+    # 涨幅前十概念
     jrzfqsgn = await _stock_fund_flow_concept_or_none(
-        f"{route} | ths.stock_fund_flow_concept",
+        f"涨幅前十概念 | ths.stock_fund_flow_concept",
         "行业-涨跌幅",
     )
+
+    # 资金流入前十概念
     jrzjlrqsgn = await _stock_fund_flow_concept_or_none(
-        f"{route} | ths.stock_fund_flow_concept",
+        f"资金流入前十概念 | ths.stock_fund_flow_concept",
         "流入资金",
     )
+
+    # 合并涨幅和资金流入
     gn_bk = _merge_concept_boards(jrzfqsgn, jrzjlrqsgn)
-    zttj = await _ztgc_or_none(f"{route} | dfcf.ztgc")
-    thsrqg = await _enrich_stock_list(
+
+    # 涨停概况
+    zttj = await _ztgk(True)
+
+    # 人气股
+    hot_ = await _enrich_stock_list(
         settings,
-        hot_stock,
-        more=True,
-        list_context=f"{route} | ths.hot_stock",
-        hot_limit=10,
-        fund_flow_trade_days=3,
+        _hot,
+        more=False,
+        include_pre_snapshot=True,
+        fund_flow_trade_days=1,
     )
 
-    # 从 ~/.quant/optional.jsonl 获取自选股（每行 {"股票代码","股票名称",...}）
-    zxg = await _enrich_stock_list(
+    # 自选，从 ~/.quant/optional.jsonl 获取（每行 {"股票代码","股票名称",...}）
+    zxg_ = await _enrich_stock_list(
         settings,
         _zx,
         more=False,
-        list_context=f"{route} | _zx",
-        fund_flow_trade_days=3,
+        include_pre_snapshot=True,
+        fund_flow_trade_days=1,
     )
 
-    # 从 ~/.quant/holding.jsonl 获取持仓股（每行一条 JSON，含 股票代码、买入时间 等）
-    ccg = await _enrich_stock_list(
+    # 持仓，从 ~/.quant/holding.jsonl 获取持仓股（每行一条 JSON，含 股票代码、买入时间 等）
+    ccg_ = await _enrich_stock_list(
         settings,
         _cc,
         more=False,
-        list_context=f"{route} | _cc",
-        fund_flow_trade_days=3,
+        include_pre_snapshot=True,
+        fund_flow_trade_days=1,
     )
 
     result = {
         "大盘指数": dpzs,
-        "赚钱效应": zqxy,
+        "赚钱效应": zqxy_,
         "大盘资金流": zjl,
         "概念板块": gn_bk,
         "涨停统计": zttj,
-        "同花顺人气榜": thsrqg,
-        "自选股": zxg,
-        "持仓股": ccg,
+        "同花顺人气榜": hot_,
+        "自选股": zxg_,
+        "持仓股": ccg_,
     }
     return Response(data=_finalize_quant_payload(result))

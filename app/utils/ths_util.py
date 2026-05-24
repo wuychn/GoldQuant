@@ -93,7 +93,7 @@ async def stock_fund_flow_individual(symbol, type_):
     return None
 
 
-async def hot_stock(settings):
+async def hot_stock(settings, limit=30):
     """
     同花顺人气榜
     """
@@ -117,7 +117,7 @@ async def hot_stock(settings):
                 '所属概念': s['tag']['concept_tag'] if 'tag' in s and 'concept_tag' in s['tag'] else '无',
                 '连板情况': s['tag']['popularity_tag'] if 'tag' in s and 'popularity_tag' in s['tag'] else '无'
             })
-    return result
+    return result[:limit]
 
 
 async def stock_skyrocket(settings):
