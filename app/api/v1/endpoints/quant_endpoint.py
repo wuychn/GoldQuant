@@ -32,7 +32,7 @@ from app.utils.dfcf_util import hsgtzj, pk, ztgc, hist, all_stocks, jbxx, ztgc_w
 from app.utils.etf52_util import zdfb_52etf
 from app.utils.quant_archive import (
     load_computed_metrics_zh,
-    quant_archive_base, daily_hist_fetch_start_date,
+    quant_archive_base, daily_hist_fetch_start_date, load_merge_write_daily_bars,
 )
 from app.utils.quant_market_enrich import (
     pre_auction_minute_zh,
@@ -335,7 +335,7 @@ async def _earning_effect_pre_market(context: str) -> dict | None:
     except Exception:
         _log_api_error(context)
         return None
-
+d
 
 async def _earning_effect_intraday(context: str) -> dict | None:
     try:
@@ -384,7 +384,7 @@ def _hist(settings, symbol):
     if settings.QUANT_ARCHIVE_ENABLED:
         start_d = daily_hist_fetch_start_date(settings, symbol)
         hist_api = _sync_call_or_none(
-            f"{list_context} dfcf.hist symbol={symbol!r}",
+            f"历史行情 | ak.stock_zh_a_hist symbol={symbol!r}",
             lambda: hist(symbol, period="daily", start_date=start_d),
         )
         if not isinstance(hist_api, list):
@@ -398,7 +398,7 @@ def _hist(settings, symbol):
             return hist(symbol)
 
         hist_ = _sync_call_or_none(
-            f"{list_context} dfcf.hist symbol={symbol!r}",
+            f"历史行情 | ak.stock_zh_a_hist symbol={symbol!r}",
             _hist_no_archive,
         )
     if not hist_:
@@ -443,48 +443,49 @@ async def _enrich_stock_list(
             hist_ = _hist(settings, symbol)
             item["历史行情"] = hist_
 
-            # 五日线 TODO 这些指标在 load_computed_metrics_zh里面会进行计算，这里就不需要了
-            avg_5: float | None = None
-            hist_5 = hist_[-5:]
-            if hist_5 and len(hist_5) >= 5:
-                avg_5 = cal_avg(hist_5, "收盘")
-
-            # 十日线
-            avg_10: float | None = None
-            hist_10 = hist_[-10:]
-            if hist_10 and len(hist_10) >= 10:
-                avg_10 = cal_avg(hist_10, "收盘")
-
-            # 20日线
-            avg_20: float | None = None
-            hist_20 = hist_[-20:]
-            if hist_20 and len(hist_20) >= 20:
-                avg_20 = cal_avg(hist_20, "收盘")
-
-            # 30日线
-            avg_30: float | None = None
-            if hist_ and len(hist_) >= 30:
-                avg_30 = cal_avg(hist_, "收盘")
-
+            # 技术指标，再加一些其他指标 TODO
             tzh: dict[str, Any] | None = None
             if settings.QUANT_ARCHIVE_ENABLED:
                 tzh = load_computed_metrics_zh(settings, symbol)
                 if tzh:
                     item["技术指标"] = tzh
 
-            # 简化代码 TODO
-            if not (isinstance(tzh, dict) and tzh.get("均线5日") is not None) and avg_5 is not None:
-                item["5日线"] = avg_5
-            if not (isinstance(tzh, dict) and tzh.get("均线10日") is not None) and avg_10 is not None:
-                item["10日线"] = avg_10
-            if not (isinstance(tzh, dict) and tzh.get("均线20日") is not None) and avg_20 is not None:
-                item["20日线"] = avg_20
-            if not (isinstance(tzh, dict) and tzh.get("均线30日") is not None) and avg_30 is not None:
-                item["30日线"] = avg_30
+            # 五日线 TODO 这些指标在 load_computed_metrics_zh里面会进行计算，这里就不需要了
+            # avg_5: float | None = None
+            # hist_5 = hist_[-5:]
+            # if hist_5 and len(hist_5) >= 5:
+            #     avg_5 = cal_avg(hist_5, "收盘")
+            #
+            # # 十日线
+            # avg_10: float | None = None
+            # hist_10 = hist_[-10:]
+            # if hist_10 and len(hist_10) >= 10:
+            #     avg_10 = cal_avg(hist_10, "收盘")
+            #
+            # # 20日线
+            # avg_20: float | None = None
+            # hist_20 = hist_[-20:]
+            # if hist_20 and len(hist_20) >= 20:
+            #     avg_20 = cal_avg(hist_20, "收盘")
+            #
+            # # 30日线
+            # avg_30: float | None = None
+            # if hist_ and len(hist_) >= 30:
+            #     avg_30 = cal_avg(hist_, "收盘")
+            #
+            # # 简化代码 TODO
+            # if not (isinstance(tzh, dict) and tzh.get("均线5日") is not None) and avg_5 is not None:
+            #     item["5日线"] = avg_5
+            # if not (isinstance(tzh, dict) and tzh.get("均线10日") is not None) and avg_10 is not None:
+            #     item["10日线"] = avg_10
+            # if not (isinstance(tzh, dict) and tzh.get("均线20日") is not None) and avg_20 is not None:
+            #     item["20日线"] = avg_20
+            # if not (isinstance(tzh, dict) and tzh.get("均线30日") is not None) and avg_30 is not None:
+            #     item["30日线"] = avg_30
 
             # 使用机器学习模型根据分钟行情进行判断 TODO
             if include_pre_snapshot:
-                pm = pre_auction_minute_zh(f"{route} | 分钟行情", symbol)
+                pm = pre_auction_minute_zh(f"分钟行情 | ak.stock_zh_a_hist_pre_min_em", symbol)
                 if pm is None:
                     item["分钟行情"] = []
                 elif isinstance(pm, list):
@@ -510,7 +511,7 @@ async def _enrich_stock_list(
 
             out.append(item)
     except Exception:
-        _log_api_error(f"{route}.fetch_list")
+        _log_api_error(f"_enrich_stock_list")
         out = []
     return out
 
@@ -821,24 +822,28 @@ async def during_market(settings: SettingsDep, background_tasks: BackgroundTasks
     """
     盘中
     """
-    route = "GET /quant/market/during_market"
-    dpzs = await _dpzs(f"{route}")
 
-    # TODO 数据延迟太大，可能是昨天的数据
-    # zqxy_raw = await _earning_effect_intraday(f"{route} | ak.stock_market_activity_legu()")
-    # zqxy = _slim_earning_effect_dict(zqxy_raw)
-    # zjl = await _market_fund_flow_last_n(f"{route} | ak.stock_market_fund_flow", 1)
+    # 大盘指数
+    dpzs = await _dpzs()
 
+    # 涨幅前十
     jrzfqsgn = await _stock_fund_flow_concept_or_none(
-        f"{route} | ths.stock_fund_flow_concept",
+        f"涨幅前十概念 | ths.stock_fund_flow_concept",
         "行业-涨跌幅",
     )
+
+    # 资金流入前十
     jrzjlrqsgn = await _stock_fund_flow_concept_or_none(
-        f"{route} | ths.stock_fund_flow_concept",
+        f"资金流入前十概念 | ths.stock_fund_flow_concept",
         "流入资金",
     )
+
+    # 合并涨幅和资金流入
     gn_bk = _merge_concept_boards(jrzfqsgn, jrzjlrqsgn)
-    zttj = await _ztgc_or_none(f"{route} | dfcf.ztgc")
+
+    # 涨停概况
+    zttj = _ztgk(True)
+
     try:
         raw_hot = await hot_stock(settings)
         thsrqg = raw_hot[:20] if isinstance(raw_hot, list) else []
