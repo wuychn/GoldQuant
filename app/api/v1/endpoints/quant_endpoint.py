@@ -18,24 +18,24 @@ from fastapi import APIRouter, BackgroundTasks
 from fastapi.concurrency import run_in_threadpool
 
 from app.api.deps import SettingsDep
-from app.core.config import Settings
 from app.schemas.response import Response
 from app.utils.common_util import (
     get_n_workdays_ago,
     get_val,
-    list_to_dict, list_to_dict_v2, _normalize_quant_datetime_string, _should_normalize_datetime_like_string,
+    list_to_dict_v2,
+    _normalize_quant_datetime_string,
+    _should_normalize_datetime_like_string,
     _yyyymmdd_to_iso,
 )
 from app.utils.dataframe import dataframe_to_records
-from app.utils.dfcf_util import hsgtzj, pk, ztgc, hist, all_stocks, jbxx, ztgc_with_date, pkyd
+from app.utils.dfcf_util import pk, ztgc, hist, jbxx, ztgc_with_date, pkyd
 from app.utils.etf52_util import zdfb_52etf
 from app.utils.quant_archive import (
     load_computed_metrics_zh,
-    quant_archive_base, daily_hist_fetch_start_date, load_merge_write_daily_bars,
+    daily_hist_fetch_start_date,
+    load_merge_write_daily_bars,
 )
-from app.utils.quant_market_enrich import (
-    pre_auction_minute_zh,
-)
+from app.utils.quant_market_enrich import pre_auction_minute_zh
 from app.utils.ths_util import stock_fund_flow_concept, hot_stock, zdfb_ths, ggzjl
 
 logger = logging.getLogger(__name__)
@@ -49,6 +49,10 @@ QUANT_HOLDING_FILENAME = "holding.jsonl"
 
 _SH_TZ = ZoneInfo("Asia/Shanghai")
 
+
+# ---------------------------------------------------------------------------
+# 辅助函数 / 聚合逻辑（路由入口均在文件末尾）
+# ---------------------------------------------------------------------------
 
 def _sync_call_or_none(context: str, fn: Callable[[], object]) -> object | None:
     try:
@@ -69,68 +73,6 @@ def _normalize_quant_datetimes(obj: Any) -> Any:
     return obj
 
 
-def _parse_price_scalar(v: Any) -> float | None:
-    if v is None or v == "":
-        return None
-    if isinstance(v, (int, float)):
-        return float(v)
-    s = str(v).strip().replace(",", "")
-    m = re.search(r"(-?\d+(?:\.\d+)?)", s)
-    if not m:
-        return None
-    try:
-        return float(m.group(1))
-    except ValueError:
-        return None
-
-
-def _spot_price_from_pk_for_10m(pk: dict[str, Any] | None) -> float | None:
-    """从东财 ``pk(list_to_dict)`` 中解析现价，供 10 分钟线落盘。"""
-    if not isinstance(pk, dict) or not pk:
-        return None
-    for key in ("最新价", "最新", "现价", "成交价", "最新成交价"):
-        if key in pk:
-            p = _parse_price_scalar(pk[key])
-            if p is not None and p > 0:
-                return p
-    b1 = _parse_price_scalar(pk.get("买一")) or _parse_price_scalar(pk.get("买1"))
-    s1 = _parse_price_scalar(pk.get("卖一")) or _parse_price_scalar(pk.get("卖1"))
-    if b1 is not None and s1 is not None and b1 > 0 and s1 > 0:
-        return round((b1 + s1) / 2.0, 4)
-    if b1 is not None and b1 > 0:
-        return b1
-    if s1 is not None and s1 > 0:
-        return s1
-    return None
-
-
-def _bars_10m_dir(settings: Settings) -> Path:
-    d = quant_archive_base(settings) / "bars_10m"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
-
-
-def _intraday_10m_last_bucket_key(jl_path: Path) -> str | None:
-    if not jl_path.is_file():
-        return None
-    try:
-        lines = jl_path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return None
-    for line in reversed(lines):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            o = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        b = o.get("bucket_start")
-        if isinstance(b, str):
-            return b
-    return None
-
-
 def _row_date_yyyymmdd(row: dict, *, date_key: str = "日期") -> str | None:
     v = row.get(date_key)
     if v is None:
@@ -147,10 +89,10 @@ def _row_date_yyyymmdd(row: dict, *, date_key: str = "日期") -> str | None:
 
 
 def _rows_last_n_trade_days(
-        rows: list,
-        *,
-        n: int,
-        date_key: str = "日期",
+    rows: list,
+    *,
+    n: int,
+    date_key: str = "日期",
 ) -> list:
     """锚日为行中最大 ``date_key``；保留 [第 n-1 个交易日, 锚日] 闭区间（含锚日共至多 n 个交易日）。"""
     if not isinstance(rows, list) or not rows or n <= 0:
@@ -202,52 +144,6 @@ def _finalize_quant_payload(obj: Any) -> Any:
     return _round_floats_for_api(_normalize_quant_datetimes(cloned))
 
 
-def _slim_xw_list(xw: object, *, limit: int = 3) -> list[dict[str, Any]]:
-    if not isinstance(xw, list):
-        return []
-    out: list[Any] = []
-    for row in xw[:limit]:
-        if not isinstance(row, dict):
-            continue
-        slim = [row[k] for k in ["新闻内容"] if k in row]
-        if slim:
-            out.append(slim)
-    return out
-
-
-# 规则引擎「强势」硬门槛依赖这些键，须优先保留（避免 list(zqxy) 截断时丢失）
-_EARNING_EFFECT_PRIORITY_KEYS: tuple[str, ...] = (
-    "上涨",
-    "下跌",
-    "涨停",
-    "跌停",
-    "真实涨停",
-    "真实跌停",
-    "st st*涨停",
-    "st st*跌停",
-    "平盘",
-    "停牌",
-    "活跃度",
-    "统计日期",
-)
-
-
-def _slim_earning_effect_dict(zqxy: object, *, max_pairs: int = 22) -> dict[str, Any] | None:
-    if not isinstance(zqxy, dict) or not zqxy:
-        return None
-    out: dict[str, Any] = {}
-    for k in _EARNING_EFFECT_PRIORITY_KEYS:
-        if k in zqxy:
-            out[k] = zqxy[k]
-    for k, v in zqxy.items():
-        if k in out:
-            continue
-        out[k] = v
-        if len(out) >= max_pairs:
-            break
-    return out
-
-
 def _merge_concept_boards(jzf: list | None, jzj: list | None, *, limit: int = 10) -> dict[str, Any]:
     return {
         "涨幅榜": (jzf or [])[:limit],
@@ -264,7 +160,7 @@ def _jbxx(symbol):
     try:
         return jbxx(symbol)
     except Exception:
-        _log_api_error(f"股票基本信息 | ak.stock_individual_info_em")
+        _log_api_error("股票基本信息 | ak.stock_individual_info_em")
         return None
 
 
@@ -276,18 +172,17 @@ async def _ggzjl(symbol):
         # 接口 https://stockpage.10jqka.com.cn/spService/002580/Funds/realFunds/free/1/
         # 本接口还可以获取到行业资金流入、行业涨跌幅、行业资金流入/流出靠前个股
         r = await ggzjl(symbol)
-        flash_ = r['flash']
-        v_ = list_to_dict_v2(flash_, 'name', 'sr')
-        # TODO 得到的是tuple，导致最终数据是json
-        v_ ['大单流出'] = f"{str(v_['大单流出'])} 万元"
-        v_ ['中单流出'] = f"{str(v_['中单流出'])} 万元"
-        v_ ['小单流出'] = f"{str(v_['小单流出'])} 万元"
-        v_ ['小单流入'] = f"{str(v_['小单流入'])} 万元"
-        v_ ['中单流入'] = f"{str(v_['中单流入'])} 万元"
-        v_ ['大单流入'] = f"{str(v_['大单流入'])} 万元"
-        v_ ['总流入'] = f"{str(r['title']['zlr'])} 万元"
-        v_ ['总流出'] = f"{str(r['title']['zlc'])} 万元"
-        v_ ['净额'] = f"{str(r['title']['je'])} 万元"
+        flash_ = r["flash"]
+        v_ = list_to_dict_v2(flash_, "name", "sr")
+        v_["大单流出"] = f"{v_['大单流出']} 万元"
+        v_["中单流出"] = f"{v_['中单流出']} 万元"
+        v_["小单流出"] = f"{v_['小单流出']} 万元"
+        v_["小单流入"] = f"{v_['小单流入']} 万元"
+        v_["中单流入"] = f"{v_['中单流入']} 万元"
+        v_["大单流入"] = f"{v_['大单流入']} 万元"
+        v_["总流入"] = f"{r['title']['zlr']} 万元"
+        v_["总流出"] = f"{r['title']['zlc']} 万元"
+        v_["净额"] = f"{r['title']['je']} 万元"
         return v_
     except Exception:
         _log_api_error(f"个股资金流 symbol={symbol!r}")
@@ -298,15 +193,7 @@ def _pk(symbol):
     try:
         return pk(symbol)
     except Exception:
-        _log_api_error(f"盘口 | ak.stock_bid_ask_em")
-        return None
-
-
-async def _dataframe_records_or_none(context: str, fetch: Callable[..., object]) -> list | None:
-    try:
-        return dataframe_to_records(await run_in_threadpool(fetch))
-    except Exception:
-        _log_api_error(context)
+        _log_api_error("盘口 | ak.stock_bid_ask_em")
         return None
 
 
@@ -327,55 +214,11 @@ async def zjl_(n: int) -> list | None:
         return None
 
 
-async def _earning_effect_pre_market(context: str) -> dict | None:
-    try:
-        return list_to_dict(
-            dataframe_to_records(await run_in_threadpool(ak.stock_market_activity_legu))
-        )
-    except Exception:
-        _log_api_error(context)
-        return None
-
-
-async def _earning_effect_intraday(context: str) -> dict | None:
-    try:
-        return list_to_dict(
-            dataframe_to_records(await run_in_threadpool(lambda: ak.stock_market_activity_legu()))
-        )
-    except Exception:
-        _log_api_error(context)
-        return None
-
-
 async def _stock_fund_flow_concept_or_none(context: str, rank_by: str):
     try:
         return await stock_fund_flow_concept("即时", rank_by)
     except Exception:
         _log_api_error(f"{context} rank_by={rank_by!r}")
-        return None
-
-
-async def _all_stocks_or_none(context: str):
-    try:
-        return await all_stocks()
-    except Exception:
-        _log_api_error(context)
-        return None
-
-
-async def _ztgc_or_none(context: str):
-    try:
-        return ztgc()
-    except Exception:
-        _log_api_error(context)
-        return None
-
-
-async def _hsgtzj_or_none(context: str):
-    try:
-        return await run_in_threadpool(hsgtzj)
-    except Exception:
-        _log_api_error(context)
         return None
 
 
@@ -408,114 +251,68 @@ def _hist(settings, symbol):
 
 
 async def _enrich_stock_list(
-        settings: SettingsDep,
-        fetch_stocks: Callable[..., Awaitable[list]],
-        *,
-        more: bool,
-        include_pre_snapshot: bool = False,
-        fund_flow_trade_days: int = 3,
+    settings: SettingsDep,
+    fetch_stocks: Callable[..., Awaitable[list]],
+    *,
+    include_pre_snapshot: bool = False,
 ) -> list:
     out: list = []
     try:
-        # 与各 fetcher 对齐：形如 async def f(settings): ...（须支持位置参数，
-        # 勿用仅用 lambda: xxx，否则易出现 unexpected keyword argument 'settings'）
+        # fetch_stocks(settings): 与各列表拉取对齐，须支持 positional settings，勿写死 lambda 吞掉签名
         rows = await fetch_stocks(settings)
         for item in rows:
             try:
                 symbol = item["股票代码"]
             except Exception:
-                _log_api_error(f"获取股票代码")
+                _log_api_error("获取股票代码")
                 continue
 
-            # 基本信息
             jbxx_ = _jbxx(symbol)
             if jbxx_:
-                item['总股本'] = jbxx_['总股本']
-                item['流通股'] = jbxx_['流通股']
-                item['总市值'] = jbxx_['总市值']
-                item['流通市值'] = jbxx_['流通市值']
-                item['上市时间'] = jbxx_['上市时间']
+                item["总股本"] = jbxx_["总股本"]
+                item["流通股"] = jbxx_["流通股"]
+                item["总市值"] = jbxx_["总市值"]
+                item["流通市值"] = jbxx_["流通市值"]
+                item["上市时间"] = jbxx_["上市时间"]
 
-            # 盘口
             pk_raw = _pk(symbol)
             item["盘口"] = pk_raw if isinstance(pk_raw, dict) else {}
 
-            # 历史行情，优化代码，不需要配置，默认就保存，优先从本地获取，盘中需要根据当前价格计算 TODO
-            # macd等指标需要历史K线，但是历史K线可能错误，直接找其他接口代替吧 TODO
             hist_ = _hist(settings, symbol)
             item["历史行情"] = hist_
 
-            # 技术指标，再加一些其他指标 TODO
-            tzh: dict[str, Any] | None = None
             if settings.QUANT_ARCHIVE_ENABLED:
                 tzh = load_computed_metrics_zh(settings, symbol)
                 if tzh:
                     item["技术指标"] = tzh
 
-            # 五日线 TODO 这些指标在 load_computed_metrics_zh里面会进行计算，这里就不需要了
-            # avg_5: float | None = None
-            # hist_5 = hist_[-5:]
-            # if hist_5 and len(hist_5) >= 5:
-            #     avg_5 = cal_avg(hist_5, "收盘")
-            #
-            # # 十日线
-            # avg_10: float | None = None
-            # hist_10 = hist_[-10:]
-            # if hist_10 and len(hist_10) >= 10:
-            #     avg_10 = cal_avg(hist_10, "收盘")
-            #
-            # # 20日线
-            # avg_20: float | None = None
-            # hist_20 = hist_[-20:]
-            # if hist_20 and len(hist_20) >= 20:
-            #     avg_20 = cal_avg(hist_20, "收盘")
-            #
-            # # 30日线
-            # avg_30: float | None = None
-            # if hist_ and len(hist_) >= 30:
-            #     avg_30 = cal_avg(hist_, "收盘")
-            #
-            # # 简化代码 TODO
-            # if not (isinstance(tzh, dict) and tzh.get("均线5日") is not None) and avg_5 is not None:
-            #     item["5日线"] = avg_5
-            # if not (isinstance(tzh, dict) and tzh.get("均线10日") is not None) and avg_10 is not None:
-            #     item["10日线"] = avg_10
-            # if not (isinstance(tzh, dict) and tzh.get("均线20日") is not None) and avg_20 is not None:
-            #     item["20日线"] = avg_20
-            # if not (isinstance(tzh, dict) and tzh.get("均线30日") is not None) and avg_30 is not None:
-            #     item["30日线"] = avg_30
-
-            # 使用机器学习模型根据分钟行情进行判断 TODO
             if include_pre_snapshot:
-                pm = pre_auction_minute_zh(f"分钟行情 | ak.stock_zh_a_hist_pre_min_em", symbol)
-                if pm is None:
-                    item["分钟行情"] = []
-                elif isinstance(pm, list):
-                    item["分钟行情"] = pm
-                else:
-                    item["分钟行情"] = []
+                pm = pre_auction_minute_zh("分钟行情 | ak.stock_zh_a_hist_pre_min_em", symbol)
+                item["分钟行情"] = pm if isinstance(pm, list) else []
 
-            # 个股资金流
             zj_raw = await _ggzjl(symbol)
             item["个股资金流"] = zj_raw
 
-            # 振幅，换手 TODO
-
-            if more:
-                # 对于规则引擎，新闻数据没有价值，后续可以通过LLM评分后给规则引擎（TODO）
-                # xw_ = _sync_call_or_none(
-                #     f"{list_context} dfcf.xw symbol={symbol!r}",
-                #     lambda: xw(symbol),
-                # )
-                # item["个股新闻"] = _slim_xw_list(xw_)
-
-                pass
-
             out.append(item)
     except Exception:
-        _log_api_error(f"_enrich_stock_list")
+        _log_api_error("_enrich_stock_list")
         out = []
     return out
+
+
+async def _async_optional_rows(_settings: SettingsDep) -> list:
+    return await run_in_threadpool(lambda: _load_stock_rows_from_quant_file(QUANT_OPTIONAL_FILENAME))
+
+
+async def _async_holding_rows(_settings: SettingsDep) -> list:
+    return await run_in_threadpool(lambda: _load_stock_rows_from_quant_file(QUANT_HOLDING_FILENAME))
+
+
+async def _enrich_optional_and_holding(settings: SettingsDep) -> tuple[list, list]:
+    """自选 + 持仓两行列表，结构与原先两次 ``_enrich_stock_list`` 调用一致。"""
+    zxg = await _enrich_stock_list(settings, _async_optional_rows, include_pre_snapshot=True)
+    ccg = await _enrich_stock_list(settings, _async_holding_rows, include_pre_snapshot=True)
+    return zxg, ccg
 
 
 def _quant_data_file(name: str) -> Path:
@@ -559,11 +356,7 @@ def _normalize_quant_stock_rows(raw: list | None) -> list:
 
 
 def _zt_height(pool: list[dict[str, Any]] | None):
-    """
-    计算市场连扳高度
-    :param pool:
-    :return:
-    """
+    """从涨停池中取最大 ``连板数`` 作为市场连板高度（数值）。"""
     if not pool:
         return None
     mx = 0
@@ -590,19 +383,6 @@ def _load_stock_rows_from_quant_file(filename: str) -> list:
     return _parse_jsonl_stock_text(text)
 
 
-_NOT_TRADING_DAY_RESPONSE = Response(code=1, message="今天不是交易日", data=None)
-
-
-async def _zx(settings):
-    """从 ``~/.quant/optional.jsonl`` 读取自选股（一行一条 JSON）。"""
-    return await run_in_threadpool(lambda: _load_stock_rows_from_quant_file(QUANT_OPTIONAL_FILENAME))
-
-
-async def _cc(settings):
-    """从 ``~/.quant/holding.jsonl`` 读取持仓（一行一条 JSON）。"""
-    return await run_in_threadpool(lambda: _load_stock_rows_from_quant_file(QUANT_HOLDING_FILENAME))
-
-
 def _combine_cls_publish_datetime(pub_date_val: object, pub_time_val: object) -> str:
     """财联社 ``发布日期`` + ``发布时间`` → ``yyyy-MM-dd HH:mm:ss``。"""
     ds = str(pub_date_val or "").strip()
@@ -626,6 +406,98 @@ def _combine_cls_publish_datetime(pub_date_val: object, pub_time_val: object) ->
     except (ValueError, IndexError):
         pass
     return f"{day} {ts}"
+
+
+async def _dpzs():
+    """获取大盘指数（东财）。"""
+    try:
+        raw = dataframe_to_records(
+            await run_in_threadpool(lambda: ak.stock_zh_index_spot_em(symbol="沪深重要指数"))
+        )
+        return [
+            item
+            for item in raw
+            if item.get("序号") in _INDEX_SERIAL_WHITELIST
+        ]
+    except Exception:
+        _log_api_error("大盘指数 | ak.stock_zh_index_spot_em")
+        return None
+
+
+async def _zqxy():
+    """涨跌分布 / 赚钱效应（多数据源回退）。"""
+    try:
+        return await zdfb_52etf()
+    except Exception:
+        _log_api_error("赚钱效应 | 52etf涨跌分布")
+
+    try:
+        return await zdfb_ths()
+    except Exception:
+        _log_api_error("赚钱效应 | 同花顺涨跌分布")
+
+    # legu 盘前常为上一交易日口径且易失败，暂不接入
+    return None
+
+
+async def _ztgk(more: bool = False):
+    result: dict[str, Any] = {}
+    try:
+        zt_full = await run_in_threadpool(ztgc)
+        height = _zt_height(zt_full)
+        result["今日涨停"] = zt_full
+        result["市场高度"] = f"{height}连板"
+    except Exception:
+        _log_api_error("今日涨停股全量 | ztgc")
+
+    if more:
+        try:
+            zrzt = ztgc_with_date(get_n_workdays_ago(n=1))
+            result["昨日涨停"] = zrzt
+        except Exception:
+            _log_api_error("昨日涨停股池全量 | ztgc_with_date")
+
+    return result
+
+
+async def _hot(settings, limit: int = 5):
+    try:
+        raw_hot = await hot_stock(settings, limit)
+        return raw_hot[:20] if isinstance(raw_hot, list) else []
+    except Exception:
+        _log_api_error("同花顺人气股 | ths.hot_stock (no enrich)")
+        return []
+
+
+async def _pkyd():
+    """东财盘口异动（60日新高 / 60日大幅上涨），仅限创业板/深证/沪市主板的 A 股代码。"""
+    try:
+        out: list[dict[str, Any]] = []
+        for _label in ("60日新高", "60日大幅上涨"):
+            batch = pkyd(_label)
+            if not isinstance(batch, list):
+                continue
+            for row in batch:
+                if not isinstance(row, dict):
+                    continue
+                code = str(row.get("代码", "") or "").strip()
+                if code.startswith(("30", "00", "60")):
+                    out.append(
+                        {
+                            "股票代码": code,
+                            "股票名称": row.get("名称"),
+                            "原因": row.get("板块"),
+                        }
+                    )
+        return out
+    except Exception:
+        _log_api_error("盘口异动 | dfcf.pkyd")
+        return None
+
+
+# ---------------------------------------------------------------------------
+# 路由入口（保持集中于此，便于比对 OpenAPI）
+# ---------------------------------------------------------------------------
 
 
 @router.get(
@@ -704,67 +576,6 @@ async def news(settings: SettingsDep) -> Response:
     return Response(data=_finalize_quant_payload(news))
 
 
-async def _dpzs():
-    """
-    获取大盘指数
-    :param route:
-    :return:
-    """
-    try:
-        # 东方财富渠道
-        raw = dataframe_to_records(
-            await run_in_threadpool(lambda: ak.stock_zh_index_spot_em(symbol="沪深重要指数"))
-        )
-        return [item for item in raw if item["序号"] in _INDEX_SERIAL_WHITELIST]
-    except Exception:
-        _log_api_error(f"大盘指数 | ak.stock_zh_index_spot_em")
-        return None
-
-
-async def _zqxy():
-    """
-    涨跌分布
-    :return:
-    """
-    try:
-        # 52etf渠道
-        return await zdfb_52etf()
-    except:
-        _log_api_error(f"赚钱效应 | 52etf涨跌分布")
-
-    try:
-        # 同花顺渠道
-        return await zdfb_ths()
-    except Exception:
-        _log_api_error(f"赚钱效应 | 同花顺涨跌分布")
-
-    # legu渠道
-    # 开盘时获取到的是昨天的数据，且现在执行在报错，就暂时不添加
-    # zqxy = await _earning_effect_pre_market(f"赚钱效应 | ak.stock_market_activity_legu")
-    return None
-
-
-async def _ztgk(more: bool = False):
-    result = {}
-    try:
-        zt_full = await run_in_threadpool(lambda: ztgc())
-        height = _zt_height(zt_full)
-        result['今日涨停'] = zt_full
-        result['市场高度'] = str(height) + '连扳'
-    except:
-        _log_api_error(f"今日涨停股全量 | ak.stock_zt_pool_em")
-
-    if more:
-        try:
-            # 昨日涨停，复盘时保存当日涨停，优先从保存的读，没有再调用这个接口 TODO
-            zrzt = ztgc_with_date(get_n_workdays_ago(n=1))
-            result['昨日涨停'] = zrzt
-        except:
-            _log_api_error(f"昨日涨停股池全量 | ak.stock_zt_pool_em")
-
-    return result
-
-
 @router.get(
     "/quant/market/pre_market",
     response_model=Response,
@@ -784,42 +595,17 @@ async def pre_market(settings: SettingsDep, background_tasks: BackgroundTasks) -
     # 涨停概况
     ztgk_ = await _ztgk()
 
-    # 自选，从 ~/.quant/optional.jsonl 获取（每行 {"股票代码","股票名称",...}）
-    zxg_ = await _enrich_stock_list(
-        settings,
-        _zx,
-        more=False,
-        include_pre_snapshot=True,
-        fund_flow_trade_days=1,
-    )
-
-    # 持仓，从 ~/.quant/holding.jsonl 获取持仓股（每行一条 JSON，含 股票代码、买入时间 等）
-    ccg_ = await _enrich_stock_list(
-        settings,
-        _cc,
-        more=False,
-        include_pre_snapshot=True,
-        fund_flow_trade_days=1,
-    )
+    zxg_, ccg_ = await _enrich_optional_and_holding(settings)
 
     result = {
         "大盘指数": dpzs_,
-        '赚钱效应': zqxy_,
-        '涨停概况': ztgk_,
+        "赚钱效应": zqxy_,
+        "涨停概况": ztgk_,
         "自选股": zxg_,
-        "持仓股": ccg_
+        "持仓股": ccg_,
     }
 
     return Response(data=_finalize_quant_payload(result))
-
-
-async def _hot(settings, limit: int=5):
-    try:
-        raw_hot = await hot_stock(settings, limit)
-        return raw_hot[:20] if isinstance(raw_hot, list) else []
-    except Exception:
-        _log_api_error(f"同花顺人气股 | ths.hot_stock (no enrich)")
-        return []
 
 
 @router.get(
@@ -841,13 +627,13 @@ async def during_market(settings: SettingsDep, background_tasks: BackgroundTasks
 
     # 涨幅前十概念
     jrzfqsgn = await _stock_fund_flow_concept_or_none(
-        f"涨幅前十概念 | ths.stock_fund_flow_concept",
+        "涨幅前十概念 | ths.stock_fund_flow_concept",
         "行业-涨跌幅",
     )
 
     # 资金流入前十概念
     jrzjlrqsgn = await _stock_fund_flow_concept_or_none(
-        f"资金流入前十概念 | ths.stock_fund_flow_concept",
+        "资金流入前十概念 | ths.stock_fund_flow_concept",
         "流入资金",
     )
 
@@ -860,23 +646,7 @@ async def during_market(settings: SettingsDep, background_tasks: BackgroundTasks
     # 人气股
     hot_ = await _hot(settings)
 
-    # 自选，从 ~/.quant/optional.jsonl 获取（每行 {"股票代码","股票名称",...}）
-    zxg_ = await _enrich_stock_list(
-        settings,
-        _zx,
-        more=False,
-        include_pre_snapshot=True,
-        fund_flow_trade_days=1,
-    )
-
-    # 持仓，从 ~/.quant/holding.jsonl 获取持仓股（每行一条 JSON，含 股票代码、买入时间 等）
-    ccg_ = await _enrich_stock_list(
-        settings,
-        _cc,
-        more=False,
-        include_pre_snapshot=True,
-        fund_flow_trade_days=1,
-    )
+    zxg_, ccg_ = await _enrich_optional_and_holding(settings)
 
     result = {
         "大盘指数": dpzs,
@@ -885,40 +655,9 @@ async def during_market(settings: SettingsDep, background_tasks: BackgroundTasks
         "涨停统计": zttj,
         "同花顺人气榜": hot_,
         "自选股": zxg_,
-        "持仓股": ccg_
+        "持仓股": ccg_,
     }
     return Response(data=_finalize_quant_payload(result))
-
-
-async def _pkyd():
-    """
-    盘口异动
-    """
-    try:
-        # 东方财富渠道
-        result = []
-        a = pkyd('60日新高')
-        b = pkyd('60日大幅上涨')
-        if a:
-            for ai in a:
-                if ai['代码'].startswith(("30", "00", "60")):
-                    result.append({
-                        "股票代码": ai['代码'],
-                        "股票名称": ai['名称'],
-                        "原因": ai['板块'],
-                    })
-        if b:
-            for bi in b:
-                if bi['代码'].startswith(("30", "00", "60")):
-                    result.append({
-                        "股票代码": bi['代码'],
-                        "股票名称": bi['名称'],
-                        "原因": bi['板块'],
-                    })
-        return result
-    except Exception:
-        _log_api_error(f"大盘指数 | ak.stock_zh_index_spot_em")
-        return None
 
 
 @router.get(
@@ -942,13 +681,13 @@ async def post_market(settings: SettingsDep, background_tasks: BackgroundTasks) 
 
     # 涨幅前十概念
     jrzfqsgn = await _stock_fund_flow_concept_or_none(
-        f"涨幅前十概念 | ths.stock_fund_flow_concept",
+        "涨幅前十概念 | ths.stock_fund_flow_concept",
         "行业-涨跌幅",
     )
 
     # 资金流入前十概念
     jrzjlrqsgn = await _stock_fund_flow_concept_or_none(
-        f"资金流入前十概念 | ths.stock_fund_flow_concept",
+        "资金流入前十概念 | ths.stock_fund_flow_concept",
         "流入资金",
     )
 
@@ -959,35 +698,13 @@ async def post_market(settings: SettingsDep, background_tasks: BackgroundTasks) 
     zttj = await _ztgk(True)
 
     # 人气股
-    hot_ = await _enrich_stock_list(
-        settings,
-        _hot,
-        more=False,
-        include_pre_snapshot=True,
-        fund_flow_trade_days=1,
-    )
+    hot_ = await _enrich_stock_list(settings, _hot, include_pre_snapshot=True)
 
     # 盘口异动，这个数据就不要enrich了，也不作为选股池，而是在选股的收从这个中判断是否是60日新高或60日大幅上涨
     # 如此一来，还可以再加一些其他进来，比如火箭发射等
     pkyd_ = await _pkyd()
 
-    # 自选，从 ~/.quant/optional.jsonl 获取（每行 {"股票代码","股票名称",...}）
-    zxg_ = await _enrich_stock_list(
-        settings,
-        _zx,
-        more=False,
-        include_pre_snapshot=True,
-        fund_flow_trade_days=1,
-    )
-
-    # 持仓，从 ~/.quant/holding.jsonl 获取持仓股（每行一条 JSON，含 股票代码、买入时间 等）
-    ccg_ = await _enrich_stock_list(
-        settings,
-        _cc,
-        more=False,
-        include_pre_snapshot=True,
-        fund_flow_trade_days=1,
-    )
+    zxg_, ccg_ = await _enrich_optional_and_holding(settings)
 
     result = {
         "大盘指数": dpzs,

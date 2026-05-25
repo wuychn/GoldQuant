@@ -69,6 +69,24 @@ def _f(x: Any) -> float | None:
         return None
 
 
+def _daily_bars_path(settings: Settings, symbol: str) -> Path:
+    """单标的日线归档 ``bars/<代码>.jsonl`` 的路径。"""
+    return quant_archive_base(settings) / "bars" / f"{str(symbol).strip()}.jsonl"
+
+
+def _accumulate_hist_rows_into_bars(
+    by_date: dict[str, dict[str, Any]],
+    hist: list[Any] | None,
+) -> None:
+    """把接口/API 形态的日线 dict 转为内部 bar 并写入 ``by_date``（按交易日键合并）。"""
+    for row in hist or []:
+        if not isinstance(row, dict):
+            continue
+        bar = _bar_from_hist_row(row)
+        if bar:
+            by_date[bar["date"]] = bar
+
+
 def _bar_from_hist_row(row: dict[str, Any]) -> dict[str, Any] | None:
     dk = _norm_date_key(get_val(row, "日期"))
     if not dk:
@@ -144,7 +162,7 @@ def _bar_to_hist_row(bar: dict[str, Any], symbol: str) -> dict[str, Any]:
 
 def symbol_needs_full_daily_fetch(settings: Settings, symbol: str) -> bool:
     """本地尚无该股日线合并文件时，需要全量拉取。"""
-    path = quant_archive_base(settings) / "bars" / f"{str(symbol).strip()}.jsonl"
+    path = _daily_bars_path(settings, symbol)
     if not path.is_file() or path.stat().st_size == 0:
         return True
     return False
@@ -152,7 +170,7 @@ def symbol_needs_full_daily_fetch(settings: Settings, symbol: str) -> bool:
 
 def last_daily_bar_date(settings: Settings, symbol: str) -> str | None:
     """本地 bars 中最后一根日线的 ``YYYYMMDD``；无文件或为空返回 ``None``。"""
-    path = quant_archive_base(settings) / "bars" / f"{str(symbol).strip()}.jsonl"
+    path = _daily_bars_path(settings, symbol)
     by_date = _read_bars_by_date(path)
     if not by_date:
         return None
@@ -197,12 +215,7 @@ def load_merge_write_daily_bars(
     bars_dir.mkdir(parents=True, exist_ok=True)
     path = bars_dir / f"{symbol}.jsonl"
     by_date = _read_bars_by_date(path)
-    for row in api_rows or []:
-        if not isinstance(row, dict):
-            continue
-        bar = _bar_from_hist_row(row)
-        if bar:
-            by_date[bar["date"]] = bar
+    _accumulate_hist_rows_into_bars(by_date, api_rows)
     if by_date:
         _write_bars_by_date(path, by_date)
         out = [_bar_to_hist_row(by_date[k], symbol) for k in sorted(by_date)]
@@ -227,12 +240,7 @@ def _merge_hist_into_symbol(bars_dir: Path, code: str, hist: list[Any]) -> None:
         return
     path = bars_dir / f"{code}.jsonl"
     by_date = _read_bars_by_date(path)
-    for row in hist:
-        if not isinstance(row, dict):
-            continue
-        bar = _bar_from_hist_row(row)
-        if bar:
-            by_date[bar["date"]] = bar
+    _accumulate_hist_rows_into_bars(by_date, hist)
     if not by_date:
         return
     _write_bars_by_date(path, by_date)
@@ -316,19 +324,10 @@ def _ma_last(closes: list[float], n: int) -> float | None:
 def recompute_symbol_metrics(bars_path: Path) -> dict[str, Any] | None:
     if not bars_path.is_file():
         return None
-    rows: list[dict[str, Any]] = []
-    try:
-        for line in bars_path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            rows.append(json.loads(line))
-    except (json.JSONDecodeError, OSError) as e:
-        logger.warning("重算指标时读取失败 %s: %s", bars_path, e)
+    by_date = _read_bars_by_date(bars_path)
+    if not by_date:
         return None
-    rows.sort(key=lambda x: x.get("date", ""))
-    if not rows:
-        return None
+    rows = [by_date[k] for k in sorted(by_date.keys())]
     closes = [float(r["close"]) for r in rows]
     highs = [float(r["high"]) for r in rows]
     lows = [float(r["low"]) for r in rows]
@@ -370,7 +369,7 @@ def load_computed_metrics_zh(settings: Settings, symbol: str) -> dict[str, Any] 
         "均线5日": raw.get("MA5"),
         "均线10日": raw.get("MA10"),
         "均线20日": raw.get("MA20"),
-        "均线30日": raw.get("MA30"), # 没有获取到，是在哪里计算的？ TODO
+        "均线30日": raw.get("MA30"),
         "ATR14": raw.get("ATR14"),
         "MACD": {
             "差离值": macd.get("dif"),
