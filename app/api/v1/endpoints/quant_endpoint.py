@@ -27,7 +27,7 @@ from app.utils.common_util import (
     _yyyymmdd_to_iso,
 )
 from app.utils.dataframe import dataframe_to_records
-from app.utils.dfcf_util import hsgtzj, pk, ztgc, hist, all_stocks, jbxx, ztgc_with_date
+from app.utils.dfcf_util import hsgtzj, pk, ztgc, hist, all_stocks, jbxx, ztgc_with_date, pkyd
 from app.utils.etf52_util import zdfb_52etf
 from app.utils.quant_archive import (
     load_computed_metrics_zh,
@@ -890,6 +890,16 @@ async def during_market(settings: SettingsDep, background_tasks: BackgroundTasks
     return Response(data=_finalize_quant_payload(result))
 
 
+async def _pkyd():
+    try:
+        # 东方财富渠道
+        pkyd('60日新高')
+        return [item for item in raw if item["序号"] in _INDEX_SERIAL_WHITELIST]
+    except Exception:
+        _log_api_error(f"大盘指数 | ak.stock_zh_index_spot_em")
+        return None
+
+
 @router.get(
     "/quant/market/post_market",
     response_model=Response,
@@ -935,6 +945,9 @@ async def post_market(settings: SettingsDep, background_tasks: BackgroundTasks) 
         include_pre_snapshot=True,
         fund_flow_trade_days=1,
     )
+
+    # 盘口异动
+    pkyd_ = await _pkyd()
 
     # 自选，从 ~/.quant/optional.jsonl 获取（每行 {"股票代码","股票名称",...}）
     zxg_ = await _enrich_stock_list(

@@ -111,6 +111,14 @@ def zj(symbol):
         return []
     return recs[-120:] if len(recs) > 120 else recs
 
+def pkyd(symbol):
+    """
+    盘口异动
+    :return:
+    """
+    pd = ak.stock_changes_em(symbol)
+    return dataframe_to_records(pd)
+
 
 def hsgtzj():
     """
