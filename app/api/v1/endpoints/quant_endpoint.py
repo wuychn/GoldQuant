@@ -279,15 +279,15 @@ async def _ggzjl(symbol):
         flash_ = r['flash']
         v_ = list_to_dict_v2(flash_, 'name', 'sr')
         # TODO 得到的是tuple，导致最终数据是json
-        v_ ['大单流出'] = str(v_['大单流出']) + ' 万元',
-        v_ ['中单流出'] = str(v_['中单流出']) + ' 万元',
-        v_ ['小单流出'] = str(v_['小单流出']) + ' 万元',
-        v_ ['小单流入'] = str(v_['小单流入']) + ' 万元',
-        v_ ['中单流入'] = str(v_['中单流入']) + ' 万元',
-        v_ ['大单流入'] = str(v_['大单流入']) + ' 万元',
-        v_ ['总流入'] = str(r['title']['zlr']) + ' 万元',
-        v_ ['总流出'] = str(r['title']['zlc']) + ' 万元'
-        v_ ['净额'] = str(r['title']['je']) + ' 万元'
+        v_ ['大单流出'] = f"{str(v_['大单流出'])} 万元"
+        v_ ['中单流出'] = f"{str(v_['中单流出'])} 万元"
+        v_ ['小单流出'] = f"{str(v_['小单流出'])} 万元"
+        v_ ['小单流入'] = f"{str(v_['小单流入'])} 万元"
+        v_ ['中单流入'] = f"{str(v_['中单流入'])} 万元"
+        v_ ['大单流入'] = f"{str(v_['大单流入'])} 万元"
+        v_ ['总流入'] = f"{str(r['title']['zlr'])} 万元"
+        v_ ['总流出'] = f"{str(r['title']['zlc'])} 万元"
+        v_ ['净额'] = f"{str(r['title']['je'])} 万元"
         return v_
     except Exception:
         _log_api_error(f"个股资金流 symbol={symbol!r}")
@@ -891,10 +891,31 @@ async def during_market(settings: SettingsDep, background_tasks: BackgroundTasks
 
 
 async def _pkyd():
+    """
+    盘口异动
+    """
     try:
         # 东方财富渠道
-        pkyd('60日新高')
-        return [item for item in raw if item["序号"] in _INDEX_SERIAL_WHITELIST]
+        result = []
+        a = pkyd('60日新高')
+        b = pkyd('60日大幅上涨')
+        if a:
+            for ai in a:
+                if ai['代码'].startswith(("30", "00", "60")):
+                    result.append({
+                        "股票代码": ai['代码'],
+                        "股票名称": ai['名称'],
+                        "原因": ai['板块'],
+                    })
+        if b:
+            for bi in b:
+                if bi['代码'].startswith(("30", "00", "60")):
+                    result.append({
+                        "股票代码": bi['代码'],
+                        "股票名称": bi['名称'],
+                        "原因": bi['板块'],
+                    })
+        return result
     except Exception:
         _log_api_error(f"大盘指数 | ak.stock_zh_index_spot_em")
         return None
@@ -946,7 +967,8 @@ async def post_market(settings: SettingsDep, background_tasks: BackgroundTasks) 
         fund_flow_trade_days=1,
     )
 
-    # 盘口异动
+    # 盘口异动，这个数据就不要enrich了，也不作为选股池，而是在选股的收从这个中判断是否是60日新高或60日大幅上涨
+    # 如此一来，还可以再加一些其他进来，比如火箭发射等
     pkyd_ = await _pkyd()
 
     # 自选，从 ~/.quant/optional.jsonl 获取（每行 {"股票代码","股票名称",...}）
@@ -974,6 +996,7 @@ async def post_market(settings: SettingsDep, background_tasks: BackgroundTasks) 
         "概念板块": gn_bk,
         "涨停统计": zttj,
         "同花顺人气榜": hot_,
+        "盘口异动": pkyd_,
         "自选股": zxg_,
         "持仓股": ccg_,
     }
