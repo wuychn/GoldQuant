@@ -1,0 +1,72 @@
+# =============================================================================
+# 硬门禁配置（quant/config/gates.yml）
+# =============================================================================
+# 加载优先级：本文件 → ~/.quant/config/gates.yml（用户覆盖）
+# 硬门禁与评分分离：不满足则直接拒绝买卖，不参与 ML 校准。
+# =============================================================================
+
+trading:
+  # true：仅在北京时间连续竞价（9:30~11:30、13:00~15:00）且真实交易日执行模拟成交
+  # false：任意时刻可成交（便于联调/回测）
+  time_validation_enabled: false
+
+# --- 标的池过滤（买入前逐股检查）---
+symbol_pool:
+  prefixes: ["60", "00", "30"]   # 沪主/深主/创业板
+  exclude_st: true               # 排除 ST、*ST
+  min_listing_days: 60           # 预留：上市不足 N 日（当前规则层可扩展）
+
+# --- 极端行情熔断（全局，任一触发则不开新仓）---
+circuit_breaker:
+  index_drop_pct: -2.0           # 上证涨跌幅 <= 此值(%)：全天不开新仓
+  shrink_volume_days: 3          # 大盘资金流连续 N 日缩量判定
+  shrink_volume_ratio: 0.8       # 最新日成交额 < 第 N 日前 × 此比例
+
+# 当日已实现盈亏 / 总资产 <= 此值(%)：次日空仓（仅统计已实现，不含浮动）
+daily_loss_limit_pct: -3.0
+
+# 止损卖出后，该代码 N 个交易日内禁止再次买入
+stoploss_cooldown_days: 3
+
+# --- 仓位联动（由市场状态机「强势/震荡/弱势」决定）---
+# total_pct: 总仓位上限；max_stocks: 最多持仓只数；single_pct: 单票占总资产比例上限(%)
+position:
+  强势:
+    total_pct: 80
+    max_stocks: 5
+    single_pct:
+      涨停板战法: 15
+      龙回头战法: 10
+      主升浪战法: 8
+      趋势: 8
+  震荡:
+    total_pct: 50
+    max_stocks: 3
+    single_pct:
+      涨停板战法: 10
+      龙回头战法: 8
+      主升浪战法: 6
+      趋势: 6
+  弱势:
+    total_pct: 20
+    max_stocks: 2
+    single_pct:
+      涨停板战法: 5
+      龙回头战法: 5
+      主升浪战法: 4
+      趋势: 4
+
+# --- 买入附加条件（评分+门禁通过后仍须满足）---
+buy:
+  pre_market:
+    min_gap_pct: 1.0             # 高开下限(%)
+    max_gap_pct: 7.0             # 高开上限(%)，避免一字/过热
+    min_volume_ratio: 1.2        # 量比下限
+  during_market:
+    max_change_pct: 7.0          # 涨幅上限(%)，避免追高
+    require_above_avg: true      # 最新价须在分时均价线上方
+
+# --- 卖出触发（与评分 sell_threshold 并行，满足任一可卖）---
+sell:
+  stop_loss_pct: -5.0            # 相对买入价浮亏(%)
+  ma20_break: true               # 跌破 MA20 视为趋势破位

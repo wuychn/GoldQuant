@@ -44,8 +44,8 @@ router = APIRouter(tags=["量化入口"])
 
 _INDEX_SERIAL_WHITELIST = (1, 2, 4)
 # 自选/持仓落盘：~/.quant/ 下 JSONL（一行一条 JSON 对象）
-QUANT_OPTIONAL_FILENAME = "optional.jsonl"
-QUANT_HOLDING_FILENAME = "holding.jsonl"
+QUANT_OPTIONAL_FILENAME = "state/optional.jsonl"
+QUANT_HOLDING_FILENAME = "state/holding.jsonl"
 
 _SH_TZ = ZoneInfo("Asia/Shanghai")
 

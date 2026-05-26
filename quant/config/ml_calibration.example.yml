@@ -1,0 +1,29 @@
+# =============================================================================
+# ML 校准结果示例（复制到 ~/.quant/config/ml_calibration.yml 后生效）
+# =============================================================================
+# 由 python -m quant.ml calibrate --method xxx --apply 自动生成，也可手改。
+# apply: false 时本文件存在但不会覆盖 scoring 配置。
+# =============================================================================
+
+generated_at: "2026-05-26 20:00:00"
+method: grid
+sample_count: 45
+apply: true
+
+# 覆盖 scoring.yml 中的三个阈值
+thresholds:
+  watchlist_threshold: 65
+  buy_threshold: 75
+  sell_threshold: 42
+
+# linear / lightgbm 方法会写入；grid / bayesian 通常无此项
+# dimension_weights:
+#   popularity_rank: 12.5
+#   concept_theme: 14.0
+
+metrics:
+  f1: 0.58
+  precision: 0.62
+  recall: 0.55
+
+notes: []

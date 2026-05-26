@@ -1,229 +1,365 @@
-# GoldQuant Data API
+# GoldQuant
 
-面向 **OpenClaw** 等自动化决策工具的股票**热度榜**与**资讯**数据服务。服务端使用 [FastAPI](https://fastapi.tiangolo.com/)，数据层主要调用 [AKShare](https://github.com/akfamily/akshare) 及同花顺公开 JSON 接口。
+A 股短线量化辅助系统：**FastAPI 数据聚合服务** + **评分引擎决策机器人** + **LLM 复盘叙述** + **飞书推送** + **ML 离线校准**。
 
-> **说明**：本服务仅做数据聚合与转发，不构成投资建议。行情与榜单数据来自第三方网站，存在延迟、字段变更或访问失败的可能。
+> 本仓库仅做数据聚合与模拟交易辅助，**不构成投资建议**。行情来自 AKShare / 东财 / 同花顺等第三方，存在延迟、字段变更或访问失败的可能。
 
 ---
 
-## 项目结构（FastAPI 常见布局）
+## 架构概览
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│  app/  数据 API（FastAPI，默认 :8085）                        │
+│  quant_endpoint.py → 新闻 / 盘前 / 盘中 / 午间 / 晚间 JSON    │
+└───────────────────────────┬─────────────────────────────────┘
+                            │ HTTP
+┌───────────────────────────▼─────────────────────────────────┐
+│  quant/  决策机器人（python -m quant <mode>）                 │
+│  评分引擎 + 硬门禁 → 买卖信号 → 模拟成交 → LLM 叙述 → 飞书    │
+└───────────────────────────┬─────────────────────────────────┘
+                            │ 离线
+┌───────────────────────────▼─────────────────────────────────┐
+│  quant/ml  读取 ~/.quant/daily 历史 → 校准阈值/权重           │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**职责划分**
+
+| 组件 | 做什么 | 不做什么 |
+|------|--------|----------|
+| 评分 + 门禁 | 加自选、买卖、仓位 | — |
+| LLM | 解读数据、写复盘/推送文案 | 不参与下单决策 |
+| ML | 离线优化阈值与维度权重 | 盘中不推理 |
+
+---
+
+## 项目结构
 
 ```text
 GoldQuant/
-├── app/
-│   ├── main.py                 # 应用入口：`create_app()` 与全局 `app` 实例
-│   ├── __main__.py             # `python -m app` 时调用 Uvicorn 真正启动服务
-│   ├── api/
-│   │   ├── deps.py             # 依赖注入（如 `SettingsDep`）
-│   │   └── v1/
-│   │       ├── router.py       # 聚合 v1 子路由
-│   │       └── endpoints/
-│   │           ├── stock_eastmoney.py  # 东财（行情、热度、资讯等）
-│   │           ├── stock_sina.py         # 新浪
-│   │           ├── stock_ths.py        # 同花顺（行业、热榜直连）
-│   │           └── eastmoney_config.py # 管理端：东财请求头
-│   ├── core/
-│   │   ├── config.py         # `pydantic-settings`：环境变量与 `.env`
-│   │   └── proxy.py          # 出站代理：写入进程 HTTP(S)_PROXY
-│   └── utils/
-│       └── dataframe.py      # DataFrame → JSON 行列表
-├── .env.example                # 配置项说明模板（复制为 `.env` 使用）
-├── run.ps1                     # Windows：一键调用 `python -m app`（需在项目根目录）
-├── run.sh                      # Linux：./run.sh start|stop|restart（PID: goldquant.pid）
-├── pyproject.toml              # 包元数据与依赖声明（可 `pip install -e .`）
-├── requirements.txt            # 与 pyproject 依赖对齐，便于传统 `pip install -r`
+├── app/                        # FastAPI 数据服务
+│   ├── main.py
+│   └── api/v1/endpoints/
+│       ├── quant_endpoint.py   # 量化五时段聚合接口（核心）
+│       └── ...                 # 其他行情/热度接口
+├── quant/                      # 量化决策机器人
+│   ├── orchestrator.py         # 五模式编排
+│   ├── config/                 # scoring.yml / gates.yml 默认配置
+│   ├── scoring/                # 100 分制评分引擎
+│   ├── gates/                  # 硬门禁（T+1、熔断、标的池…）
+│   ├── signals/                # 买卖信号
+│   ├── execution/              # 模拟成交
+│   ├── narrative/              # LLM 叙述
+│   ├── push/                   # 飞书推送
+│   ├── ml/                     # ML 离线校准
+│   └── strategy.md             # 策略条文（人工维护）
+├── data/                       # 接口返回样例 JSON（离线调试）
+├── requirements.txt
+├── pyproject.toml
 └── README.md
 ```
 
----
+**运行时数据目录**（自动创建）：`~/.quant/`
 
-## 配置说明
-
-- 配置类位于 `app/core/config.py`，通过 **`pydantic-settings`** 读取环境变量，**前缀为 `GOLDQUANT_`**（例如 `GOLDQUANT_ENV`）。
-- 项目根目录下的 **`.env`** 使用**固定绝对路径**加载（相对 `app/core/config.py` 解析），与从哪个目录启动无关；勿提交仓库（已列入 `.gitignore`），字段说明见 **`.env.example`**。
-- 常用项：`GOLDQUANT_CORS_ORIGINS`（跨域源，`*` 或逗号分隔）、`GOLDQUANT_HTTP_CLIENT_TIMEOUT`、`GOLDQUANT_THS_DEFAULT_USER_AGENT` 等。
-- **出站代理**：`GOLDQUANT_PROXY_ENABLED`、`GOLDQUANT_PROXY_URL`（或分别设置 `GOLDQUANT_PROXY_HTTP_URL` / `GOLDQUANT_PROXY_HTTPS_URL`）、`GOLDQUANT_PROXY_NO_PROXY`。开启后会在进程内设置 `HTTP_PROXY`/`HTTPS_PROXY`，AKShare 与本服务中的 httpx 请求均会走代理。
+```text
+~/.quant/
+├── state/          # optional.jsonl、holding.jsonl、account.json（程序读写）
+├── views/          # optional.md、holding.md（自动生成，勿手改）
+├── daily/{date}/   # raw/ derived/ trades/ review/
+├── config/         # scoring.yml、gates.yml、ml_calibration.yml
+└── memory/         # 新闻摘要、经验教训
+```
 
 ---
 
 ## 环境要求
 
-- Python **3.10+**（当前开发环境为 3.11，已在 Windows 验证）
-- 可访问外网（拉取东方财富、雪球、同花顺等数据源）
+- Python **3.10+**（推荐 3.11）
+- 可访问外网（拉取行情）
+- Windows / Linux 均可
 
 ---
 
-## 使用 venv 管理依赖
+## 一、安装
 
-在项目根目录 `GoldQuant` 下执行（**PowerShell**）：
+在项目根目录 `GoldQuant` 下：
 
 ```powershell
-# 若尚未创建虚拟环境
+# 创建并激活虚拟环境（PowerShell）
 python -m venv .venv
-
-# 激活（Windows PowerShell）
 .\.venv\Scripts\Activate.ps1
 
-# 安装依赖（二选一）
+# 安装依赖（含量化 + ML）
 pip install -r requirements.txt
-# 或从 pyproject 以可编辑方式安装本项目包
-# pip install -e .
+
+# 或仅安装 ML 可选包
+# pip install -e ".[ml]"
 ```
 
-CMD 用户可使用 `.\.venv\Scripts\activate.bat`。
-
-复制环境变量模板（可选）：
+复制环境变量模板：
 
 ```powershell
 copy .env.example .env
 ```
 
+编辑 `.env`，至少配置：
+
+| 变量 | 说明 |
+|------|------|
+| `GOLDQUANT_PORT` | API 端口，默认 `8085` |
+| `LLM_API_KEY` | LLM 密钥（复盘叙述） |
+| `LLM_BASE_URL` | LLM 接口地址 |
+| `LLM_MODEL` | 模型名 |
+| `FEISHU_APP_ID` | 飞书应用 ID |
+| `FEISHU_APP_SECRET` | 飞书应用密钥 |
+| `FEISHU_USER_ID` | 飞书接收人 open_id |
+
 ---
 
-## 启动服务
+## 二、启动数据 API
 
-**必须在项目根目录 `GoldQuant` 下执行**（保证能 `import app`），并已激活 venv。
-
-推荐任选其一：
+**必须在项目根目录执行**，且已激活 venv。
 
 ```powershell
-# 方式 A：模块入口（会读取 .env 中的 HOST/PORT/RELOAD，并打印监听地址）
+# 推荐
 python -m app
 
-# 方式 B：与官方文档一致的 Uvicorn 命令行
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8085
-
-# 方式 C：Windows 下可双击或在项目根执行根目录的 run.ps1
-.\run.ps1
+# 或
+uvicorn app.main:app --host 0.0.0.0 --port 8085
 ```
 
-**Linux 后台启动 / 停止 / 重启**（项目根目录 `run.sh`，使用 `nohup`，**无热重载**，适合服务器常驻）：
+- 文档：<http://127.0.0.1:8085/docs>
+- 健康检查：<http://127.0.0.1:8085/health>
+
+Linux 后台常驻：
 
 ```bash
 chmod +x run.sh
-./run.sh start    # 写入 goldquant.pid，日志追加到 logs/goldquant.log
-./run.sh stop     # 按 PID 优雅停止，必要时 SIGKILL
-./run.sh restart  # 先 stop（若曾用本脚本启动），再 start
+./run.sh start
 ```
 
-首次使用前需已创建 `.venv` 并安装依赖。若存在 `.env`，启动前会 `source` 以读取 `GOLDQUANT_HOST`、`GOLDQUANT_PORT` 等变量（默认 `0.0.0.0:8085`）。
-
-- 交互式 API 文档：<http://127.0.0.1:8085/docs>
-- OpenAPI JSON：<http://127.0.0.1:8085/openapi.json>
-- 健康检查：<http://127.0.0.1:8085/health>
-
-### 启动后立刻退出、且几乎没有输出？
-
-常见原因是 **只运行了 `main.py` 文件**（例如在资源管理器中双击 `main.py`，或在 IDE 里用「运行当前文件」打开 `app/main.py`）。该文件只**定义** FastAPI 应用对象，**不会**调用 Uvicorn，进程会正常结束（退出码 0），看起来像「闪退」。
-
-请改用上面的 **`python -m app`** 或 **`uvicorn app.main:app ...`**，并确认**工作目录**为项目根目录。若仍异常，在 PowerShell 中执行 `cd d:\workspace\GoldQuant`（换成你的路径）后再启动。
-
-监听地址与端口可通过环境变量 **`GOLDQUANT_HOST` / `GOLDQUANT_PORT`**（见 `.env.example`）调整。
-
-### `.env` 里配置了 `GOLDQUANT_PORT` 仍不生效？
-
-1. **配置加载位置**：应用已从「项目根目录」下的 `.env` **绝对路径**读取（不依赖当前工作目录）。请确认 `.env` 与 `app` 文件夹同级，且变量名为 **`GOLDQUANT_PORT=8085`**（不要写成 `PORT=` 单独一项，除非带前缀约定）。
-2. **启动方式**：只有 **`python -m app`**、**`run.ps1`**、**`run.sh start`** 会使用 `Settings` 里的端口。若使用命令行 **`uvicorn app.main:app`** 且**未**指定 `--port`，监听端口由 **Uvicorn 默认 8085** 决定，**不会**读取 `.env` 中的 `GOLDQUANT_PORT`。请改用 `python -m app`，或显式：`uvicorn app.main:app --host 0.0.0.0 --port 8085`。
-3. 修改 `.env` 后需**重启进程**；若曾启动过，`get_settings()` 有缓存，同一进程内不会自动刷新。
+> **注意**：量化机器人通过 `http://localhost:8085` 拉数据，**须先启动 API**，再跑 `python -m quant`。
 
 ---
 
-## API 一览
+## 三、运行量化机器人
 
-所有业务接口前缀为 **`/api/v1`**。
+### 3.1 五种模式
 
-| 说明 | 方法 | 路径 | 数据来源 |
-|------|------|------|----------|
-| 雪球热度榜（关注 / 讨论 / 交易） | GET | `/api/v1/hot/xueqiu/{board}` | AKShare：`stock_hot_*_xq` |
-| 东方财富飙升榜（A 股） | GET | `/api/v1/hot/eastmoney/surge` | AKShare：`stock_hot_up_em` |
-| 东方财富个股人气榜（A 股，约前 100） | GET | `/api/v1/hot/eastmoney/popularity` | AKShare：`stock_hot_rank_em` |
-| 东方财富个股资讯 | GET | `/api/v1/news/em?symbol=` | AKShare：`stock_news_em` |
-| 个股信息查询（东财） | GET | `/api/v1/stock/em/individual-info?symbol=` | AKShare：`stock_individual_info_em` |
-| 同花顺行业列表（概览） | GET | `/api/v1/board/ths/industry-summary` | AKShare：`stock_board_industry_summary_ths` |
-| 同花顺热榜（直连 JSON） | GET | `/api/v1/hot/ths` | 同花顺接口（见下） |
-| 东财自定义请求头 | POST | `/api/v1/admin/eastmoney/headers` | 写入 `.eastmoney.header`，`requests` 访问东财域名时合并 |
+| 命令 | 时段 | 自选 | 买卖 | 说明 |
+|------|------|------|------|------|
+| `python -m quant news` | 任意 | — | — | 新闻解读 + 飞书 |
+| `python -m quant pre_market` | 盘前 | 不改 | 可买 | 开盘分析 + 操作段 |
+| `python -m quant during_market` | 盘中 | 不改 | 可买卖 | 盘中监控 + 操作段 |
+| `python -m quant post_market_lunch` | 午间 | **不更新** | — | 上午复盘 |
+| `python -m quant post_market_evening` | 晚间 | **评分达标新增** | — | 全天复盘 + 自选更新 |
 
-### 路径与查询参数摘要
+### 3.2 单次执行示例
 
-1. **雪球** `/api/v1/hot/xueqiu/{board}`  
-   - `board`：`follow`（关注）｜ `tweet`（讨论）｜ `deal`（交易）  
-   - `symbol` 查询参数：`最热门` 或 `本周新增`（默认 `最热门`）  
-   - 对应文档：[股票数据 - 股票热度 - 雪球](https://akshare.akfamily.xyz/data/stock/stock.html#股票热度-雪球)
+```powershell
+# 1. 确保 API 已启动
+python -m app
 
-2. **东方财富**  
-   - 「飙升榜」与文档中的「人气榜（排名）」在 AKShare 中为不同接口，本服务拆为两个路径以避免混淆：  
-     - 飙升榜 → `stock_hot_up_em` → `/hot/eastmoney/surge`  
-     - 人气榜（A 股前约 100）→ `stock_hot_rank_em` → `/hot/eastmoney/popularity`  
-   - 文档入口：[股票数据 - 股票热度 - 东财](https://akshare.akfamily.xyz/data/stock/stock.html#股票热度-东财)
+# 2. 另开终端，激活 venv 后执行（示例：晚间复盘）
+python -m quant post_market_evening
+```
 
-3. **资讯** `/api/v1/news/em?symbol=603777`  
-   - `symbol`：股票代码或搜索关键词（与 AKShare 一致）  
-   - 文档：[个股新闻](https://akshare.akfamily.xyz/data/stock/stock.html#个股新闻)
+每次运行会：拉取 API 数据 → 落盘到 `~/.quant/daily/` → 评分/交易/叙述 → 推送飞书。
 
-4. **个股信息（东财）** `/api/v1/stock/em/individual-info?symbol=000001`  
-   - `symbol`：股票代码（与 AKShare `stock_individual_info_em` 一致）  
-   - 文档：[个股信息查询-东财](https://akshare.akfamily.xyz/data/stock/stock.html#个股信息查询-东财)
+### 3.3 建议调度（cron / 任务计划）
 
-5. **同花顺行业一览** `/api/v1/board/ths/industry-summary`  
-   - 无查询参数，对应 AKShare `stock_board_industry_summary_ths`。
+| 时间 | 模式 |
+|------|------|
+| 08:00 起多次 | `news` |
+| 09:20 | `pre_market` |
+| 09:35～14:30 每 10～30 分钟 | `during_market` |
+| 11:35 | `post_market_lunch` |
+| 15:10 | `post_market_evening` |
 
-6. **东财自定义请求头** `POST /api/v1/admin/eastmoney/headers`  
-   - Body：JSON 数组，`[{"key":"...","value":"..."}, ...]`，每次提交**整份覆盖**项目根目录 `.eastmoney.header`。  
-   - 应用启动时对 `requests.Session.request` 打补丁：仅当 URL 包含 `eastmoney.com` 时，从该文件读取并 `update` 到请求头（文件中的键覆盖调用方传入的同名头）。  
-   - **安全提示**：该接口可改写对第三方的请求头，生产环境请自行加鉴权或网络隔离。
+Windows 任务计划或 Linux crontab 调用同一命令即可；工作目录设为项目根，并激活 venv。
 
-7. **同花顺热榜** `/api/v1/hot/ths`  
-   - 接口基址在代码中写死为 `fuyao/hot_list/.../v1/stock`（不通过环境变量配置）；默认请求与下列 URL 等价（可通过查询参数覆盖路径参数）：  
-     `https://dq.10jqka.com.cn/fuyao/hot_list_data/out/hot_list/v1/stock?stock_type=a&type=hour&list_type=normal`  
-   - 查询参数：`stock_type`、`type`（在 OpenAPI 中为避免与 Python 关键字冲突，代码里使用别名，URL 上仍为 `type`）、`list_type`；可选 `limit` 截取前 N 条 `stock_list`。  
-   - 响应中包含上游 JSON（`raw`）；若设置 `limit`，仅截取 `data.stock_list` 前 N 条。另含 `stock_list_total`（截取前总条数）与 `stock_list_returned`（本次返回条数）。
+### 3.4 飞书推送格式
+
+不变，示例：
+
+```text
+【晚间复盘】2026-05-26 15:10:00
+
+一、全天大盘
+…
+
+九、自选更新
+【新增自选】
+· 某某股份（600xxx）评分72.5 [涨停板战法]
+```
+
+「操作」「自选更新」段由**评分引擎 + 执行器**确定性产出；其余段落由 LLM 叙述。
 
 ---
 
-## 响应格式约定
+## 四、配置说明
 
-除同花顺直连接口外，多数 AKShare 封装接口（东财行情/热度/资讯、新浪、同花顺行业一览等）统一返回 DataFrame 转 JSON 结构：
+### 4.1 评分与阈值
+
+默认：`quant/config/scoring.yml`
+
+用户覆盖：`~/.quant/config/scoring.yml`
+
+主要字段：
+
+```yaml
+watchlist_threshold: 65   # 加自选最低分
+buy_threshold: 72         # 买入最低分
+sell_threshold: 45        # 低于此考虑卖出
+dimensions:               # 各维度 enabled + weight
+  market_index: { enabled: true, weight: 12 }
+  ...
+```
+
+### 4.2 硬门禁与仓位
+
+默认：`quant/config/gates.yml`  
+用户覆盖：`~/.quant/config/gates.yml`
+
+含：标的池过滤、极端熔断、每日亏损限额、止损冷却、分市场状态的仓位上限等。
+
+`trading.time_validation_enabled: false` 时任意时刻可模拟成交（便于联调）；实盘请改为 `true`。
+
+### 4.3 策略文档
+
+`quant/strategy.md` 为策略条文源；LLM 叙述时会注入相关章节，**买卖不由 LLM 决定**。
+
+---
+
+## 五、ML 离线校准
+
+ML **不参与盘中推理**，仅在收盘后（或周末）用历史数据优化阈值与维度权重。
+
+### 5.1 数据来源
+
+自动扫描 `~/.quant/daily/*/derived/scores_watchlist.json`，结合：
+
+- 次日行情涨幅（`daily/{next}/raw/*.json`）
+- 后续成交盈亏（`daily/*/trades/executed.json`）
+
+构建标签后做校准。**至少积累约 20 条样本**后再跑（默认 `--min-samples 20`）。
+
+### 5.2 命令
+
+```powershell
+# 预览结果（不写文件）
+python -m quant.ml calibrate --method grid --dry-run
+
+# 网格搜索阈值（默认）
+python -m quant.ml calibrate --method grid --apply
+
+# 线性回归 → 维度权重 + 网格阈值
+python -m quant.ml calibrate --method linear --apply
+
+# LightGBM 特征重要性 → 维度权重
+python -m quant.ml calibrate --method lightgbm --apply
+
+# 贝叶斯优化（scipy differential_evolution）→ 阈值
+python -m quant.ml calibrate --method bayesian --apply
+```
+
+### 5.3 生效方式
+
+`--apply` 写入 `~/.quant/config/ml_calibration.yml`，下次 `python -m quant` 启动时自动合并到评分配置（优先级高于包内默认值）。
+
+文件示例：
+
+```yaml
+generated_at: "2026-05-26 20:00:00"
+method: grid
+sample_count: 45
+apply: true
+thresholds:
+  watchlist_threshold: 65
+  buy_threshold: 75
+  sell_threshold: 42
+dimension_weights:   # linear / lightgbm 时有
+  popularity_rank: 12.5
+  concept_theme: 14.0
+metrics:
+  f1: 0.58
+```
+
+取消 ML 覆盖：删除该文件或将 `apply: false`。
+
+---
+
+## 六、量化数据 API（OpenClaw 入口）
+
+前缀 **`/api/v1`**，核心路由在 `quant_endpoint.py`：
+
+| 说明 | 方法 | 路径 |
+|------|------|------|
+| 新闻 | GET | `/api/v1/quant/market/news` |
+| 盘前 | GET | `/api/v1/quant/market/pre_market` |
+| 盘中 | GET | `/api/v1/quant/market/during_market` |
+| 午间复盘 | GET | `/api/v1/quant/market/post_market_lunch` |
+| 晚间复盘 | GET | `/api/v1/quant/market/post_market_evening` |
+
+响应格式：
 
 ```json
 {
-  "source": "akshare.stock_hot_rank_em",
-  "params": {},
-  "row_count": 100,
-  "columns": ["列1", "列2"],
-  "rows": [ { "列1": "...", "列2": "..." } ]
+  "code": 0,
+  "message": "success",
+  "data": {
+    "大盘指数": [],
+    "赚钱效应": {},
+    "自选股": [],
+    "持仓股": []
+  }
 }
 ```
 
-`params` 为本次请求入参回显；`columns` 与每行 `rows` 的键一致。同花顺热榜直连仍返回 `source` / `raw` 等原结构（见上表）。
+自选股 / 持仓从 `~/.quant/state/optional.jsonl`、`holding.jsonl` 读取并 enrich。
 
-HTTP **502** 通常表示上游抓取失败或返回异常，响应体中的 `detail` 为错误信息字符串。
+`data/` 目录下为各接口样例，可用于离线阅读字段结构。
+
+### 其他行情 API
+
+| 说明 | 路径 |
+|------|------|
+| 东财人气榜 | `/api/v1/hot/eastmoney/popularity` |
+| 同花顺热榜 | `/api/v1/hot/ths` |
+| 东财个股资讯 | `/api/v1/news/em?symbol=` |
+
+完整列表见 <http://127.0.0.1:8085/docs>。
 
 ---
 
-## 与 OpenClaw 集成思路
+## 七、常见问题
 
-将本服务作为本地或内网 HTTP 服务启动后，在 OpenClaw（或任意自动化流程）中通过 `GET` 请求上述路径拉取 JSON，再进入你的规则引擎或 LLM 工具链。建议：
+**Q：quant 报连接失败？**  
+A：先确认 `python -m app` 已启动，且 `quant/config.py` 中 `BASE_URL` 与 API 端口一致（默认 `http://localhost:8085`）。
 
-- 对榜单类接口做请求间隔与缓存，避免触发源站限流；
-- 生产环境为服务配置反向代理与鉴权（本仓库默认无认证，仅适合本机或可信网络）。
+**Q：旧版 `~/.quant/optional.jsonl` 在哪？**  
+A：已改为 `~/.quant/state/optional.jsonl`，请手动迁移或重新跑晚间复盘生成自选。
+
+**Q：ML 提示样本不足？**  
+A：多运行若干交易日，确保每天晚间复盘产生 `daily/{date}/derived/scores_watchlist.json`。
+
+**Q：`.env` 端口不生效？**  
+A：使用 `python -m app` 启动；裸 `uvicorn` 需显式 `--port`，见 `.env.example` 说明。
 
 ---
 
-## 本地快速自检
+## 八、本地自检
 
 ```powershell
-# 健康检查
 curl http://127.0.0.1:8085/health
-
-# 东财人气榜（需服务已启动且网络正常）
-curl http://127.0.0.1:8085/api/v1/hot/eastmoney/popularity
+curl http://127.0.0.1:8085/api/v1/quant/market/pre_market
+python -m quant.ml calibrate --method grid --dry-run
 ```
-
-亦可在 Python 中使用 `fastapi.testclient.TestClient` 做无端口集成测试。
 
 ---
 
 ## 许可证与致谢
 
-- 项目代码以你方仓库许可为准。  
-- 数据版权归各数据提供方所有；感谢 [AKShare](https://github.com/akfamily/akshare) 项目维护者。
+- 项目代码以仓库许可为准。  
+- 数据版权归各提供方所有；感谢 [AKShare](https://github.com/akfamily/akshare)。

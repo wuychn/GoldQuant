@@ -1,0 +1,70 @@
+# =============================================================================
+# 评分引擎配置（quant/config/scoring.yml）
+# =============================================================================
+# 加载优先级（后者覆盖前者）：
+#   1. 本文件（包内默认）
+#   2. ~/.quant/config/scoring.yml（用户手改）
+#   3. ~/.quant/config/ml_calibration.yml（ML 离线校准，apply: true 时）
+#
+# 总分计算：仅统计 enabled=true 的维度；总分 = Σ(维度得分×权重) / Σ(权重)
+# 权重之和不必等于 100，引擎会自动归一化。
+# =============================================================================
+
+# --- 决策阈值（0~100）---
+# 晚间复盘加自选：总分 >= watchlist_threshold
+watchlist_threshold: 65
+# 盘前/盘中买入：总分 >= buy_threshold（且通过硬门禁）
+buy_threshold: 72
+# 持仓卖出（去弱留强）：总分 < sell_threshold 时考虑卖出（另受止损/破位规则约束）
+sell_threshold: 45
+
+# --- 晚间候选池来源 ---
+candidate:
+  # 同花顺人气榜取前 N 名参与评分
+  popularity_limit: 20
+  # 是否合并「涨停统计.今日涨停」中的标的（与人气榜去重）
+  include_zt_pool: true
+
+# --- 评分维度 ---
+# enabled: 是否参与总分；weight: 相对权重
+# 预留维度（minute_bars / us_overnight / stock_news）API 未就绪时可保持 false
+dimensions:
+  market_index:       # 大盘指数（上证涨跌幅等）
+    enabled: true
+    weight: 12
+  market_sentiment:   # 赚钱效应（涨跌家数、涨停家数）
+    enabled: true
+    weight: 10
+  market_fund_flow:   # 大盘资金流（主力净流入方向）
+    enabled: true
+    weight: 8
+  zt_count:           # 涨停家数（市场热度）
+    enabled: true
+    weight: 8
+  zt_height:          # 个股连板数 vs 市场高度（龙头属性）
+    enabled: true
+    weight: 10
+  concept_theme:      # 所属概念是否命中当日主线（涨幅/资金榜 Top10）
+    enabled: true
+    weight: 12
+  stock_history:      # 个股近 N 日走势（阳线占比、区间涨跌）
+    enabled: true
+    weight: 8
+  stock_fund_flow:    # 个股资金流净额
+    enabled: true
+    weight: 8
+  popularity_rank:    # 同花顺人气排名（越小越好）
+    enabled: true
+    weight: 10
+  technical:          # 技术指标（MA 多头、MACD 等，依赖 API enrich）
+    enabled: true
+    weight: 8
+  minute_bars:        # 分钟 K 线（预留，当前 API 未下发）
+    enabled: false
+    weight: 6
+  us_overnight:       # 隔夜美股（预留）
+    enabled: false
+    weight: 4
+  stock_news:         # 个股新闻情绪（预留）
+    enabled: false
+    weight: 4
