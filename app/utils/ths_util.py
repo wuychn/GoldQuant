@@ -9,7 +9,7 @@ from akshare.stock_feature.stock_fund_flow import _get_file_content_ths
 from fastapi import HTTPException
 
 from app.api.deps import SettingsDep
-from app.utils.common_util import format_percent, sort_by_field_desc_and_limit, filter_exclude_by_key
+from app.utils.common_util import format_percent, sort_by_field_and_limit, filter_exclude_by_key
 from app.utils.dataframe import dataframe_to_records
 
 
@@ -151,13 +151,13 @@ async def stock_skyrocket(settings):
     return result
 
 
-async def stock_fund_flow_concept(type_, sort_key):
+async def stock_fund_flow_concept(type_, sort_key, desc=True):
     """
     同花顺概念资金流
     """
     records = dataframe_to_records(ak.stock_fund_flow_concept(symbol=type_))
-    return sort_by_field_desc_and_limit(filter_exclude_by_key(records, '行业', ['融资融券', '深股通', '沪股通']),
-                                        sort_key, 10)
+    return sort_by_field_and_limit(filter_exclude_by_key(records, '行业', ['融资融券', '深股通', '沪股通']),
+                                        sort_key, 10, desc=desc)
 
 
 async def zdfb_ths():

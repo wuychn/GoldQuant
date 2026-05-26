@@ -89,10 +89,10 @@ def _row_date_yyyymmdd(row: dict, *, date_key: str = "日期") -> str | None:
 
 
 def _rows_last_n_trade_days(
-    rows: list,
-    *,
-    n: int,
-    date_key: str = "日期",
+        rows: list,
+        *,
+        n: int,
+        date_key: str = "日期",
 ) -> list:
     """锚日为行中最大 ``date_key``；保留 [第 n-1 个交易日, 锚日] 闭区间（含锚日共至多 n 个交易日）。"""
     if not isinstance(rows, list) or not rows or n <= 0:
@@ -144,10 +144,12 @@ def _finalize_quant_payload(obj: Any) -> Any:
     return _round_floats_for_api(_normalize_quant_datetimes(cloned))
 
 
-def _merge_concept_boards(jzf: list | None, jzj: list | None, *, limit: int = 10) -> dict[str, Any]:
+def _merge_concept_boards(jzf: list | None, jzj: list | None, jdf: list | None, jzjlc: list | None, *, limit: int = 10) -> dict[str, Any]:
     return {
         "涨幅榜": (jzf or [])[:limit],
+        "跌幅榜": (jdf or [])[:limit],
         "资金流入榜": (jzj or [])[:limit],
+        "资金流出榜": (jzjlc or [])[:limit],
     }
 
 
@@ -214,11 +216,11 @@ async def zjl_(n: int) -> list | None:
         return None
 
 
-async def _stock_fund_flow_concept_or_none(context: str, rank_by: str):
+async def _stock_fund_flow_concept_or_none(context: str, sort_key: str, desc=True):
     try:
-        return await stock_fund_flow_concept("即时", rank_by)
+        return await stock_fund_flow_concept("即时", sort_key, desc)
     except Exception:
-        _log_api_error(f"{context} rank_by={rank_by!r}")
+        _log_api_error(f"{context} sort_key={sort_key!r}")
         return None
 
 
@@ -251,10 +253,10 @@ def _hist(settings, symbol):
 
 
 async def _enrich_stock_list(
-    settings: SettingsDep,
-    fetch_stocks: Callable[..., Awaitable[list]],
-    *,
-    include_pre_snapshot: bool = False,
+        settings: SettingsDep,
+        fetch_stocks: Callable[..., Awaitable[list]],
+        *,
+        include_pre_snapshot: bool = False,
 ) -> list:
     out: list = []
     try:
@@ -661,10 +663,72 @@ async def during_market(settings: SettingsDep, background_tasks: BackgroundTasks
 
 
 @router.get(
-    "/quant/market/post_market",
+    "/quant/market/post_market_lunch",
     response_model=Response,
-    summary="盘后",
-    description="盘后",
+    summary="午间复盘",
+    description="午间复盘",
+)
+async def post_market_lunch(settings: SettingsDep) -> Response:
+    """
+    盘后
+    """
+    # 大盘指数
+    dpzs = await _dpzs()
+
+    # 赚钱效应
+    zqxy_ = await _zqxy()
+
+    # 涨幅前十概念
+    jrzfqsgn = await _stock_fund_flow_concept_or_none(
+        "涨幅前十概念 | ths.stock_fund_flow_concept",
+        "行业-涨跌幅",
+    )
+
+    # 跌幅前十概念
+    jrdfqsgn = await _stock_fund_flow_concept_or_none(
+        "涨幅前十概念 | ths.stock_fund_flow_concept",
+        "行业-涨跌幅",
+        False
+    )
+
+    # 资金流入前十概念
+    jrzjlrqsgn = await _stock_fund_flow_concept_or_none(
+        "资金流入前十概念 | ths.stock_fund_flow_concept",
+        "净额",
+    )
+
+    # 资金流出前十概念
+    jrzjlcqsgn = await _stock_fund_flow_concept_or_none(
+        "资金流入前十概念 | ths.stock_fund_flow_concept",
+        "净额",
+        False
+    )
+
+    # 合并涨幅和资金流入
+    gn_bk = _merge_concept_boards(jrzfqsgn, jrzjlrqsgn, jrdfqsgn, jrzjlcqsgn)
+
+    # 涨停概况
+    zttj = await _ztgk(True)
+
+    # 自选、持仓
+    zxg_, ccg_ = await _enrich_optional_and_holding(settings)
+
+    result = {
+        "大盘指数": dpzs,
+        "赚钱效应": zqxy_,
+        "概念板块": gn_bk,
+        "涨停统计": zttj,
+        "自选股": zxg_,
+        "持仓股": ccg_,
+    }
+    return Response(data=_finalize_quant_payload(result))
+
+
+@router.get(
+    "/quant/market/post_market_evening",
+    response_model=Response,
+    summary="晚间复盘",
+    description="晚间复盘",
 )
 async def post_market(settings: SettingsDep, background_tasks: BackgroundTasks) -> Response:
     """
@@ -685,14 +749,28 @@ async def post_market(settings: SettingsDep, background_tasks: BackgroundTasks) 
         "行业-涨跌幅",
     )
 
+    # 跌幅前十概念
+    jrdfqsgn = await _stock_fund_flow_concept_or_none(
+        "跌幅前十概念 | ths.stock_fund_flow_concept",
+        "行业-涨跌幅",
+        False
+    )
+
     # 资金流入前十概念
     jrzjlrqsgn = await _stock_fund_flow_concept_or_none(
         "资金流入前十概念 | ths.stock_fund_flow_concept",
-        "流入资金",
+        "净额",
+    )
+
+    # 资金流出前十概念
+    jrzjlcqsgn = await _stock_fund_flow_concept_or_none(
+        "资金流出前十概念 | ths.stock_fund_flow_concept",
+        "净额",
+        False
     )
 
     # 合并涨幅和资金流入
-    gn_bk = _merge_concept_boards(jrzfqsgn, jrzjlrqsgn)
+    gn_bk = _merge_concept_boards(jrzfqsgn, jrzjlrqsgn, jrdfqsgn, jrzjlcqsgn)
 
     # 涨停概况
     zttj = await _ztgk(True)

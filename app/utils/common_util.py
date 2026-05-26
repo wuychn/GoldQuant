@@ -92,7 +92,7 @@ def today_before(days):
     return day5.strftime("%Y%m%d")
 
 
-def sort_by_field_desc_and_limit(
+def sort_by_field_and_limit(
         data_list: List[Any],
         field_name: str,
         limit: int = 10,
@@ -123,7 +123,7 @@ def sort_by_field_desc_and_limit(
             # 如果是普通对象 → 用属性获取
             return getattr(item, field_name, 0)
 
-    # 降序排序
+    # 排序
     sorted_list = sorted(
         data_list,
         key=get_sort_key,

@@ -2,7 +2,7 @@ import json
 
 import akshare as ak
 
-from app.utils.common_util import sort_by_field_desc_and_limit, today, get_val, set_field_value, list_to_dict, \
+from app.utils.common_util import sort_by_field_and_limit, today, get_val, set_field_value, list_to_dict, \
     get_n_workdays_ago
 from app.utils.dataframe import dataframe_to_records
 
@@ -77,7 +77,7 @@ def ztgc_with_date(trade_date):
     for item in records:
         val = get_val(item, "涨停统计", '')
         set_field_value(item, "涨停统计", val.replace("/", "天") + "板")
-    return sort_by_field_desc_and_limit(records, "连板数", limit=1000)
+    return sort_by_field_and_limit(records, "连板数", limit=1000)
 
 
 def ztgc(filter_first: bool = False):
@@ -95,7 +95,7 @@ def ztgc(filter_first: bool = False):
         val = get_val(item, "涨停统计", '')
         set_field_value(item, "涨停统计", val.replace("/", "天") + "板")
 
-    return sort_by_field_desc_and_limit(filtered_records, "连板数", limit=1000)
+    return sort_by_field_and_limit(filtered_records, "连板数", limit=1000)
 
 
 def zj(symbol):
