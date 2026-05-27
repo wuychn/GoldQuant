@@ -16,6 +16,8 @@ dependencies = [
     "pandas==3.0.2",
     "pydantic-settings>=2.2.0,<3",
     "pyyaml>=6.0",
+    "apscheduler>=3.10,<4",
+    "tzdata>=2024.1",
 ]
 
 [project.optional-dependencies]

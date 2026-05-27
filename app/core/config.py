@@ -12,6 +12,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _ENV_FILE = _PROJECT_ROOT / ".env"
 
+# 量化定时任务默认「盘中」触发时点（comma HH:MM，可通过 `GOLDQUANT_QUANT_SCHED_DURING_MARKET_TIMES` 覆盖）
+_QUANT_SCHED_DEFAULT_DURING_TIMES = (
+    "09:37,09:47,09:57,10:07,10:17,10:27,10:37,10:47,10:57,"
+    "11:07,11:17,11:27,13:07,13:17,13:27,13:37,13:47,13:57,"
+    "14:07,14:17,14:27,14:37,14:47,14:57"
+)
+
 
 def _dotenv_get(env_path: Path, key: str) -> str | None:
     """从项目根 ``.env`` 读取 ``KEY=value``（单行；去除引用号）。"""
@@ -76,6 +83,27 @@ class Settings(BaseSettings):
     HOST: str = "0.0.0.0"
     PORT: int = 8085
     UVICORN_RELOAD: bool = True
+
+    #: 是否在启动 FastAPI 时挂载量化流水线定时任务（APScheduler，上海时区等见下项）。
+    #: 注意：勿在多 worker（`uvicorn --workers N`）下每台进程启用，否则会重复执行任务。
+    QUANT_SCHEDULER_ENABLED: bool = True
+    #: IANA 时区名，决定 Cron 触发本地钟点（A 股建议 `Asia/Shanghai`）。
+    QUANT_SCHED_TIMEZONE: str = "Asia/Shanghai"
+    #: 新闻任务：在哪些「整点小时」执行（逗号分隔 0–23），配合 `QUANT_SCHED_NEWS_MINUTE`。
+    QUANT_SCHED_NEWS_HOURS: str = "7,8,9,12,16,17,18,19,20,21,22,23"
+    QUANT_SCHED_NEWS_MINUTE: int = Field(default=0, ge=0, le=59)
+    #: 盘前（`pre_market`），仅工作日历命中时才会真正拉起子进程。
+    QUANT_SCHED_PRE_MARKET_TIME: str = "09:25"
+    #: 盘中（`during_market`）多个触发点，`HH:MM` 逗号分隔。
+    QUANT_SCHED_DURING_MARKET_TIMES: str = _QUANT_SCHED_DEFAULT_DURING_TIMES
+    #: 午间复盘（`post_market_lunch`），仅交易日（`is_real_workday_cn`）执行。
+    QUANT_SCHED_POST_MARKET_LUNCH_TIME: str = "12:00"
+    #: 晚间复盘（`post_market_evening`）；工作日当晚 + 假日前一夜（详见 orchestrator）。
+    QUANT_SCHED_POST_MARKET_EVENING_TIME: str = "21:30"
+    #: `python -m quant` 子进程超时（秒）；``None`` 表示不限制（长耗时拉数/LLM 时慎用上限）。
+    QUANT_SCHED_SUBPROCESS_TIMEOUT_SEC: float | None = None
+    #: 错过触发窗口后的仍可执行宽限（秒）。
+    QUANT_SCHED_MISFIRE_GRACE_SEC: int = Field(default=600, ge=60, le=86400)
 
     # CORS：逗号分隔的源列表，或单独一个 `*` 表示全部（此时不可与凭证共用）
     CORS_ORIGINS: str = "*"

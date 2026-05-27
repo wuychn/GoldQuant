@@ -9,9 +9,9 @@ from __future__ import annotations
 import json
 import sys
 from dataclasses import asdict
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
-import requests
+from app.utils.common_util import is_real_workday_cn
 
 from quant.data_fetch import fetch_mode, unwrap_payload
 from quant.constants import STRATEGY_NAME
@@ -254,25 +254,26 @@ def process_evening_review(raw: dict) -> str:
     return narrative.rstrip() + "\n\n" + optional_section
 
 
-def is_trading_day() -> bool:
-    today = datetime.now().strftime("%Y-%m-%d")
-    try:
-        resp = requests.get(f"https://timor.tech/api/holiday/info/{today}", timeout=10)
-        resp.raise_for_status()
-        result = resp.json()
-        if result.get("code") == 0:
-            t = result.get("type", {})
-            return (t.get("type") if isinstance(t, dict) else None) in (0, 2)
-    except Exception:
-        pass
-    return True
+def pipeline_allowed_for_mode(mode: str, *, on: date | None = None) -> bool:
+    """是否应运行该模式的完整流水线（与 FastAPI 定时任务一致，基于 `is_real_workday_cn`）。
+
+    - 新闻：始终允许。
+    - 盘前/盘中/午间：仅当日为大陆真实工作日。
+    - 晚间复盘：当日为工作日，或「当日非工作日但次日为工作日」（节假日前夜备盘口径）。
+    """
+    if mode == "news":
+        return True
+    d = on if on is not None else datetime.now().date()
+    if mode == "post_market_evening":
+        return is_real_workday_cn(d) or is_real_workday_cn(d + timedelta(days=1))
+    return is_real_workday_cn(d)
 
 
 def run_mode(mode: str, timestamp: str) -> None:
     """单次运行完整流水线：fetch → process → save → feishu。"""
     label = _MODE_LABELS.get(mode, mode)
-    if mode != "news" and not is_trading_day():
-        print("今日非交易日，跳过")
+    if not pipeline_allowed_for_mode(mode):
+        print("当前日期/模式不满足交易日历条件，跳过")
         return
 
     try:

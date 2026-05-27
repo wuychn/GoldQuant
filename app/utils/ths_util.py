@@ -1,6 +1,7 @@
 import asyncio
 import json
 from typing import Any
+from urllib.parse import urlparse
 
 import akshare as ak
 import httpx
@@ -73,6 +74,60 @@ async def call_ths_api_with_header(
     try:
         async with httpx.AsyncClient(**client_kw) as client:
             r = await client.get(url, headers=headers)
+            r.raise_for_status()
+            return r.json()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+IWENCAI_GET_ROBOT_DATA_URL = (
+    "https://www.iwencai.com/unifiedwap/unified-wap/v2/result/get-robot-data"
+)
+
+
+async def call_ths_api_with_header_var(
+        question: str,
+):
+    """
+    以 application/x-www-form-urlencoded 调用同花顺/问财类 POST 接口（如 get-robot-data）。
+    ``question`` 为选股/查询条件，其余表单字段与抓包一致。
+    """
+    host = urlparse(IWENCAI_GET_ROBOT_DATA_URL).netloc or "www.iwencai.com"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "Accept-Encoding": "gzip, deflate, br, zstd",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8,en-US;q=0.7,ko;q=0.6",
+        "Connection": "keep-alive",
+        "Hexin-V": 'Ayc8gEtLASi22YWkHJ73t-SStlD0rPuOVYB_AvmUQ7bd6EkOAXyL3mVQD1cK',
+        "Host": host,
+        "Referer": 'https://www.iwencai.com/screener/result?w=002580&querytype=stock&sign=1779889485047',
+        "Sec-Ch-Ua": '"Chromium";v="148", "Google Chrome";v="148", "Not/A)Brand";v="99"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"Windows"',
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-origin",
+        "x-requested-with": "XMLHttpRequest",
+        "Cookie": "chat_bot_session_id=b6d35072ac2df7101c3fbede83ad5b01; other_uid=Ths_iwencai_Xuangu_o372z7fcz7cr9tu3c66lik5zosao8jnu; cid=3905006b0fe74dc46a98b9d8271929781779284745; _clck=n1hp6p%7C2%7Cg6e%7C0%7C0; _clsk=v3j23g4p99nj%7C1779889499319%7C7%7C1%7C; v=A56Fr7pYeN_I9qy7g_X-ACVR7z_lX2MC9CAWqkglC43dRzDhsO-y6cSzZlAb"
+    }
+    form_data = {
+        "source": "Ths_iwencai_Xuangu",
+        "version": "2.0",
+        "query_area": "",
+        "block_list": "",
+        "add_info": '{"urp":{"scene":1,"company":1,"business":1},"contentType":"json","searchInfo":true}',
+        "question": question,
+        "perpage": "50",
+        "page": "1",
+        "secondary_intent": "stock",
+        "log_info": '{"input_type":"click"}',
+        "rsh": "Ths_iwencai_Xuangu_o372z7fcz7cr9tu3c66lik5zosao8jnu",
+    }
+    client_kw: dict[str, Any] = {"timeout": 30}
+    try:
+        async with httpx.AsyncClient(**client_kw) as client:
+            r = await client.post(IWENCAI_GET_ROBOT_DATA_URL, headers=headers, data=form_data)
             r.raise_for_status()
             return r.json()
     except Exception as exc:
@@ -178,6 +233,15 @@ async def ggzjl(symbol):
     return await call_ths_api_with_header(f'https://stockpage.10jqka.com.cn/spService/{symbol}/Funds/realFunds/free/1/')
 
 
+async def wcxg(question: str):
+    """问财 unified-wap get-robot-data（选股机器人数据）。"""
+    return await call_ths_api_with_header_var(
+        IWENCAI_GET_ROBOT_DATA_URL,
+        referer="https://www.iwencai.com/",
+        question=question,
+    )
+
+
 if __name__ == "__main__":
     # 个股资金流
     # ggzjl = asyncio.run(stock_fund_flow_individual(symbol='600519', type_='即时'))
@@ -187,5 +251,8 @@ if __name__ == "__main__":
     ## 即时：按涨跌幅排名
     # gnzjl = asyncio.run(stock_fund_flow_concept('即时', '行业-涨跌幅'))
     ## 3日，按资金流入排名
-    gnzjl = asyncio.run(stock_fund_flow_concept('3日排行', '流入资金'))
+    # gnzjl = asyncio.run(stock_fund_flow_concept('3日排行', '流入资金'))
+    # print(json.dumps(gnzjl, ensure_ascii=False, indent=2))
+
+    gnzjl = asyncio.run(call_ths_api_with_header_var('600584'))
     print(json.dumps(gnzjl, ensure_ascii=False, indent=2))
