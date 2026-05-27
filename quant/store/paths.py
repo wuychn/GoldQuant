@@ -6,7 +6,7 @@
   state/     程序读写源（JSON/JSONL）
   views/     人类可读 MD（由 state 自动生成）
   daily/     按交易日归档（raw/derived/trades/review）
-  config/    用户 scoring.yml、gates.yml、ml_calibration.yml
+  config/    用户 quant.yml、ml_calibration.yml
   memory/    新闻摘要、经验教训
   archive/   跨日汇总（预留）
 """

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from quant.constants import STRATEGY_NAME
+
 
 def render_optional_md(rows: list[dict]) -> str:
     lines = ["# 自选股", ""]
@@ -11,7 +13,7 @@ def render_optional_md(rows: list[dict]) -> str:
     for i, r in enumerate(rows, 1):
         name = r.get("股票名称", "")
         code = r.get("股票代码", "")
-        tag = r.get("战法", "趋势")
+        tag = r.get("战法", STRATEGY_NAME)
         score = r.get("评分")
         reason = r.get("加入自选原因", "")
         score_part = f" 评分{score}" if score is not None else ""

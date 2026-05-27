@@ -5,7 +5,7 @@
     python -m quant.ml calibrate --method grid --apply
 
 输出文件：~/.quant/config/ml_calibration.yml
-生效：下次 load_scoring_config() 时合并（apply: true）。
+生效：apply: true 时，下次 load_scoring_config / load_gates_config 合并进 quant.yml 对应段。
 """
 
 from __future__ import annotations
@@ -17,10 +17,11 @@ from typing import Any
 
 import yaml
 
-from quant.config import load_scoring_config, reload_config_cache
+from quant.config import load_gates_config, load_scoring_config, reload_config_cache
 from quant.ml.dataset import load_score_samples
 from quant.ml.optimizers import (
     optimize_bayesian,
+    optimize_confirmation_intervals,
     optimize_thresholds_grid,
     optimize_weights_lightgbm,
     optimize_weights_linear,
@@ -37,6 +38,7 @@ class CalibrationResult:
     generated_at: str
     thresholds: dict[str, float] = field(default_factory=dict)
     dimension_weights: dict[str, float] = field(default_factory=dict)
+    confirmation: dict[str, Any] = field(default_factory=dict)
     metrics: dict[str, Any] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
 
@@ -52,6 +54,8 @@ class CalibrationResult:
             out["thresholds"] = self.thresholds
         if self.dimension_weights:
             out["dimension_weights"] = self.dimension_weights
+        if self.confirmation:
+            out["confirmation"] = self.confirmation
         return out
 
 
@@ -92,6 +96,7 @@ def calibrate(method: str = "grid", *, min_samples: int = 20) -> CalibrationResu
     """
     ensure_layout()
     cfg = load_scoring_config()
+    gates_cfg = load_gates_config()
     samples = load_score_samples(min_samples=min_samples)
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     result = CalibrationResult(method=method, sample_count=len(samples), generated_at=now)
@@ -149,6 +154,7 @@ def calibrate(method: str = "grid", *, min_samples: int = 20) -> CalibrationResu
     else:
         raise ValueError(f"未知校准方法: {method}，可选 grid|linear|lightgbm|bayesian")
 
+    result.confirmation = optimize_confirmation_intervals(samples, base_cfg=gates_cfg)
     return result
 
 

@@ -54,6 +54,8 @@ def main() -> None:
             print("建议阈值:", result.thresholds)
         if result.dimension_weights:
             print("建议维度权重:", result.dimension_weights)
+        if result.confirmation:
+            print("建议三确认间隔:", result.confirmation)
         if result.metrics:
             print("指标:", result.metrics)
         for note in result.notes:

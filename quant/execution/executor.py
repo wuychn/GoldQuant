@@ -5,7 +5,7 @@
 - 先卖后买（同批信号内）
 - A 股 T+1：当日买入的代码不可当日卖出
 - 100 股整数倍；可用资金不足则跳过买入
-- 受 trading_hours 连续竞价时段约束（gates.yml 可关闭）
+- 受 trading_hours 连续竞价时段约束（quant.yml gates.trading 可关闭）
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from quant.store.state import (
     save_account,
     save_holdings,
 )
-from quant.trading_hours import is_a_share_continuous_auction_window
+from quant.trading_hours import is_a_share_continuous_auction_window, is_late_session_for_trend_sell
 
 _CASH_EPS = 1e-6
 
@@ -62,6 +62,9 @@ def execute_signals(signals: list[TradeSignal]) -> list[ExecutedTrade]:
             continue
         if signal.code in t1_locked:
             print(f"卖出跳过 T+1：{signal.name}({signal.code})")
+            continue
+        if signal.sell_type not in ("止损", "时间止损") and not is_late_session_for_trend_sell():
+            print(f"卖出跳过（等待神奇2点30最终确认）：{signal.name}({signal.code}) {signal.sell_type}")
             continue
         h = holdings[i]
         qty = int(h.get("持仓股数", 0) or 0)

@@ -1,17 +1,7 @@
-"""五模式编排：拉数 → 评分/信号 → 落盘 → LLM 叙述 → 飞书。
+"""五模式编排：拉数 → 评分/三确认信号 → 落盘 → LLM 叙述 → 飞书。
 
-模式职责
---------
-news                 LLM 新闻解读，不写自选/持仓
-pre_market           评分买入 + LLM 盘前叙述 + 「四、操作」
-during_market        买卖信号 + LLM 盘中叙述 + 「五、操作」
-post_market_lunch    LLM 午间复盘，**不更新自选**
-post_market_evening  评分加自选 + LLM 晚间复盘 + 「九、自选更新」
-
-决策与叙述分离：买卖/自选由 ScoringEngine + gates + executor 完成；
-LLM 只生成正文段落，不参与下单。
-
-ML 校准不在此模块自动运行，需手动 ``python -m quant.ml calibrate``。
+策略：仅主升浪战法（主线龙头 + 均线发散）。
+买卖：原始信号须三确认后才 execute_signals（见 signals/confirmation.py）。
 """
 
 from __future__ import annotations
@@ -24,6 +14,7 @@ from datetime import datetime
 import requests
 
 from quant.data_fetch import fetch_mode, unwrap_payload
+from quant.constants import STRATEGY_NAME
 from quant.execution.executor import ExecutedTrade, execute_signals
 from quant.gates.rules import check_global_gates
 from quant.narrative.llm import call_llm
@@ -41,8 +32,7 @@ from quant.push.feishu import get_token, send_msg
 from quant.push.format import format_push_message
 from quant.scoring.context import ScoreContext, build_market_state
 from quant.scoring.engine import ScoringEngine
-from quant.signals.buy import generate_buy_signals
-from quant.signals.sell import generate_sell_signals
+from quant.signals.pipeline import generate_confirmed_signals
 from quant.store.snapshot import save_derived, save_raw, save_review
 from quant.store.state import (
     append_lesson,
@@ -114,7 +104,7 @@ def _score_summary_lines(scores: list) -> list[str]:
     lines = []
     for s in sorted(scores, key=lambda x: x.total, reverse=True)[:10]:
         mark = "✓" if s.passed_threshold else "×"
-        lines.append(f"· {mark} {s.name}({s.code}) {s.total:.1f}分 [{s.strategy}]")
+        lines.append(f"· {mark} {s.name}({s.code}) {s.total:.1f}分 [{STRATEGY_NAME}]")
     return lines
 
 
@@ -134,9 +124,9 @@ def _update_watchlist_evening(ctx: ScoreContext) -> tuple[list[dict], str]:
         row = {
             "股票代码": s.code,
             "股票名称": s.name,
-            "战法": s.strategy,
+            "战法": STRATEGY_NAME,
             "评分": round(s.total, 2),
-            "加入自选原因": f"评分{s.total:.1f}达标；{s.strategy}",
+            "加入自选原因": f"评分{s.total:.1f}；主线主升浪龙头",
         }
         added.append(row)
         codes.add(s.code)
@@ -179,17 +169,25 @@ def process_pre_market(raw: dict) -> str:
     ctx = ScoreContext.from_payload(payload, mode="pre_market")
     save_derived("market_state.json", ctx.market_state)
 
-    buy_signals = generate_buy_signals(ctx, mode="pre_market")
-    executed = execute_signals(buy_signals)
+    raw_buy, raw_sell, executable, audit = generate_confirmed_signals(ctx, mode="pre_market")
+    executed = execute_signals(executable)
 
     narrative = call_llm(
         prompt_pre_market(),
         build_user_msg(payload, extra=f"\n【评分门禁】\n{check_global_gates(ctx).summary()}"),
         max_tokens=8000,
     )
-    no_trade = "" if executed else _no_trade_reason("pre_market", ctx, len(buy_signals), 0)
+    no_trade = "" if executed else _no_trade_reason("pre_market", ctx, len(raw_buy), 0)
     ops = _build_operation_section(executed, section="四、操作", no_trade_detail=no_trade)
-    save_derived("signals.json", {"buy": [asdict(s) for s in buy_signals], "sell": []})
+    save_derived(
+        "signals.json",
+        {
+            "raw_buy": [asdict(s) for s in raw_buy],
+            "raw_sell": [],
+            "executable": [asdict(s) for s in executable],
+            "confirmation_audit": audit,
+        },
+    )
     return narrative.rstrip() + "\n\n" + ops
 
 
@@ -198,16 +196,20 @@ def process_during_market(raw: dict) -> str:
     ctx = ScoreContext.from_payload(payload, mode="during_market")
     save_derived("market_state.json", ctx.market_state)
 
-    buy_signals = generate_buy_signals(ctx, mode="during_market")
-    sell_signals = generate_sell_signals(ctx)
-    executed = execute_signals(sell_signals + buy_signals)
+    raw_buy, raw_sell, executable, audit = generate_confirmed_signals(ctx, mode="during_market")
+    executed = execute_signals(executable)
 
     engine = ScoringEngine()
     holding_scores = engine.score_many(ctx, payload.get("持仓股") or get_optional())
     save_derived("scores_holding.json", [s.to_dict() for s in holding_scores])
     save_derived(
         "signals.json",
-        {"buy": [asdict(s) for s in buy_signals], "sell": [asdict(s) for s in sell_signals]},
+        {
+            "raw_buy": [asdict(s) for s in raw_buy],
+            "raw_sell": [asdict(s) for s in raw_sell],
+            "executable": [asdict(s) for s in executable],
+            "confirmation_audit": audit,
+        },
     )
 
     narrative = call_llm(
@@ -216,7 +218,7 @@ def process_during_market(raw: dict) -> str:
         max_tokens=7000,
     )
     no_trade = "" if executed else _no_trade_reason(
-        "during_market", ctx, len(buy_signals), len(sell_signals)
+        "during_market", ctx, len(raw_buy), len(raw_sell)
     )
     ops = _build_operation_section(executed, section="五、操作", no_trade_detail=no_trade)
     return narrative.rstrip() + "\n\n" + ops

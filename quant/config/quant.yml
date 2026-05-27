@@ -1,0 +1,168 @@
+# =============================================================================
+# GoldQuant 量化统一配置
+# =============================================================================
+# 策略：仅主升浪战法
+#
+# 加载顺序
+#   1. quant/config/quant.yml（本文件，包内默认）
+#   2. ~/.quant/config/quant.yml（用户覆盖，deep merge）
+#   3. ~/.quant/config/ml_calibration.yml（ML 离线校准，apply: true 时生效）
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# scoring — 评分引擎（100 分制，与硬门禁分离）
+# -----------------------------------------------------------------------------
+scoring:
+
+  # 总分阈值：各场景最低通过分
+  watchlist_threshold: 65   # 晚间复盘加自选
+  buy_threshold: 72         # 产生买入原始信号
+  sell_threshold: 45        # 持仓「去弱留强」：低于此分可触发卖出
+
+  # 晚间候选池构建（pool/builder.py）
+  candidate:
+    popularity_limit: 20    # 同花顺人气榜取前 N 只
+    include_zt_pool: false  # 是否并入当日涨停池（主升浪默认不依赖）
+    require_main_wave: true # 加自选须 main_wave 维度达标
+
+  # 评分维度：enabled 关闭则不参与；weight 为加权系数
+  dimensions:
+    main_wave:              # 主升浪：主线龙头 + 均线发散 + 买点形态
+      enabled: true
+      weight: 22
+    concept_theme:          # 个股概念与确认主线的共振
+      enabled: true
+      weight: 14
+    popularity_rank:        # 同花顺人气排名
+      enabled: true
+      weight: 12
+    technical:              # MACD、均线等技术指标
+      enabled: true
+      weight: 12
+    stock_history:          # 近 N 日 K 线趋势
+      enabled: true
+      weight: 10
+    stock_fund_flow:        # 个股资金流
+      enabled: true
+      weight: 8
+    market_index:           # 大盘指数涨跌
+      enabled: true
+      weight: 8
+    market_sentiment:       # 赚钱效应、涨停家数等
+      enabled: true
+      weight: 8
+    market_fund_flow:       # 大盘资金流
+      enabled: true
+      weight: 6
+    zt_count:               # 涨停家数（主升浪默认关闭）
+      enabled: false
+      weight: 4
+    zt_height:              # 连板高度（主升浪默认关闭）
+      enabled: false
+      weight: 4
+    minute_bars:            # 分钟 K 形态
+      enabled: false
+      weight: 4
+    us_overnight:           # 美股隔夜
+      enabled: false
+      weight: 4
+    stock_news:             # 个股新闻情绪
+      enabled: false
+      weight: 4
+
+# -----------------------------------------------------------------------------
+# gates — 硬门禁 + 战法参数 + 三确认（不可被 LLM 修改）
+# -----------------------------------------------------------------------------
+gates:
+
+  # 模拟成交时段校验（executor.py）
+  trading:
+    time_validation_enabled: false  # true=仅连续竞价时段允许成交
+
+  # 可交易标的池
+  symbol_pool:
+    prefixes: ["60", "00", "30"]    # 沪主/深主/创业板
+    exclude_st: true                # 排除 ST
+    min_listing_days: 60            # 最短上市天数（预留）
+
+  # 全局熔断：指数大跌、连续缩量
+  circuit_breaker:
+    index_drop_pct: -2.0            # 上证涨跌幅 ≤ 此值 → 禁止新开仓
+    shrink_volume_days: 3           # 连续缩量观察天数
+    shrink_volume_ratio: 0.8        # 末量/首量 < 此比例视为缩量
+
+  daily_loss_limit_pct: -3.0        # 当日已实现盈亏占总资产 ≤ 此值 → 禁止新开仓
+  stoploss_cooldown_days: 3         # 止损卖出后 N 日内不再买同代码
+
+  # 三确认：同 code+方向+signal_kind 连续 N 次信号才 execute
+  confirmation:
+    required_count: 3
+    # 按 signal_kind 覆盖 min/max 间隔（分钟）
+    by_kind:
+      破5日线:
+        min_interval_minutes: 15
+        max_interval_minutes: 120
+      趋势衰竭:
+        min_interval_minutes: 30
+        max_interval_minutes: 4320  # 72h，允许多日逐步确认
+    # 默认间隔（按市场状态 强势/震荡/弱势）
+    强势:
+      min_interval_minutes: 15
+      max_interval_minutes: 120
+    震荡:
+      min_interval_minutes: 20
+      max_interval_minutes: 180
+    弱势:
+      min_interval_minutes: 30
+      max_interval_minutes: 240
+
+  # 主线题材：多日 persistence，过滤单日轮动脉冲
+  main_theme:
+    board_limit: 10                 # 概念涨幅榜/资金流入榜各取前 N
+    lookback_days: 5                # 回溯窗口（自然日）
+    min_hit_days: 2                 # 窗口内至少上榜天数
+    require_fund_once: true         # 窗口内须至少 1 次进资金流入榜
+
+  # 主升浪战法：买点/卖点/龙头判定
+  main_wave:
+    min_ma_spread_pct: 0.8          # MA5 相对 MA20 最小发散(%)
+    leader_max_rank: 15             # 主线龙头：人气排名 ≤ 此值
+    pullback_ma_zone_low: 0.985     # 回调企稳：现价/MA10 下限
+    pullback_ma_zone_high: 1.015    # 回调企稳：现价/MA10 上限
+    ma5_break_ratio: 0.995          # 卖-破5日线：现价 < MA5×此值
+    ma20_break_ratio: 0.995         # 卖-趋势衰竭：现价 < MA20×此值
+
+  # 仓位：按市场状态机（强势/震荡/弱势）
+  position:
+    强势:
+      total_pct: 80                 # 总仓位上限(%)
+      max_stocks: 5                 # 最多持仓只数
+      single_pct:
+        主升浪战法: 12              # 单票占总资产上限(%)
+    震荡:
+      total_pct: 50
+      max_stocks: 3
+      single_pct:
+        主升浪战法: 8
+    弱势:
+      total_pct: 20
+      max_stocks: 2
+      single_pct:
+        主升浪战法: 5
+
+  # 买入：涨幅过高不追
+  buy:
+    pre_market:
+      max_change_pct: 8.0           # 盘前模式允许的最大涨幅(%)
+    during_market:
+      max_change_pct: 8.0           # 盘中模式允许的最大涨幅(%)
+
+  # 卖出：止损 + 神奇2点30 最终确认
+  sell:
+    stop_loss_pct: -5.0             # 浮亏 ≤ 此值 → 止损（不受 14:30 限制）
+    late_session_after: "14:30"     # 趋势类卖出第 3 次确认须在此之后
+    late_session_final_only: true     # true=第1/2次可早于此，第3次须晚于此
+    late_session_kinds:               # 适用神奇2点30 的 signal_kind
+      - 破5日线
+      - 趋势衰竭
+      - 评分走弱

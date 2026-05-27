@@ -633,14 +633,28 @@ async def during_market(settings: SettingsDep, background_tasks: BackgroundTasks
         "行业-涨跌幅",
     )
 
+    # 跌幅前十概念
+    jrdfqsgn = await _stock_fund_flow_concept_or_none(
+        "涨幅前十概念 | ths.stock_fund_flow_concept",
+        "行业-涨跌幅",
+        False
+    )
+
     # 资金流入前十概念
     jrzjlrqsgn = await _stock_fund_flow_concept_or_none(
         "资金流入前十概念 | ths.stock_fund_flow_concept",
-        "流入资金",
+        "净额",
+    )
+
+    # 资金流出前十概念
+    jrzjlcqsgn = await _stock_fund_flow_concept_or_none(
+        "资金流入前十概念 | ths.stock_fund_flow_concept",
+        "净额",
+        False
     )
 
     # 合并涨幅和资金流入
-    gn_bk = _merge_concept_boards(jrzfqsgn, jrzjlrqsgn)
+    gn_bk = _merge_concept_boards(jrzfqsgn, jrzjlrqsgn, jrdfqsgn, jrzjlcqsgn)
 
     # 涨停概况
     zttj = await _ztgk(True)

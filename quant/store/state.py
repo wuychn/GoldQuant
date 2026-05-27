@@ -19,6 +19,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+from quant.constants import STRATEGY_NAME
 from quant.store.paths import (
     ensure_layout,
     state_file,
@@ -28,7 +29,7 @@ from quant.store.paths import (
 from quant.store.views import render_holding_md, render_optional_md
 
 INITIAL_CAPITAL = 10000.0
-STRATEGY_TAGS = frozenset({"涨停板战法", "龙回头战法", "主升浪战法", "趋势"})
+STRATEGY_TAGS = frozenset({STRATEGY_NAME})
 
 
 def _read_text(path: Path) -> str:

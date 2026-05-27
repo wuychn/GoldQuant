@@ -13,7 +13,7 @@
   2. 若无成交，取下一交易日行情快照中的涨幅 > 0 → 1，否则 0
   3. 仍无法标注则跳过该条
 
-ML 用这些样本优化 scoring.yml 中的阈值与维度权重（见 quant/ml/optimizers.py）。
+ML 用这些样本优化 quant.yml scoring 段中的阈值与维度权重（见 quant/ml/optimizers.py）。
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ class ScoreSample:
     code: str
     name: str
     total: float                      # 当日综合评分
-    dim_scores: dict[str, float]      # 各维度得分，键名与 scoring.yml dimensions 一致
+    dim_scores: dict[str, float]      # 各维度得分，键名与 quant.yml scoring.dimensions 一致
     label: float                      # 1=事后表现正向，0=负向
     forward_return_pct: float | None = None  # 次日涨幅(%)，仅作调试/扩展
 

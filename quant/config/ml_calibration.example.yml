@@ -1,29 +1,40 @@
-# =============================================================================
-# ML 校准结果示例（复制到 ~/.quant/config/ml_calibration.yml 后生效）
-# =============================================================================
-# 由 python -m quant.ml calibrate --method xxx --apply 自动生成，也可手改。
-# apply: false 时本文件存在但不会覆盖 scoring 配置。
-# =============================================================================
+# ML 校准输出示例 — 覆盖 quant.yml 中 scoring/gates 部分字段
+# 写入路径：~/.quant/config/ml_calibration.yml
+# 生效：apply: true 时，下次 load_scoring_config / load_gates_config 自动合并
 
 generated_at: "2026-05-26 20:00:00"
 method: grid
 sample_count: 45
 apply: true
 
-# 覆盖 scoring.yml 中的三个阈值
 thresholds:
   watchlist_threshold: 65
   buy_threshold: 75
   sell_threshold: 42
 
-# linear / lightgbm 方法会写入；grid / bayesian 通常无此项
-# dimension_weights:
-#   popularity_rank: 12.5
-#   concept_theme: 14.0
+dimension_weights:
+  main_wave: 24.0
+  concept_theme: 14.0
+  popularity_rank: 11.0
+
+# 三确认间隔（按市场状态，写入 quant.yml gates.confirmation）
+confirmation:
+  required_count: 3
+  强势:
+    min_interval_minutes: 15
+    max_interval_minutes: 120
+  震荡:
+    min_interval_minutes: 20
+    max_interval_minutes: 180
+  弱势:
+    min_interval_minutes: 30
+    max_interval_minutes: 240
+
+main_wave:
+  min_ma_spread_pct: 0.9
+  leader_max_rank: 12
 
 metrics:
   f1: 0.58
-  precision: 0.62
-  recall: 0.55
 
 notes: []

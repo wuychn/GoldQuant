@@ -103,7 +103,7 @@ def check_buy_gates(stock: dict, ctx: ScoreContext) -> GateReport:
 
 
 def position_limits(ctx: ScoreContext) -> dict:
-    """按 market_state['状态'] 返回 gates.yml position 块。"""
+    """按 market_state['状态'] 返回 quant.yml gates.position 块。"""
     cfg = load_gates_config()
     regime = str(ctx.market_state.get("状态", "震荡"))
     block = (cfg.get("position") or {}).get(regime) or (cfg.get("position") or {}).get("震荡") or {}
@@ -119,7 +119,7 @@ def calc_buy_quantity(stock: dict, ctx: ScoreContext, price: float) -> int:
     """按战法单票上限与可用资金计算买入股数（100 股整数倍）。"""
     limits = position_limits(ctx)
     total_assets = get_total_assets()
-    strategy = str(stock.get("战法", "趋势"))
+    strategy = str(stock.get("战法", STRATEGY_NAME))
     single_pct = float((limits["single_pct"] or {}).get(strategy, 8))
     budget = total_assets * single_pct / 100
     if price <= 0:

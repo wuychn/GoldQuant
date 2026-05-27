@@ -39,8 +39,8 @@ def prompt_news() -> str:
 def prompt_pre_market() -> str:
     return (
         _persona()
-        + "撰写盘前一至三节，不要输出操作指令。\n"
-        + load_sections("共用约束", "市场状态机", "仓位联动")
+        + "撰写盘前一至三节，不要输出操作指令。策略仅为「主升浪战法」：主线龙头、均线发散向上。\n"
+        + load_sections("共用约束", "市场状态机", "仓位联动", "主升浪战法")
         + "\n\n一、今日开盘概况\n二、自选股开盘分析\n三、持仓股开盘分析\n"
         + LLM_OUTPUT_FORMAT
     )
@@ -49,8 +49,8 @@ def prompt_pre_market() -> str:
 def prompt_during_market() -> str:
     return (
         _persona()
-        + "撰写盘中一至四节，不要输出操作指令。\n"
-        + load_sections("共用约束", "市场状态机")
+        + "撰写盘中一至四节，不要输出操作指令。仅主升浪战法；买卖需三确认，勿在叙述中直接下单。\n"
+        + load_sections("共用约束", "市场状态机", "主升浪战法")
         + "\n\n一、市场概况\n二、主线与概念\n三、自选股表现\n四、持仓监控\n"
         + LLM_OUTPUT_FORMAT
     )
