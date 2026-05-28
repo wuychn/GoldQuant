@@ -482,12 +482,21 @@ async def _zqxy(*, market_phase: str = "intraday"):
     return None
 
 
-async def _ztgk(more: bool = False):
+def _apply_row_limit(rows: list | None, limit: int | None) -> list:
+    if not isinstance(rows, list):
+        return []
+    if limit is None:
+        return rows
+    return rows[:limit]
+
+
+async def _ztgk(settings: SettingsDep, more: bool = False):
     result: dict[str, Any] = {}
+    row_limit = settings.quant_bulk_row_limit()
     try:
         zt_full = await run_in_threadpool(ztgc)
         height = _zt_height(zt_full)
-        result["今日涨停"] = zt_full
+        result["今日涨停"] = _apply_row_limit(zt_full, row_limit)
         result["市场高度"] = f"{height}连板"
     except Exception:
         _log_api_error("今日涨停股全量 | ztgc")
@@ -495,17 +504,18 @@ async def _ztgk(more: bool = False):
     if more:
         try:
             zrzt = ztgc_with_date(get_n_workdays_ago(n=1))
-            result["昨日涨停"] = zrzt
+            result["昨日涨停"] = _apply_row_limit(zrzt, row_limit)
         except Exception:
             _log_api_error("昨日涨停股池全量 | ztgc_with_date")
 
     return result
 
 
-async def _hot(settings, limit: int = 5):
+async def _hot(settings: SettingsDep):
     try:
-        raw_hot = await hot_stock(settings, limit)
-        rows = raw_hot[:20] if isinstance(raw_hot, list) else []
+        n = settings.quant_hot_list_limit()
+        raw_hot = await hot_stock(settings, n)
+        rows = raw_hot[:n] if isinstance(raw_hot, list) else []
         out: list[dict[str, Any]] = []
         for item in rows:
             if not isinstance(item, dict):
@@ -528,7 +538,7 @@ async def _hot(settings, limit: int = 5):
         return []
 
 
-async def _pkyd():
+async def _pkyd(settings: SettingsDep):
     """东财盘口异动（60日新高 / 60日大幅上涨），按代码去重后附带问财所属概念。"""
     try:
         entries: list[tuple[str, str | None, str]] = []
@@ -545,6 +555,9 @@ async def _pkyd():
                 entries.append((code, row.get("名称"), label))
 
         merged = merge_pkyd_rows_by_code(entries=entries)
+        row_limit = settings.quant_bulk_row_limit()
+        if row_limit is not None:
+            merged = merged[:row_limit]
         concept_cache: dict[str, list[str] | None] = {}
         for item in merged:
             symbol = str(item.get("股票代码", "")).strip()
@@ -661,7 +674,7 @@ async def pre_market(settings: SettingsDep, background_tasks: BackgroundTasks) -
     zqxy_ = await _zqxy(market_phase="intraday")
 
     # 涨停概况
-    ztgk_ = await _ztgk()
+    ztgk_ = await _ztgk(settings)
 
     zxg_, ccg_ = await _enrich_optional_and_holding(settings)
 
@@ -723,7 +736,7 @@ async def during_market(settings: SettingsDep, background_tasks: BackgroundTasks
     gn_bk = _merge_concept_boards(jrzfqsgn, jrzjlrqsgn, jrdfqsgn, jrzjlcqsgn)
 
     # 涨停概况
-    zttj = await _ztgk(True)
+    zttj = await _ztgk(settings, True)
 
     # 人气股
     hot_ = await _hot(settings)
@@ -788,7 +801,7 @@ async def post_market_lunch(settings: SettingsDep) -> Response:
     gn_bk = _merge_concept_boards(jrzfqsgn, jrzjlrqsgn, jrdfqsgn, jrzjlcqsgn)
 
     # 涨停概况
-    zttj = await _ztgk(True)
+    zttj = await _ztgk(settings, True)
 
     # 自选、持仓
     zxg_, ccg_ = await _enrich_optional_and_holding(settings)
@@ -853,13 +866,13 @@ async def post_market(settings: SettingsDep, background_tasks: BackgroundTasks) 
     gn_bk = _merge_concept_boards(jrzfqsgn, jrzjlrqsgn, jrdfqsgn, jrzjlcqsgn)
 
     # 涨停概况
-    zttj = await _ztgk(True)
+    zttj = await _ztgk(settings, True)
 
     # 人气股
     hot_ = await _enrich_stock_list(settings, _hot, include_pre_snapshot=True)
 
     # 盘口异动：问财所属概念 + 与人气/涨停交叉打标
-    pkyd_ = await _pkyd()
+    pkyd_ = await _pkyd(settings)
     pkyd_list = pkyd_ if isinstance(pkyd_, list) else []
     tag_map = build_pkyd_tag_map(pkyd_list)
     hot_ = enrich_list_with_pkyd_tags(hot_, tag_map)

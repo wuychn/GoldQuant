@@ -139,6 +139,17 @@ class Settings(BaseSettings):
     #: 盘前/盘中/盘后接口里「历史行情」日线最多返回条数（从最新往前截），减轻模型上下文；完整 K 线仍在本地归档。
     QUANT_HIST_RESPONSE_MAX_BARS: int = Field(default=48, ge=1, le=4000)
 
+    #: 测试阶段：为 true 时人气榜/涨停统计/盘口异动仅处理前 3 条（问财 enrich 等亦随之减少）。
+    QUANT_TEST_PHASE: bool = False
+
+    def quant_hot_list_limit(self) -> int:
+        """同花顺人气榜处理条数上限。"""
+        return 3 if self.QUANT_TEST_PHASE else 30
+
+    def quant_bulk_row_limit(self) -> int | None:
+        """涨停统计、盘口异动处理条数上限；``None`` 表示全量。"""
+        return 3 if self.QUANT_TEST_PHASE else None
+
     # 飞书配置
     FEISHU_APP_ID: str | None = None
     FEISHU_APP_SECRET: str | None = None
