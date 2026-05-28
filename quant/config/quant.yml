@@ -122,6 +122,11 @@ gates:
     lookback_days: 5                # 回溯窗口（自然日）
     min_hit_days: 2                 # 窗口内至少上榜天数
     require_fund_once: true         # 窗口内须至少 1 次进资金流入榜
+    score_weights:                  # concept_theme 维度：各概念共振权重上限（合计约 100）
+      confirmed: 40                 # 已确认主线
+      gain_rank: 25                 # 涨幅榜排名（第 1 名满额，越靠后越低）
+      fund_rank: 20                 # 资金流入榜排名
+      fund_amount: 15               # 资金净额占当日榜内最大值的比例
 
   # 主升浪战法：买点/卖点/龙头判定
   main_wave:

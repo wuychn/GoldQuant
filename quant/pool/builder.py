@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from quant.config import load_scoring_config
-from quant.scoring.dimensions.concept_theme import _stock_concepts, attach_concepts_from_hot
+from quant.scoring.dimensions.concept_theme import _stock_concepts, resolve_stock_concepts
 from quant.scoring.theme_tracker import resolve_main_themes
 
 
@@ -35,7 +35,7 @@ def build_candidates(payload: dict) -> list[dict]:
             code = _code(row)
             if not code:
                 continue
-            row = attach_concepts_from_hot(row, payload)
+            row = resolve_stock_concepts(row, payload)
             concepts = _stock_concepts(row)
             if tops and concepts & tops:
                 merged[code] = {**merged.get(code, {}), **row}

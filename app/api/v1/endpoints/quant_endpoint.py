@@ -36,7 +36,7 @@ from app.utils.quant_archive import (
     load_merge_write_daily_bars,
 )
 from app.utils.quant_market_enrich import pre_auction_minute_zh
-from app.utils.ths_util import stock_fund_flow_concept, hot_stock, zdfb_ths, ggzjl
+from app.utils.ths_util import stock_fund_flow_concept, hot_stock, zdfb_ths, ggzjl, wcxg
 
 logger = logging.getLogger(__name__)
 
@@ -163,6 +163,19 @@ def _jbxx(symbol):
         return jbxx(symbol)
     except Exception:
         _log_api_error("股票基本信息 | ak.stock_individual_info_em")
+        return None
+
+
+async def _fetch_stock_concepts_wcxg(symbol: str, name: str | None = None) -> list[str] | None:
+    """问财查询个股所属概念（可多条）；失败时返回 None，由评分阶段回退人气榜。"""
+    question = str(symbol).strip()
+    if name:
+        question = f"{question} {str(name).strip()}"
+    try:
+        concepts = await wcxg(question)
+        return concepts if concepts else None
+    except Exception:
+        _log_api_error(f"个股所属概念 wcxg symbol={symbol!r}")
         return None
 
 
@@ -294,6 +307,15 @@ async def _enrich_stock_list(
 
             zj_raw = await _ggzjl(symbol)
             item["个股资金流"] = zj_raw
+
+            stock_name = item.get("股票名称")
+            concepts = await _fetch_stock_concepts_wcxg(
+                symbol,
+                stock_name if isinstance(stock_name, str) else None,
+            )
+            if concepts:
+                item["所属概念"] = concepts
+                item["概念来源"] = "问财"
 
             out.append(item)
     except Exception:
@@ -465,7 +487,24 @@ async def _ztgk(more: bool = False):
 async def _hot(settings, limit: int = 5):
     try:
         raw_hot = await hot_stock(settings, limit)
-        return raw_hot[:20] if isinstance(raw_hot, list) else []
+        rows = raw_hot[:20] if isinstance(raw_hot, list) else []
+        out: list[dict[str, Any]] = []
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+            symbol = item.get("股票代码")
+            if symbol:
+                stock_name = item.get("股票名称")
+                concepts = await _fetch_stock_concepts_wcxg(
+                    str(symbol),
+                    stock_name if isinstance(stock_name, str) else None,
+                )
+                if concepts:
+                    item = {**item, "所属概念": concepts, "概念来源": "问财"}
+                elif item.get("所属概念"):
+                    item = {**item, "概念来源": "人气榜"}
+            out.append(item)
+        return out
     except Exception:
         _log_api_error("同花顺人气股 | ths.hot_stock (no enrich)")
         return []

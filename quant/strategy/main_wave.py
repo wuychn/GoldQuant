@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 from quant.scoring.context import ScoreContext
-from quant.scoring.dimensions.concept_theme import _stock_concepts, attach_concepts_from_hot
+from quant.scoring.dimensions.concept_theme import _stock_concepts, resolve_stock_concepts
 from quant.scoring.theme_tracker import resolve_main_themes
 
 
@@ -52,7 +52,7 @@ def ma_diverging(m: dict[str, float | None], *, min_spread_pct: float) -> bool:
 
 def is_theme_leader(stock: dict, ctx: ScoreContext, *, max_rank: int) -> bool:
     """主线题材中的龙头：概念共振 + 人气排名靠前。"""
-    stock = attach_concepts_from_hot(stock, ctx.payload)
+    stock = resolve_stock_concepts(stock, ctx.payload)
     tops = resolve_main_themes(ctx.payload)
     concepts = _stock_concepts(stock)
     if not tops or not (concepts & tops):

@@ -130,6 +130,87 @@ def resolve_main_themes(payload: dict, *, update: bool = True) -> set[str]:
     return confirmed
 
 
+def concept_resonance_weights(payload: dict, *, update: bool = True) -> dict[str, float]:
+    """各概念共振权重（0~100）：确认主线 + 涨幅榜排名 + 资金榜排名/净额。"""
+    cfg = _theme_cfg()
+    limit = int(cfg.get("board_limit", 10))
+    w_cfg = cfg.get("score_weights") or {}
+    w_main = float(w_cfg.get("confirmed", 40))
+    w_gain = float(w_cfg.get("gain_rank", 25))
+    w_fund_rank = float(w_cfg.get("fund_rank", 20))
+    w_fund_amt = float(w_cfg.get("fund_amount", 15))
+
+    main = resolve_main_themes(payload, update=update)
+    gain_rank, fund_rank, fund_net = _board_rank_and_fund(payload, limit)
+    max_net = max((v for v in fund_net.values() if v > 0), default=0.0)
+
+    weights: dict[str, float] = {}
+    for name in main | set(gain_rank) | set(fund_rank):
+        w = 0.0
+        if name in main:
+            w += w_main
+        if name in gain_rank:
+            w += _rank_bonus(gain_rank[name], limit, w_gain)
+        if name in fund_rank:
+            w += _rank_bonus(fund_rank[name], limit, w_fund_rank)
+            if max_net > 0:
+                net = max(0.0, fund_net.get(name, 0.0))
+                w += w_fund_amt * (net / max_net)
+        weights[name] = round(w, 2)
+    return weights
+
+
+def _board_rank_and_fund(
+    payload: dict,
+    limit: int,
+) -> tuple[dict[str, int], dict[str, int], dict[str, float]]:
+    gain_rank: dict[str, int] = {}
+    fund_rank: dict[str, int] = {}
+    fund_net: dict[str, float] = {}
+    for i, row in enumerate(_board_rows(payload, "涨幅榜", limit)):
+        n = str(row.get("行业", "")).strip()
+        if n and n not in gain_rank:
+            gain_rank[n] = i + 1
+    for i, row in enumerate(_board_rows(payload, "资金流入榜", limit)):
+        n = str(row.get("行业", "")).strip()
+        if n and n not in fund_rank:
+            fund_rank[n] = i + 1
+            try:
+                fund_net[n] = float(row.get("净额") or 0)
+            except (TypeError, ValueError):
+                fund_net[n] = 0.0
+    return gain_rank, fund_rank, fund_net
+
+
+def _rank_bonus(rank: int, limit: int, max_pts: float) -> float:
+    if rank <= 0 or rank > limit:
+        return 0.0
+    return max_pts * (limit - rank + 1) / limit
+
+
+def score_concept_resonance(
+    stock_concepts: set[str],
+    payload: dict,
+    *,
+    update: bool = True,
+) -> tuple[float, dict[str, Any]]:
+    """个股概念与确认主线交集，按各概念权重计分。"""
+    main = resolve_main_themes(payload, update=update)
+    if not main:
+        return 50.0, {"available": False}
+
+    weights = concept_resonance_weights(payload, update=False)
+    hits = stock_concepts & main
+    if not hits:
+        return 25.0, {"命中概念": [], "命中权重": {}}
+
+    hit_weights = {c: weights.get(c, float((_theme_cfg().get("score_weights") or {}).get("confirmed", 40))) for c in hits}
+    peak = max(hit_weights.values())
+    extra = min(15.0, max(0, len(hits) - 1) * 5.0)
+    score = min(100.0, 30.0 + peak * 0.7 + extra)
+    return score, {"命中概念": sorted(hits), "命中权重": hit_weights, "峰值权重": round(peak, 2)}
+
+
 def theme_detail(payload: dict) -> dict[str, Any]:
     """供评分维度输出的调试信息。"""
     gain, fund = snapshot_boards(payload, limit=int(_theme_cfg().get("board_limit", 10)))
@@ -138,4 +219,5 @@ def theme_detail(payload: dict) -> dict[str, Any]:
         "当日涨幅概念": sorted(gain),
         "当日资金概念": sorted(fund),
         "确认主线": sorted(main),
+        "概念权重": concept_resonance_weights(payload, update=False),
     }
