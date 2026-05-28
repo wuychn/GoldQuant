@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from quant.config import load_gates_config
+from quant.market.turnover import load_completed_day_turnovers
 from quant.scoring.context import ScoreContext, index_change
 from quant.store.state import get_total_assets, stoploss_cooldown_codes, sum_today_realized_pnl
 
@@ -69,17 +70,19 @@ def check_global_gates(ctx: ScoreContext) -> GateReport:
     if total > 0 and pnl / total * 100 <= limit:
         results.append(GateResult(False, "每日亏损限额", f"当日已实现盈亏达{limit}%"))
 
-    flows = ctx.payload.get("大盘资金流") or []
     shrink_days = int(cb.get("shrink_volume_days", 3))
     shrink_ratio = float(cb.get("shrink_volume_ratio", 0.8))
-    if isinstance(flows, list) and len(flows) >= shrink_days:
-        try:
-            amounts = [abs(float(r.get("上证-收盘价", 0) or 0)) for r in flows[-shrink_days:] if isinstance(r, dict)]
-            if len(amounts) == shrink_days and amounts[0] > 0:
-                if all(amounts[i] > amounts[i + 1] for i in range(len(amounts) - 1)) and amounts[-1] < amounts[0] * shrink_ratio:
-                    results.append(GateResult(False, "连续缩量", "大盘资金流连续缩量"))
-        except (TypeError, ValueError):
-            pass
+    # 连续缩量：比较最近 N 个已收盘日的全市场成交额（evening 归档），
+    # 不用「上证-收盘价」（那是指数点位）也不拿盘中累计与全天混比。
+    amounts = load_completed_day_turnovers(count=shrink_days)
+    if len(amounts) == shrink_days and amounts[0] > 0:
+        if (
+            all(amounts[i] > amounts[i + 1] for i in range(len(amounts) - 1))
+            and amounts[-1] < amounts[0] * shrink_ratio
+        ):
+            results.append(
+                GateResult(False, "连续缩量", f"近{shrink_days}日全市场成交额连续缩量")
+            )
 
     if not results:
         results.append(GateResult(True, "全局门禁"))

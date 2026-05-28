@@ -53,14 +53,13 @@ def generate_buy_signals(ctx: ScoreContext, *, mode: str) -> list[TradeSignal]:
         if price is None:
             continue
 
-        if mode == "during_market":
-            pk = stock.get("盘口") if isinstance(stock.get("盘口"), dict) else {}
-            try:
-                chg = float(pk.get("涨幅", 0) or 0)
-            except (TypeError, ValueError):
-                chg = 0
-            if chg >= float(buy_cfg.get("max_change_pct", 8.0)):
-                continue
+        pk = stock.get("盘口") if isinstance(stock.get("盘口"), dict) else {}
+        try:
+            chg = float(pk.get("涨幅", 0) or 0)
+        except (TypeError, ValueError):
+            chg = 0
+        if chg >= float(buy_cfg.get("max_change_pct", 8.0)):
+            continue
 
         qty = calc_buy_quantity({**stock, "战法": STRATEGY_NAME}, ctx, price)
         if qty < 100:

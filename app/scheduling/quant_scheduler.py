@@ -72,11 +72,15 @@ def _evening_calendar_hit() -> bool:
 def _invoke_quant_cli(mode: str, *, timeout_sec: float | None) -> None:
     cmd = [sys.executable, "-m", "quant", mode]
     logger.info("[quant-scheduler] 执行: cwd=%s %s", _PROJECT_ROOT, " ".join(cmd))
+    env = os.environ.copy()
+    env.setdefault("PYTHONIOENCODING", "utf-8")
     kw: dict = {
         "cwd": str(_PROJECT_ROOT),
-        "env": os.environ.copy(),
+        "env": env,
         "capture_output": True,
         "text": True,
+        "encoding": "utf-8",
+        "errors": "replace",
     }
     if timeout_sec is not None and timeout_sec > 0:
         kw["timeout"] = timeout_sec
