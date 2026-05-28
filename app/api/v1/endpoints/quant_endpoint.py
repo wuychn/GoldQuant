@@ -484,7 +484,7 @@ async def _ztgk(more: bool = False):
     return result
 
 
-async def _hot(settings, limit: int = 5):
+async def _hot(settings, limit: int = 30):
     try:
         raw_hot = await hot_stock(settings, limit)
         rows = raw_hot[:20] if isinstance(raw_hot, list) else []

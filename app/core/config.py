@@ -97,7 +97,7 @@ class Settings(BaseSettings):
     #: 盘中（`during_market`）多个触发点，`HH:MM` 逗号分隔。
     QUANT_SCHED_DURING_MARKET_TIMES: str = _QUANT_SCHED_DEFAULT_DURING_TIMES
     #: 午间复盘（`post_market_lunch`），仅交易日（`is_real_workday_cn`）执行。
-    QUANT_SCHED_POST_MARKET_LUNCH_TIME: str = "12:00"
+    QUANT_SCHED_POST_MARKET_LUNCH_TIME: str = "11:50"
     #: 晚间复盘（`post_market_evening`）；工作日当晚 + 假日前一夜（详见 orchestrator）。
     QUANT_SCHED_POST_MARKET_EVENING_TIME: str = "21:30"
     #: `python -m quant` 子进程超时（秒）；``None`` 表示不限制（长耗时拉数/LLM 时慎用上限）。

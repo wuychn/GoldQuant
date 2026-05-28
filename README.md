@@ -174,7 +174,7 @@ python -m quant post_market_evening
 | 08:00 起多次 | `news` |
 | 09:20 | `pre_market` |
 | 09:35～14:30 每 10～30 分钟 | `during_market` |
-| 11:35 | `post_market_lunch` |
+| 11:50 | `post_market_lunch` |
 | 15:10 | `post_market_evening` |
 
 Windows 任务计划或 Linux crontab 调用同一命令即可；工作目录设为项目根，并激活 venv。
