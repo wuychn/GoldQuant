@@ -2,7 +2,7 @@
 
 子目录
   raw/      API 原始 payload（orchestrator save_raw）
-  derived/  评分、信号、market_state（程序计算）
+  derived/  评分、信号（程序计算）
   trades/   executed.json 成交记录（ML 标签来源之一）
   review/   飞书正文 MD
 """

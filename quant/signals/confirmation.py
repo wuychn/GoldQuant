@@ -25,7 +25,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from quant.config import load_gates_config
-from quant.scoring.context import ScoreContext
+from quant.scoring.context import ScoreContext, infer_regime
 from quant.signals.models import TradeSignal
 from quant.store.paths import state_file
 from quant.trading_hours import is_late_session_for_trend_sell, sell_kinds_requiring_late_final
@@ -65,7 +65,7 @@ def _parse_ts(s: str) -> datetime | None:
 
 def confirmation_config(ctx: ScoreContext, signal_kind: str = "") -> dict:
     cfg = load_gates_config().get("confirmation") or {}
-    regime = str(ctx.market_state.get("状态", "震荡"))
+    regime = infer_regime(ctx.payload)
     block = cfg.get(regime) or cfg.get("震荡") or {}
     kind_block = (cfg.get("by_kind") or {}).get(signal_kind) or {}
     return {

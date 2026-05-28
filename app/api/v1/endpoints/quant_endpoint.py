@@ -144,34 +144,6 @@ def _finalize_quant_payload(obj: Any) -> Any:
     return _round_floats_for_api(_normalize_quant_datetimes(cloned))
 
 
-def _attach_payload_notes(result: dict, *, phase: str) -> dict:
-    """为 LLM/下游注入字段口径说明，避免盘中累计与全天混比。"""
-    if not isinstance(result, dict):
-        return result
-    out = dict(result)
-    if phase == "closed":
-        out["_数据口径"] = {
-            "赚钱效应.成交额": "收盘后全市场口径；今日全天可与昨日全天对比",
-            "大盘指数.成交额": "单指数收盘后累计（元），非全市场合计",
-            "大盘资金流.主力净流入-净额": "单位：元",
-            "概念板块.净额": "行业资金流，通常亿元级",
-            "个股资金流.净额": "单位：万元（字符串）",
-        }
-    else:
-        out["_数据口径"] = {
-            "赚钱效应.成交额": "今日累计=截至采集时刻；勿与昨日全天直接比；看较昨日同时段",
-            "大盘指数.成交额": "单指数当日累计（元），不可与赚钱效应全市场口径混比",
-            "大盘指数.量比": "相对昨日同时段",
-            "盘口.金额": "个股当日累计成交额（元）",
-            "历史行情.成交额": "历史 K 线全日成交额（元）",
-            "概念板块.净额": "行业资金流，通常亿元级",
-            "个股资金流.净额": "单位：万元（字符串）",
-        }
-        if phase == "pre_market":
-            out["_数据口径"]["盘前提示"] = "竞价前今日累计可能为 0 或极小"
-    return out
-
-
 def _merge_concept_boards(jzf: list | None, jzj: list | None, jdf: list | None, jzjlc: list | None, *, limit: int = 10) -> dict[str, Any]:
     return {
         "涨幅榜": (jzf or [])[:limit],
@@ -635,7 +607,7 @@ async def pre_market(settings: SettingsDep, background_tasks: BackgroundTasks) -
         "持仓股": ccg_,
     }
 
-    return Response(data=_finalize_quant_payload(_attach_payload_notes(result, phase="pre_market")))
+    return Response(data=_finalize_quant_payload(result))
 
 
 @router.get(
@@ -701,7 +673,7 @@ async def during_market(settings: SettingsDep, background_tasks: BackgroundTasks
         "自选股": zxg_,
         "持仓股": ccg_,
     }
-    return Response(data=_finalize_quant_payload(_attach_payload_notes(result, phase="intraday")))
+    return Response(data=_finalize_quant_payload(result))
 
 
 @router.get(
@@ -763,7 +735,7 @@ async def post_market_lunch(settings: SettingsDep) -> Response:
         "自选股": zxg_,
         "持仓股": ccg_,
     }
-    return Response(data=_finalize_quant_payload(_attach_payload_notes(result, phase="intraday")))
+    return Response(data=_finalize_quant_payload(result))
 
 
 @router.get(
@@ -837,4 +809,4 @@ async def post_market(settings: SettingsDep, background_tasks: BackgroundTasks) 
         "自选股": zxg_,
         "持仓股": ccg_,
     }
-    return Response(data=_finalize_quant_payload(_attach_payload_notes(result, phase="closed")))
+    return Response(data=_finalize_quant_payload(result))

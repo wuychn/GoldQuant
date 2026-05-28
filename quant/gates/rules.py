@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 
 from quant.config import load_gates_config
 from quant.market.turnover import load_completed_day_turnovers
-from quant.scoring.context import ScoreContext, index_change
+from quant.scoring.context import ScoreContext, index_change, infer_regime
 from quant.store.state import get_total_assets, stoploss_cooldown_codes, sum_today_realized_pnl
 
 
@@ -106,9 +106,9 @@ def check_buy_gates(stock: dict, ctx: ScoreContext) -> GateReport:
 
 
 def position_limits(ctx: ScoreContext) -> dict:
-    """按 market_state['状态'] 返回 quant.yml gates.position 块。"""
+    """按 infer_regime(payload) 返回 quant.yml gates.position 块。"""
     cfg = load_gates_config()
-    regime = str(ctx.market_state.get("状态", "震荡"))
+    regime = infer_regime(ctx.payload)
     block = (cfg.get("position") or {}).get(regime) or (cfg.get("position") or {}).get("震荡") or {}
     return {
         "regime": regime,

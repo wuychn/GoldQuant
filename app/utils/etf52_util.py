@@ -22,14 +22,6 @@ def _build_turnover_block(trading: dict, *, market_phase: str) -> dict:
         block["预测全天"] = _fmt_turnover_yi(predict)
     if market_phase == "closed":
         block["今日全天"] = block["今日累计"]
-        block["口径说明"] = (
-            "收盘后：今日累计≈今日全天，可与昨日全天对比；较昨日同时段为数据源同时刻差值。"
-        )
-    else:
-        block["口径说明"] = (
-            "盘中/盘前/午间：今日累计仅截至采集时刻，不可与昨日全天直接比较；"
-            "判断放量/缩量以「较昨日同时段」为准；预测全天为数据源估算。"
-        )
     return block
 
 

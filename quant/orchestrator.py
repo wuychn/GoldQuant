@@ -1,7 +1,6 @@
-"""五模式编排：拉数 → 评分/三确认信号 → 落盘 → LLM 叙述 → 飞书。
+"""五模式编排：拉数 → 评分/三确认信号 → 落盘 → LLM 文案 → 飞书。
 
-策略：仅主升浪战法（主线龙头 + 均线发散）。
-买卖：原始信号须三确认后才 execute_signals（见 signals/confirmation.py）。
+策略与交易决策均由规则引擎完成（主线/龙头/买卖/加自选）；LLM 只读「程序结论」生成叙述，不参与决策。
 """
 
 from __future__ import annotations
@@ -17,6 +16,7 @@ from quant.data_fetch import fetch_mode, unwrap_payload
 from quant.constants import STRATEGY_NAME
 from quant.execution.executor import ExecutedTrade, execute_signals
 from quant.gates.rules import check_global_gates
+from quant.narrative.engine_brief import build_engine_brief
 from quant.narrative.llm import call_llm
 from quant.narrative.prompts import (
     build_user_msg,
@@ -24,13 +24,12 @@ from quant.narrative.prompts import (
     prompt_evening_review,
     prompt_lunch_review,
     prompt_news,
-    prompt_no_trade_reason,
     prompt_pre_market,
 )
 from quant.pool.builder import build_candidates
 from quant.push.feishu import get_token, send_msg
 from quant.push.format import format_push_message
-from quant.scoring.context import ScoreContext, build_market_state
+from quant.scoring.context import ScoreContext, infer_regime
 from quant.scoring.engine import ScoringEngine
 from quant.signals.pipeline import generate_confirmed_signals
 from quant.store.snapshot import save_derived, save_raw, save_review
@@ -51,10 +50,7 @@ _MODE_LABELS = {
 
 
 def _prepare_payload(raw: dict) -> dict:
-    payload = unwrap_payload(raw)
-    if not payload.get("市场状态机"):
-        payload["市场状态机"] = build_market_state(payload)
-    return payload
+    return unwrap_payload(raw)
 
 
 def _build_operation_section(
@@ -83,21 +79,15 @@ def _build_operation_section(
 
 
 def _no_trade_reason(mode: str, ctx: ScoreContext, buy_n: int, sell_n: int) -> str:
-    facts = (
-        f"场景：{mode}\n"
-        f"市场状态：{ctx.market_state.get('状态')}\n"
-        f"买入信号{buy_n}条，卖出信号{sell_n}条\n"
-        f"门禁：{check_global_gates(ctx).summary()}"
+    """无成交说明：纯规则引擎事实，不经 LLM。"""
+    gates = check_global_gates(ctx).summary()
+    regime = infer_regime(ctx.payload)
+    if buy_n == 0 and sell_n == 0:
+        return f"原因：程序未产生买卖原始信号；市场状态{regime}；{gates}。"
+    return (
+        f"原因：有原始信号但未成交（买入{buy_n}条/卖出{sell_n}条，"
+        f"可能未过三确认或门禁）；市场状态{regime}；{gates}。"
     )
-    try:
-        text = call_llm(prompt_no_trade_reason(mode), facts, max_tokens=300, temperature=0.1)
-        text = text.strip().replace("\n", " ")
-        if not text.startswith("原因"):
-            text = f"原因：{text}"
-        return text
-    except Exception as e:
-        print(f"无操作原因 LLM 失败: {e}")
-        return "原因：评分或门禁未通过，暂无成交。"
 
 
 def _score_summary_lines(scores: list) -> list[str]:
@@ -150,7 +140,7 @@ def _update_watchlist_evening(ctx: ScoreContext) -> tuple[list[dict], str]:
         section_lines.append("【新增自选】")
         section_lines.append("本轮无新增；候选评分摘要：")
         section_lines.extend(_score_summary_lines(scores) or ["· 无候选数据"])
-    return added, "\n".join(section_lines)
+    return added, "\n".join(section_lines), scores
 
 
 def process_news(raw: dict, timestamp: str) -> str:
@@ -167,14 +157,14 @@ def process_news(raw: dict, timestamp: str) -> str:
 def process_pre_market(raw: dict) -> str:
     payload = _prepare_payload(raw)
     ctx = ScoreContext.from_payload(payload, mode="pre_market")
-    save_derived("market_state.json", ctx.market_state)
 
     raw_buy, raw_sell, executable, audit = generate_confirmed_signals(ctx, mode="pre_market")
     executed = execute_signals(executable)
+    brief = build_engine_brief(ctx, payload, mode="pre_market")
 
     narrative = call_llm(
         prompt_pre_market(),
-        build_user_msg(payload, extra=f"\n【评分门禁】\n{check_global_gates(ctx).summary()}"),
+        build_user_msg(payload, mode="pre_market", engine_brief=brief),
         max_tokens=8000,
     )
     no_trade = "" if executed else _no_trade_reason("pre_market", ctx, len(raw_buy), 0)
@@ -194,7 +184,6 @@ def process_pre_market(raw: dict) -> str:
 def process_during_market(raw: dict) -> str:
     payload = _prepare_payload(raw)
     ctx = ScoreContext.from_payload(payload, mode="during_market")
-    save_derived("market_state.json", ctx.market_state)
 
     raw_buy, raw_sell, executable, audit = generate_confirmed_signals(ctx, mode="during_market")
     executed = execute_signals(executable)
@@ -214,7 +203,11 @@ def process_during_market(raw: dict) -> str:
 
     narrative = call_llm(
         prompt_during_market(),
-        build_user_msg(payload, extra=f"\n【评分门禁】\n{check_global_gates(ctx).summary()}"),
+        build_user_msg(
+            payload,
+            mode="during_market",
+            engine_brief=build_engine_brief(ctx, payload, mode="during_market"),
+        ),
         max_tokens=7000,
     )
     no_trade = "" if executed else _no_trade_reason(
@@ -227,27 +220,32 @@ def process_during_market(raw: dict) -> str:
 def process_lunch_review(raw: dict) -> str:
     payload = _prepare_payload(raw)
     ctx = ScoreContext.from_payload(payload, mode="post_market_lunch")
-    save_derived("market_state.json", ctx.market_state)
 
+    brief = build_engine_brief(ctx, payload, mode="post_market_lunch")
     narrative = call_llm(
         prompt_lunch_review(),
-        build_user_msg(payload, extra="\n【说明】午间复盘不更新自选股。"),
+        build_user_msg(payload, mode="post_market_lunch", engine_brief=brief),
         max_tokens=8000,
         temperature=0.1,
     )
-    section = "六、自选更新\n\n午间复盘不更新自选股，晚间复盘统一更新。"
-    return narrative.rstrip() + "\n\n" + section
+    return narrative.rstrip()
 
 
 def process_evening_review(raw: dict) -> str:
     payload = _prepare_payload(raw)
     ctx = ScoreContext.from_payload(payload, mode="post_market_evening")
-    save_derived("market_state.json", ctx.market_state)
 
-    _, optional_section = _update_watchlist_evening(ctx)
+    added, optional_section, scores = _update_watchlist_evening(ctx)
+    brief = build_engine_brief(
+        ctx,
+        payload,
+        mode="post_market_evening",
+        watchlist_scores=scores,
+        watchlist_added=added,
+    )
     narrative = call_llm(
         prompt_evening_review(),
-        build_user_msg(payload, extra="\n【说明】自选更新由评分引擎完成。"),
+        build_user_msg(payload, mode="post_market_evening", engine_brief=brief),
         max_tokens=9000,
         temperature=0.1,
     )
