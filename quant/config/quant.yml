@@ -23,7 +23,9 @@ scoring:
   candidate:
     popularity_limit: 20    # 同花顺人气榜取前 N 只
     include_zt_pool: false  # 是否并入当日涨停池（主升浪默认不依赖）
+    include_pkyd_concept_match: true  # 盘口异动且概念共振时纳入候选
     require_main_wave: true # 加自选须 main_wave 维度达标
+    require_main_wave_pkyd: false  # 盘口异动概念共振候选可不强制 main_wave
 
   # 评分维度：enabled 关闭则不参与；weight 为加权系数
   dimensions:
@@ -36,6 +38,11 @@ scoring:
     popularity_rank:        # 同花顺人气排名
       enabled: true
       weight: 12
+    pkyd_signal:            # 盘口异动（60日新高 / 60日大幅上涨）
+      enabled: true
+      weight: 8
+      base_score: 55
+      score_per_tag: 22
     technical:              # MACD、均线等技术指标
       enabled: true
       weight: 12

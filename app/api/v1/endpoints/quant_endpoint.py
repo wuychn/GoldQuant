@@ -37,6 +37,13 @@ from app.utils.quant_archive import (
 )
 from app.utils.quant_market_enrich import pre_auction_minute_zh
 from app.utils.ths_util import stock_fund_flow_concept, hot_stock, zdfb_ths, ggzjl, wcxg
+from quant.pool.pkyd_util import (
+    build_pkyd_tag_map,
+    enrich_list_with_pkyd_tags,
+    enrich_zt_stats_with_pkyd,
+    merge_pkyd_rows_by_code,
+    stock_pkyd_tags,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -166,17 +173,28 @@ def _jbxx(symbol):
         return None
 
 
-async def _fetch_stock_concepts_wcxg(symbol: str, name: str | None = None) -> list[str] | None:
+async def _fetch_stock_concepts_wcxg(
+    symbol: str,
+    name: str | None = None,
+    *,
+    cache: dict[str, list[str] | None] | None = None,
+) -> list[str] | None:
     """问财查询个股所属概念（可多条）；失败时返回 None，由评分阶段回退人气榜。"""
-    question = str(symbol).strip()
+    key = str(symbol).strip()
+    if cache is not None and key in cache:
+        return cache[key]
+    question = key
     if name:
         question = f"{question} {str(name).strip()}"
     try:
         concepts = await wcxg(question)
-        return concepts if concepts else None
+        result = concepts if concepts else None
     except Exception:
         _log_api_error(f"个股所属概念 wcxg symbol={symbol!r}")
-        return None
+        result = None
+    if cache is not None:
+        cache[key] = result
+    return result
 
 
 async def _ggzjl(symbol):
@@ -511,26 +529,35 @@ async def _hot(settings, limit: int = 30):
 
 
 async def _pkyd():
-    """东财盘口异动（60日新高 / 60日大幅上涨），仅限创业板/深证/沪市主板的 A 股代码。"""
+    """东财盘口异动（60日新高 / 60日大幅上涨），按代码去重后附带问财所属概念。"""
     try:
-        out: list[dict[str, Any]] = []
-        for _label in ("60日新高", "60日大幅上涨"):
-            batch = pkyd(_label)
+        entries: list[tuple[str, str | None, str]] = []
+        for label in ("60日新高", "60日大幅上涨"):
+            batch = pkyd(label)
             if not isinstance(batch, list):
                 continue
             for row in batch:
                 if not isinstance(row, dict):
                     continue
                 code = str(row.get("代码", "") or "").strip()
-                if code.startswith(("30", "00", "60")):
-                    out.append(
-                        {
-                            "股票代码": code,
-                            "股票名称": row.get("名称"),
-                            "原因": row.get("板块"),
-                        }
-                    )
-        return out
+                if not code.startswith(("30", "00", "60")):
+                    continue
+                entries.append((code, row.get("名称"), label))
+
+        merged = merge_pkyd_rows_by_code(entries=entries)
+        concept_cache: dict[str, list[str] | None] = {}
+        for item in merged:
+            symbol = str(item.get("股票代码", "")).strip()
+            name = item.get("股票名称")
+            concepts = await _fetch_stock_concepts_wcxg(
+                symbol,
+                name if isinstance(name, str) else None,
+                cache=concept_cache,
+            )
+            if concepts:
+                item["所属概念"] = concepts
+                item["概念来源"] = "问财"
+        return merged
     except Exception:
         _log_api_error("盘口异动 | dfcf.pkyd")
         return None
@@ -831,9 +858,12 @@ async def post_market(settings: SettingsDep, background_tasks: BackgroundTasks) 
     # 人气股
     hot_ = await _enrich_stock_list(settings, _hot, include_pre_snapshot=True)
 
-    # 盘口异动，这个数据就不要enrich了，也不作为选股池，而是在选股的收从这个中判断是否是60日新高或60日大幅上涨
-    # 如此一来，还可以再加一些其他进来，比如火箭发射等
+    # 盘口异动：问财所属概念 + 与人气/涨停交叉打标
     pkyd_ = await _pkyd()
+    pkyd_list = pkyd_ if isinstance(pkyd_, list) else []
+    tag_map = build_pkyd_tag_map(pkyd_list)
+    hot_ = enrich_list_with_pkyd_tags(hot_, tag_map)
+    zttj = enrich_zt_stats_with_pkyd(zttj, tag_map)
 
     zxg_, ccg_ = await _enrich_optional_and_holding(settings)
 
@@ -844,7 +874,7 @@ async def post_market(settings: SettingsDep, background_tasks: BackgroundTasks) 
         "概念板块": gn_bk,
         "涨停统计": zttj,
         "同花顺人气榜": hot_,
-        "盘口异动": pkyd_,
+        "盘口异动": pkyd_list,
         "自选股": zxg_,
         "持仓股": ccg_,
     }

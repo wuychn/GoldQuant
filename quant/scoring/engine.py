@@ -10,6 +10,7 @@ from quant.scoring.dimensions.main_wave import MainWaveScorer
 from quant.scoring.dimensions.market_fund_flow import MarketFundFlowScorer
 from quant.scoring.dimensions.market_index import MarketIndexScorer
 from quant.scoring.dimensions.market_sentiment import MarketSentimentScorer
+from quant.scoring.dimensions.pkyd_signal import PkydSignalScorer
 from quant.scoring.dimensions.popularity import PopularityRankScorer
 from quant.scoring.dimensions.stock_fund_flow import StockFundFlowScorer
 from quant.scoring.dimensions.stock_history import StockHistoryScorer
@@ -29,6 +30,7 @@ _SCORERS = {
     "stock_history": StockHistoryScorer(),
     "stock_fund_flow": StockFundFlowScorer(),
     "popularity_rank": PopularityRankScorer(),
+    "pkyd_signal": PkydSignalScorer(),
     "technical": TechnicalScorer(),
     "minute_bars": StubScorer("minute_bars"),
     "us_overnight": StubScorer("us_overnight"),
@@ -86,15 +88,29 @@ class ScoringEngine:
     def score_many(self, ctx: ScoreContext, stocks: list[dict]) -> list[StockScore]:
         return [self.score_stock(ctx, s) for s in stocks if str(s.get("股票代码", "")).strip()]
 
-    def apply_threshold(self, scores: list[StockScore], *, kind: str = "watchlist") -> list[StockScore]:
+    def apply_threshold(
+        self,
+        scores: list[StockScore],
+        *,
+        kind: str = "watchlist",
+        stock_rows: dict[str, dict] | None = None,
+    ) -> list[StockScore]:
         key = f"{kind}_threshold"
         threshold = float(self.config.get(key, 65))
-        require_mw = bool((self.config.get("candidate") or {}).get("require_main_wave", True))
+        cand_cfg = self.config.get("candidate") or {}
+        require_mw = bool(cand_cfg.get("require_main_wave", True))
+        require_mw_pkyd = bool(cand_cfg.get("require_main_wave_pkyd", False))
+        rows = stock_rows or {}
         out: list[StockScore] = []
         for s in scores:
             ok = s.total >= threshold
             if require_mw and kind == "watchlist":
-                ok = ok and self.passes_main_wave(s)
+                row = rows.get(s.code, {})
+                from_pkyd = str(row.get("候选来源") or "").strip() == "盘口异动"
+                if from_pkyd and not require_mw_pkyd:
+                    pass
+                else:
+                    ok = ok and self.passes_main_wave(s)
             s.passed_threshold = ok
             out.append(s)
         return out

@@ -27,6 +27,7 @@ from quant.narrative.prompts import (
     prompt_pre_market,
 )
 from quant.pool.builder import build_candidates
+from quant.pool.pkyd_util import stock_pkyd_tags
 from quant.push.feishu import get_token, send_msg
 from quant.push.format import format_push_message
 from quant.scoring.context import ScoreContext, infer_regime
@@ -98,11 +99,30 @@ def _score_summary_lines(scores: list) -> list[str]:
     return lines
 
 
+def _watchlist_add_reason(score, candidate_row: dict) -> str:
+    parts = [f"评分{score.total:.1f}"]
+    source = str(candidate_row.get("候选来源") or "").strip()
+    if source == "盘口异动":
+        tags = "、".join(stock_pkyd_tags(candidate_row)) or "盘口异动"
+        parts.append(f"盘口异动({tags})+概念共振")
+    else:
+        tags = stock_pkyd_tags(candidate_row)
+        if tags:
+            parts.append(f"盘口异动({ '、'.join(tags) })")
+        parts.append("主线主升浪龙头")
+    return "；".join(parts)
+
+
 def _update_watchlist_evening(ctx: ScoreContext) -> tuple[list[dict], str]:
     """晚间复盘：对候选池评分，达标者 append 到 state/optional.jsonl。"""
     engine = ScoringEngine()
     candidates = build_candidates(ctx.payload)
-    scores = engine.apply_threshold(engine.score_many(ctx, candidates), kind="watchlist")
+    by_code = {str(c.get("股票代码", "")).strip(): c for c in candidates}
+    scores = engine.apply_threshold(
+        engine.score_many(ctx, candidates),
+        kind="watchlist",
+        stock_rows=by_code,
+    )
     passed = [s for s in scores if s.passed_threshold]
 
     existing = get_optional()
@@ -111,13 +131,17 @@ def _update_watchlist_evening(ctx: ScoreContext) -> tuple[list[dict], str]:
     for s in passed:
         if s.code in codes:
             continue
+        cand = by_code.get(s.code, {})
         row = {
             "股票代码": s.code,
             "股票名称": s.name,
             "战法": STRATEGY_NAME,
             "评分": round(s.total, 2),
-            "加入自选原因": f"评分{s.total:.1f}；主线主升浪龙头",
+            "加入自选原因": _watchlist_add_reason(s, cand),
         }
+        pkyd_tags = stock_pkyd_tags(cand)
+        if pkyd_tags:
+            row["盘口异动标签"] = pkyd_tags
         added.append(row)
         codes.add(s.code)
 

@@ -1,8 +1,15 @@
-"""晚间候选池：同花顺人气榜 + 主线概念（主升浪龙头候选）。"""
+"""晚间候选池：同花顺人气榜 + 主线概念 + 盘口异动概念共振。"""
 
 from __future__ import annotations
 
 from quant.config import load_scoring_config
+from quant.pool.pkyd_util import (
+    attach_pkyd_tags,
+    build_pkyd_tag_map,
+    merge_pkyd_rows_by_code,
+    pkyd_row_matches_hot_concepts,
+    stock_pkyd_tags,
+)
 from quant.scoring.dimensions.concept_theme import _stock_concepts, resolve_stock_concepts
 from quant.scoring.theme_tracker import resolve_main_themes
 
@@ -15,7 +22,10 @@ def build_candidates(payload: dict) -> list[dict]:
     cfg = load_scoring_config().get("candidate") or {}
     limit = int(cfg.get("popularity_limit", 20))
     include_zt = bool(cfg.get("include_zt_pool", False))
+    include_pkyd = bool(cfg.get("include_pkyd_concept_match", True))
     tops = resolve_main_themes(payload)
+    tag_map = build_pkyd_tag_map(payload.get("盘口异动"))
+    pkyd_rows = merge_pkyd_rows_by_code(rows=payload.get("盘口异动"))
 
     merged: dict[str, dict] = {}
 
@@ -25,7 +35,7 @@ def build_candidates(payload: dict) -> list[dict]:
         code = _code(row)
         if not code:
             continue
-        merged[code] = dict(row)
+        merged[code] = attach_pkyd_tags(dict(row), tag_map)
 
     # 概念涨幅/资金榜前列个股补充（若在 enrich 列表中）
     for key in ("自选股", "同花顺人气榜"):
@@ -38,7 +48,23 @@ def build_candidates(payload: dict) -> list[dict]:
             row = resolve_stock_concepts(row, payload)
             concepts = _stock_concepts(row)
             if tops and concepts & tops:
-                merged[code] = {**merged.get(code, {}), **row}
+                merged[code] = attach_pkyd_tags({**merged.get(code, {}), **row}, tag_map)
+
+    if include_pkyd:
+        for row in pkyd_rows:
+            if not isinstance(row, dict):
+                continue
+            code = _code(row)
+            if not code or code in merged:
+                continue
+            if not pkyd_row_matches_hot_concepts(row, payload):
+                continue
+            tags = tag_map.get(code) or stock_pkyd_tags(row)
+            merged[code] = {
+                **row,
+                "盘口异动标签": tags,
+                "候选来源": "盘口异动",
+            }
 
     if include_zt:
         zt = payload.get("涨停统计") or payload.get("涨停概况") or {}
@@ -48,6 +74,9 @@ def build_candidates(payload: dict) -> list[dict]:
                 continue
             code = _code(row)
             if code and code not in merged:
-                merged[code] = {"股票代码": code, "股票名称": row.get("名称", ""), **row}
+                merged[code] = attach_pkyd_tags(
+                    {"股票代码": code, "股票名称": row.get("名称", ""), **row},
+                    tag_map,
+                )
 
     return list(merged.values())
