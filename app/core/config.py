@@ -103,7 +103,7 @@ class Settings(BaseSettings):
     #: IANA 时区名，决定 Cron 触发本地钟点（A 股建议 `Asia/Shanghai`）。
     QUANT_SCHED_TIMEZONE: str = "Asia/Shanghai"
     #: 新闻任务：在哪些「整点小时」执行（逗号分隔 0–23），配合 `QUANT_SCHED_NEWS_MINUTE`。
-    QUANT_SCHED_NEWS_HOURS: str = "7,8,9,12,16,17,18,19,20,21,22,23"
+    QUANT_SCHED_NEWS_HOURS: str = "7,8,9,12,16,17,18,19,20,22,23"
     QUANT_SCHED_NEWS_MINUTE: int = Field(default=0, ge=0, le=59)
     #: 盘前（`pre_market`），仅工作日历命中时才会真正拉起子进程。
     QUANT_SCHED_PRE_MARKET_TIME: str = "09:25"
@@ -112,7 +112,7 @@ class Settings(BaseSettings):
     #: 午间复盘（`post_market_lunch`），仅交易日（`is_real_workday_cn`）执行。
     QUANT_SCHED_POST_MARKET_LUNCH_TIME: str = "11:50"
     #: 晚间复盘（`post_market_evening`）；工作日当晚 + 假日前一夜（详见 orchestrator）。
-    QUANT_SCHED_POST_MARKET_EVENING_TIME: str = "21:30"
+    QUANT_SCHED_POST_MARKET_EVENING_TIME: str = "20:10"
     #: `python -m quant` 子进程超时（秒）；``None`` 表示不限制（长耗时拉数/LLM 时慎用上限）。
     QUANT_SCHED_SUBPROCESS_TIMEOUT_SEC: float | None = None
     #: 错过触发窗口后的仍可执行宽限（秒）。
