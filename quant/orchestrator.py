@@ -12,7 +12,9 @@ from datetime import date, datetime, timedelta
 
 from app.utils.common_util import is_real_workday_cn
 
-from quant.data_fetch import fetch_mode, unwrap_payload
+from app.core.config import get_settings
+
+from quant.data_fetch import fetch_mode, fixture_path_for_mode, unwrap_payload
 from quant.constants import STRATEGY_NAME
 from quant.execution.executor import ExecutedTrade, execute_signals
 from quant.gates.rules import check_global_gates
@@ -298,9 +300,13 @@ def run_mode(mode: str, timestamp: str) -> None:
         print("当前日期/模式不满足交易日历条件，跳过")
         return
 
+    settings = get_settings()
     try:
         raw = fetch_mode(mode)
-        print("数据拉取成功")
+        if settings.QUANT_USE_LOCAL_FIXTURE:
+            print(f"本地数据：已加载 {fixture_path_for_mode(mode)}")
+        else:
+            print("数据拉取成功（HTTP API）")
     except Exception as e:
         print(f"数据拉取失败: {e}")
         sys.exit(1)

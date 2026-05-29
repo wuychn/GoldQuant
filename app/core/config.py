@@ -41,6 +41,19 @@ def _dotenv_get(env_path: Path, key: str) -> str | None:
     return None
 
 
+def _parse_bool_env(value: str | bool | None) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    s = str(value).strip().lower()
+    if s in ("1", "true", "yes", "on"):
+        return True
+    if s in ("0", "false", "no", "off", ""):
+        return False
+    return None
+
+
 def _env_plain_or_prefixed(plain: str, prefixed: str, *, env_file: Path) -> str | None:
     """优先进程环境变量，其次 ``.env``；支持无前缀（``LLM_*``）与 ``GOLDQUANT_LLM_*``。"""
     import os
@@ -139,8 +152,10 @@ class Settings(BaseSettings):
     #: 盘前/盘中/盘后接口里「历史行情」日线最多返回条数（从最新往前截），减轻模型上下文；完整 K 线仍在本地归档。
     QUANT_HIST_RESPONSE_MAX_BARS: int = Field(default=48, ge=1, le=4000)
 
-    #: 测试阶段：为 true 时人气榜/涨停统计/盘口异动仅处理前 3 条（问财 enrich 等亦随之减少）。
+    #: 测试阶段：为 true 时人气榜/涨停统计/盘口异动仅处理前 3 条（仍走实时接口）。
     QUANT_TEST_PHASE: bool = False
+    #: 本地数据：为 true 时 ``python -m quant`` 从 ``data/*.json`` 读数，不请求 FastAPI。
+    QUANT_USE_LOCAL_FIXTURE: bool = False
 
     def quant_hot_list_limit(self) -> int:
         """同花顺人气榜处理条数上限。"""
@@ -159,10 +174,35 @@ class Settings(BaseSettings):
     LLM_API_KEY: str | None = None
     LLM_BASE_URL: str = "https://api.minimaxi.com/anthropic"
     LLM_MODEL: str = "MiniMax-M2.7"
+    #: ``openai`` → ``/chat/completions``；``anthropic`` → ``/v1/messages``。
+    LLM_API_FORMAT: str = "openai"
+    #: HTTPS 是否校验证书；内网/自签证书网关可设 ``false``。
+    LLM_VERIFY_SSL: bool = False
+    #: 是否读取系统 ``HTTP_PROXY`` 等环境变量（企业代理干扰时设 ``false``）。
+    LLM_TRUST_ENV_PROXY: bool = False
+    LLM_TIMEOUT_SEC: float = Field(default=600.0, ge=30.0, le=3600.0)
+    LLM_USE_APP_PROXY: bool = False
+
+    @field_validator(
+        "QUANT_TEST_PHASE",
+        "QUANT_USE_LOCAL_FIXTURE",
+        "LLM_VERIFY_SSL",
+        "LLM_TRUST_ENV_PROXY",
+        "LLM_USE_APP_PROXY",
+        mode="before",
+    )
+    @classmethod
+    def coerce_bool_flags(cls, v: object) -> bool:
+        if isinstance(v, bool):
+            return v
+        parsed = _parse_bool_env(str(v) if v is not None else None)
+        if parsed is not None:
+            return parsed
+        raise ValueError(f"布尔配置无法解析: {v!r}")
 
     @model_validator(mode="after")
     def merge_llm_plain_env_names(self) -> Settings:
-        """兼容 ``.env`` 中无前缀的 ``LLM_*`` / ``FEISHU_*``（``env_prefix`` 无法自动映射到无前缀变量名）。"""
+        """兼容 ``.env`` 中无前缀的 ``LLM_*`` / ``FEISHU_*`` / 量化布尔开关。"""
         ak = self.LLM_API_KEY
         if not ak:
             ak = _env_plain_or_prefixed("LLM_API_KEY", "GOLDQUANT_LLM_API_KEY", env_file=_ENV_FILE)
@@ -170,9 +210,12 @@ class Settings(BaseSettings):
         bu = bu_o if bu_o else self.LLM_BASE_URL
         md_o = _env_plain_or_prefixed("LLM_MODEL", "GOLDQUANT_LLM_MODEL", env_file=_ENV_FILE)
         md = md_o if md_o else self.LLM_MODEL
+        fmt_o = _env_plain_or_prefixed("LLM_API_FORMAT", "GOLDQUANT_LLM_API_FORMAT", env_file=_ENV_FILE)
+        fmt = fmt_o if fmt_o else self.LLM_API_FORMAT
         object.__setattr__(self, "LLM_API_KEY", ak)
         object.__setattr__(self, "LLM_BASE_URL", bu)
         object.__setattr__(self, "LLM_MODEL", md)
+        object.__setattr__(self, "LLM_API_FORMAT", fmt)
 
         # 飞书配置（支持无前缀 FEISHU_*）
         for field_name in ("FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_USER_ID"):
@@ -181,6 +224,19 @@ class Settings(BaseSettings):
                 val = _env_plain_or_prefixed(field_name, f"GOLDQUANT_{field_name}", env_file=_ENV_FILE)
                 if val:
                     object.__setattr__(self, field_name, val)
+
+        for plain, prefixed, attr in (
+            ("QUANT_TEST_PHASE", "GOLDQUANT_QUANT_TEST_PHASE", "QUANT_TEST_PHASE"),
+            ("QUANT_USE_LOCAL_FIXTURE", "GOLDQUANT_QUANT_USE_LOCAL_FIXTURE", "QUANT_USE_LOCAL_FIXTURE"),
+            ("LLM_VERIFY_SSL", "GOLDQUANT_LLM_VERIFY_SSL", "LLM_VERIFY_SSL"),
+            ("LLM_TRUST_ENV_PROXY", "GOLDQUANT_LLM_TRUST_ENV_PROXY", "LLM_TRUST_ENV_PROXY"),
+            ("LLM_USE_APP_PROXY", "GOLDQUANT_LLM_USE_APP_PROXY", "LLM_USE_APP_PROXY"),
+        ):
+            raw = _env_plain_or_prefixed(plain, prefixed, env_file=_ENV_FILE)
+            if raw is not None:
+                val = _parse_bool_env(raw)
+                if val is not None:
+                    object.__setattr__(self, attr, val)
         return self
 
     @field_validator("CORS_ORIGINS")

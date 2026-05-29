@@ -21,7 +21,8 @@ scoring:
 
   # 晚间候选池构建（pool/builder.py）
   candidate:
-    popularity_limit: 30    # 同花顺人气榜取前 N 只（须 ≤ API 返回条数；测试阶段由 QUANT_TEST_PHASE 截为 3）
+    popularity_limit: 30    # 同花顺人气榜取前 N 只（须 ≤ API 返回条数；QUANT_TEST_PHASE 时 API 截为 3）
+    # CLI 本地数据：GOLDQUANT_QUANT_USE_LOCAL_FIXTURE=true 时从 data/<mode>.json 读，不走 HTTP
     include_zt_pool: false  # 是否并入当日涨停池（主升浪默认不依赖）
     include_pkyd_concept_match: true  # 盘口异动且概念共振时纳入候选
     require_main_wave: true # 加自选须 main_wave 维度达标
