@@ -295,12 +295,13 @@ def pipeline_allowed_for_mode(mode: str, *, on: date | None = None) -> bool:
 
 def run_mode(mode: str, timestamp: str) -> None:
     """单次运行完整流水线：fetch → process → save → feishu。"""
+    settings = get_settings()
     label = _MODE_LABELS.get(mode, mode)
-    if not pipeline_allowed_for_mode(mode):
+
+    if not settings.QUANT_TEST_PHASE and not pipeline_allowed_for_mode(mode):
         print("当前日期/模式不满足交易日历条件，跳过")
         return
 
-    settings = get_settings()
     try:
         raw = fetch_mode(mode)
         if settings.QUANT_USE_LOCAL_FIXTURE:
