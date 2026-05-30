@@ -22,7 +22,9 @@ from app.schemas.response import Response
 from app.utils.common_util import (
     get_n_workdays_ago,
     get_val,
+    is_allowed_symbol_pool_code,
     list_to_dict_v2,
+    normalize_a_share_code,
     _normalize_quant_datetime_string,
     _should_normalize_datetime_like_string,
     _yyyymmdd_to_iso,
@@ -539,7 +541,10 @@ async def _hot(settings: SettingsDep):
 
 
 async def _pkyd(settings: SettingsDep):
-    """东财盘口异动（60日新高 / 60日大幅上涨），按代码去重后附带问财所属概念。"""
+    """东财盘口异动（60日新高 / 60日大幅上涨），按代码去重后附带问财所属概念。
+
+    仅保留沪主/深主/创业板（60/00/30），剔除科创板、北交所等。
+    """
     try:
         entries: list[tuple[str, str | None, str]] = []
         for label in ("60日新高", "60日大幅上涨"):
@@ -549,12 +554,18 @@ async def _pkyd(settings: SettingsDep):
             for row in batch:
                 if not isinstance(row, dict):
                     continue
-                code = str(row.get("代码", "") or "").strip()
-                if not code.startswith(("30", "00", "60")):
+                code = normalize_a_share_code(row.get("代码", ""))
+                if not code or not is_allowed_symbol_pool_code(code):
                     continue
                 entries.append((code, row.get("名称"), label))
 
         merged = merge_pkyd_rows_by_code(entries=entries)
+        merged = [
+            item
+            for item in merged
+            if isinstance(item, dict)
+            and is_allowed_symbol_pool_code(item.get("股票代码", ""))
+        ]
         row_limit = settings.quant_bulk_row_limit()
         if row_limit is not None:
             merged = merged[:row_limit]

@@ -17,6 +17,7 @@ from quant.config import load_gates_config
 from quant.market.turnover import load_completed_day_turnovers
 from quant.scoring.context import ScoreContext, index_change, infer_regime
 from quant.store.state import get_total_assets, stoploss_cooldown_codes, sum_today_realized_pnl
+from app.utils.common_util import is_allowed_symbol_pool_code, normalize_a_share_code
 
 
 @dataclass
@@ -44,12 +45,11 @@ class GateReport:
 def _symbol_ok(code: str, name: str, cfg: dict) -> GateResult:
     pool = cfg.get("symbol_pool") or {}
     prefixes = pool.get("prefixes") or ["60", "00", "30"]
-    if not any(code.startswith(p) for p in prefixes):
+    norm = normalize_a_share_code(code)
+    if not is_allowed_symbol_pool_code(norm, prefixes=tuple(prefixes)):
         return GateResult(False, "标的池", f"{code} 不在允许板块")
     if pool.get("exclude_st") and ("ST" in name.upper() or name.startswith("*")):
         return GateResult(False, "标的池", f"{name} 为 ST")
-    if code.startswith(("688", "8")):
-        return GateResult(False, "标的池", f"{code} 板块排除")
     return GateResult(True, "标的池")
 
 

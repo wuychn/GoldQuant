@@ -438,6 +438,41 @@ def round_half_up(value, decimals=2):
     return Decimal(str(value)).quantize(factor, rounding=ROUND_HALF_UP)
 
 
+_DEFAULT_SYMBOL_PREFIXES = ("60", "00", "30")
+_EXCLUDED_BOARD_PREFIXES = ("688", "689", "8", "4")  # 科创板、北交所等
+
+
+def normalize_a_share_code(code: str | int | None) -> str:
+    """从 ``600519`` / ``SH600519`` / ``600519.SH`` 等提取 6 位 A 股代码。"""
+    if code is None:
+        return ""
+    s = str(code).strip().upper()
+    if not s:
+        return ""
+    m = re.search(r"(\d{6})", s)
+    if m:
+        return m.group(1)
+    digits = re.sub(r"\D", "", s)
+    if len(digits) >= 6:
+        return digits[-6:]
+    return digits.zfill(6) if digits else ""
+
+
+def is_allowed_symbol_pool_code(
+    code: str | int | None,
+    *,
+    prefixes: tuple[str, ...] | list[str] | None = None,
+) -> bool:
+    """沪主/深主/创业板（默认 60/00/30），排除科创板、北交所等。"""
+    norm = normalize_a_share_code(code)
+    if len(norm) != 6 or not norm.isdigit():
+        return False
+    if norm.startswith(_EXCLUDED_BOARD_PREFIXES):
+        return False
+    pfx = tuple(prefixes) if prefixes else _DEFAULT_SYMBOL_PREFIXES
+    return any(norm.startswith(p) for p in pfx)
+
+
 if __name__ == "__main__":
     # 测试用例（具体日期依赖节假日接口）
     print(get_n_workdays_ago("2026-10-08", n=5))
