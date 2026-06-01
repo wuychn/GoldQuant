@@ -4,6 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.utils.common_util import (
+    extract_stock_code,
+    filter_symbol_pool_rows,
+    is_allowed_symbol_pool_code,
+    row_allowed_symbol_pool,
+)
 from quant.config import load_gates_config
 from quant.scoring.dimensions.concept_theme import _stock_concepts, resolve_stock_concepts
 from quant.scoring.theme_tracker import resolve_main_themes, snapshot_boards
@@ -11,8 +17,23 @@ from quant.scoring.theme_tracker import resolve_main_themes, snapshot_boards
 _PKYD_TAG_KEYS = ("盘口异动标签", "异动类型", "原因")
 
 
+def extract_pkyd_code(row: dict | None) -> str:
+    """从盘口异动行提取并规范化为 6 位 A 股代码。"""
+    return extract_stock_code(row)
+
+
+def pkyd_row_allowed(row: dict | None) -> bool:
+    """仅沪主/深主/创业板；剔除科创板(688/689)、北交所(8/4) 等。"""
+    return row_allowed_symbol_pool(row)
+
+
+def filter_pkyd_rows(rows: list[dict] | None) -> list[dict]:
+    """过滤并规范化 ``盘口异动`` 列表（统一 ``股票代码`` 字段）。"""
+    return filter_symbol_pool_rows(rows)
+
+
 def _code(row: dict) -> str:
-    return str(row.get("股票代码") or row.get("代码") or "").strip()
+    return extract_pkyd_code(row)
 
 
 def _normalize_tags(raw: object) -> list[str]:
@@ -33,9 +54,9 @@ def merge_pkyd_rows_by_code(
     by_code: dict[str, dict[str, Any]] = {}
 
     for code, name, label in entries or []:
-        code = str(code).strip()
+        code = normalize_a_share_code(code)
         label = str(label).strip()
-        if not code or not code.startswith(("30", "00", "60")):
+        if not code or not is_allowed_symbol_pool_code(code):
             continue
         item = by_code.setdefault(
             code,
@@ -51,7 +72,7 @@ def merge_pkyd_rows_by_code(
         if not isinstance(row, dict):
             continue
         code = _code(row)
-        if not code or not code.startswith(("30", "00", "60")):
+        if not code or not is_allowed_symbol_pool_code(code):
             continue
         item = by_code.setdefault(
             code,
@@ -77,7 +98,7 @@ def merge_pkyd_rows_by_code(
         tags = item.get("异动类型") or []
         item["原因"] = tags[0] if len(tags) == 1 else "、".join(tags)
         out.append(item)
-    return out
+    return filter_pkyd_rows(out)
 
 
 def build_pkyd_tag_map(pkyd_rows: list[dict] | None) -> dict[str, list[str]]:
@@ -87,7 +108,7 @@ def build_pkyd_tag_map(pkyd_rows: list[dict] | None) -> dict[str, list[str]]:
         if not isinstance(row, dict):
             continue
         code = _code(row)
-        if not code:
+        if not code or not is_allowed_symbol_pool_code(code):
             continue
         tags = set(_normalize_tags(row.get("异动类型")))
         if not tags:

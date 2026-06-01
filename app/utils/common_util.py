@@ -446,16 +446,28 @@ def normalize_a_share_code(code: str | int | None) -> str:
     """从 ``600519`` / ``SH600519`` / ``600519.SH`` 等提取 6 位 A 股代码。"""
     if code is None:
         return ""
-    s = str(code).strip().upper()
+    if isinstance(code, bool):
+        return ""
+    if isinstance(code, int):
+        s = str(code)
+    else:
+        s = str(code).strip().upper()
     if not s:
         return ""
     m = re.search(r"(\d{6})", s)
     if m:
         return m.group(1)
     digits = re.sub(r"\D", "", s)
-    if len(digits) >= 6:
+    if not digits:
+        return ""
+    if len(digits) > 6:
         return digits[-6:]
-    return digits.zfill(6) if digits else ""
+    if len(digits) == 6:
+        return digits
+    # 仅对 1–5 位数字补零（如 926 → 000926）；6 位非法码不在此 zfill
+    if len(digits) < 6:
+        return digits.zfill(6)
+    return ""
 
 
 def is_allowed_symbol_pool_code(
@@ -471,6 +483,48 @@ def is_allowed_symbol_pool_code(
         return False
     pfx = tuple(prefixes) if prefixes else _DEFAULT_SYMBOL_PREFIXES
     return any(norm.startswith(p) for p in pfx)
+
+
+_STOCK_CODE_KEYS = ("股票代码", "代码", "code")
+
+
+def extract_stock_code(row: dict | None) -> str:
+    """从行情行提取并规范化为 6 位 A 股代码。"""
+    if not isinstance(row, dict):
+        return ""
+    for key in _STOCK_CODE_KEYS:
+        raw = row.get(key)
+        if raw is None or str(raw).strip() == "":
+            continue
+        code = normalize_a_share_code(raw)
+        if code:
+            return code
+    return ""
+
+
+def row_allowed_symbol_pool(row: dict | None) -> bool:
+    """行内股票是否在允许标的池（沪主/深主/创业板）。"""
+    code = extract_stock_code(row)
+    return bool(code) and is_allowed_symbol_pool_code(code)
+
+
+def filter_symbol_pool_rows(rows: list | None) -> list[dict]:
+    """过滤列表，仅保留允许标的池；统一 ``股票代码`` / ``代码`` 字段。"""
+    out: list[dict] = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        code = extract_stock_code(row)
+        if not code or not is_allowed_symbol_pool_code(code):
+            continue
+        item = dict(row)
+        item["股票代码"] = code
+        item["代码"] = code
+        name = item.get("股票名称") or item.get("名称")
+        if name and not item.get("股票名称"):
+            item["股票名称"] = name
+        out.append(item)
+    return out
 
 
 if __name__ == "__main__":

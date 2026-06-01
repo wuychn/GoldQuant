@@ -22,9 +22,8 @@ from app.schemas.response import Response
 from app.utils.common_util import (
     get_n_workdays_ago,
     get_val,
-    is_allowed_symbol_pool_code,
+    filter_symbol_pool_rows,
     list_to_dict_v2,
-    normalize_a_share_code,
     _normalize_quant_datetime_string,
     _should_normalize_datetime_like_string,
     _yyyymmdd_to_iso,
@@ -43,7 +42,10 @@ from quant.pool.pkyd_util import (
     build_pkyd_tag_map,
     enrich_list_with_pkyd_tags,
     enrich_zt_stats_with_pkyd,
+    extract_pkyd_code,
+    filter_pkyd_rows,
     merge_pkyd_rows_by_code,
+    pkyd_row_allowed,
     stock_pkyd_tags,
 )
 
@@ -487,9 +489,10 @@ async def _zqxy(*, market_phase: str = "intraday"):
 def _apply_row_limit(rows: list | None, limit: int | None) -> list:
     if not isinstance(rows, list):
         return []
+    allowed = filter_symbol_pool_rows(rows)
     if limit is None:
-        return rows
-    return rows[:limit]
+        return allowed
+    return allowed[:limit]
 
 
 async def _ztgk(settings: SettingsDep, more: bool = False):
@@ -497,8 +500,9 @@ async def _ztgk(settings: SettingsDep, more: bool = False):
     row_limit = settings.quant_bulk_row_limit()
     try:
         zt_full = await run_in_threadpool(ztgc)
-        height = _zt_height(zt_full)
-        result["今日涨停"] = _apply_row_limit(zt_full, row_limit)
+        zt_allowed = filter_symbol_pool_rows(zt_full)
+        height = _zt_height(zt_allowed)
+        result["今日涨停"] = zt_allowed[:row_limit] if row_limit is not None else zt_allowed
         result["市场高度"] = f"{height}连板"
     except Exception:
         _log_api_error("今日涨停股全量 | ztgc")
@@ -517,7 +521,7 @@ async def _hot(settings: SettingsDep):
     try:
         n = settings.quant_hot_list_limit()
         raw_hot = await hot_stock(settings, n)
-        rows = raw_hot[:n] if isinstance(raw_hot, list) else []
+        rows = filter_symbol_pool_rows(raw_hot[:n] if isinstance(raw_hot, list) else [])
         out: list[dict[str, Any]] = []
         for item in rows:
             if not isinstance(item, dict):
@@ -554,18 +558,13 @@ async def _pkyd(settings: SettingsDep):
             for row in batch:
                 if not isinstance(row, dict):
                     continue
-                code = normalize_a_share_code(row.get("代码", ""))
-                if not code or not is_allowed_symbol_pool_code(code):
+                if not pkyd_row_allowed(row):
                     continue
-                entries.append((code, row.get("名称"), label))
+                code = extract_pkyd_code(row)
+                entries.append((code, row.get("名称") or row.get("股票名称"), label))
 
         merged = merge_pkyd_rows_by_code(entries=entries)
-        merged = [
-            item
-            for item in merged
-            if isinstance(item, dict)
-            and is_allowed_symbol_pool_code(item.get("股票代码", ""))
-        ]
+        merged = filter_pkyd_rows(merged)
         row_limit = settings.quant_bulk_row_limit()
         if row_limit is not None:
             merged = merged[:row_limit]
@@ -884,7 +883,7 @@ async def post_market(settings: SettingsDep, background_tasks: BackgroundTasks) 
 
     # 盘口异动：问财所属概念 + 与人气/涨停交叉打标
     pkyd_ = await _pkyd(settings)
-    pkyd_list = pkyd_ if isinstance(pkyd_, list) else []
+    pkyd_list = filter_pkyd_rows(pkyd_ if isinstance(pkyd_, list) else [])
     tag_map = build_pkyd_tag_map(pkyd_list)
     hot_ = enrich_list_with_pkyd_tags(hot_, tag_map)
     zttj = enrich_zt_stats_with_pkyd(zttj, tag_map)
