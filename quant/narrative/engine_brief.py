@@ -65,9 +65,11 @@ def build_engine_brief(
     watchlist_scores: list[Any] | None = None,
     watchlist_added: list[dict] | None = None,
 ) -> str:
-    """组装「程序结论」块；LLM 叙述必须与此一致，不得自行推断。"""
+    """组装研判要点块（供 LLM 引用，勿原样复制标签进推送正文）。"""
     detail = theme_detail(payload)
     confirmed = detail.get("确认主线") or []
+    gain_main = detail.get("涨幅主线")
+    fund_main = detail.get("资金主线")
     gain = detail.get("当日涨幅概念") or []
     fund = detail.get("当日资金概念") or []
     leaders = _collect_theme_leaders(ctx, payload)
@@ -83,37 +85,38 @@ def build_engine_brief(
     idx_s = f"{idx:.2f}" if idx is not None else "—"
 
     lines = [
-        "【程序结论 · 规则引擎输出，叙述须与此一致，禁止自行推断或改写】",
+        "【研判要点 · 须写入正文，勿自拟主线/龙头/买卖；勿把本段标题抄进正文】",
         f"仓位档位：{regime}（上证{idx_s}% 上涨{up}/下跌{down} 涨停{zt_cnt}/跌停{dt_cnt} 最高{height}板）",
-        f"确认主线（{len(confirmed)}）：{'、'.join(confirmed) if confirmed else '暂无'}",
+        f"当前主线（{len(confirmed)}）：{'、'.join(confirmed) if confirmed else '暂无'}"
+        f"（涨幅·{gain_main or '暂无'}；资金·{fund_main or '暂无'}）",
         f"当日涨幅榜概念：{'、'.join(gain[:10]) if gain else '暂无'}",
         f"当日资金流入概念：{'、'.join(fund[:10]) if fund else '暂无'}",
-        f"程序认定主线龙头（{len(leaders)}）：{'、'.join(leaders) if leaders else '暂无（或当前 payload 无人气/自选数据）'}",
-        f"全局门禁：{check_global_gates(ctx).summary()}",
+        f"主线龙头（{len(leaders)}）：{'、'.join(leaders) if leaders else '暂无（或当前无人气/自选数据）'}",
+        f"风控状态：{check_global_gates(ctx).summary()}",
     ]
 
     rotation = format_concept_rotation()
     if rotation and "暂无" not in rotation[:20]:
         lines.append("")
-        lines.append("【程序归档 · 近几日概念轮动】")
+        lines.append("【近几日概念轮动】")
         lines.append(rotation)
 
     if mode == "pre_market":
         trades = format_yesterday_trades()
         if trades:
             lines.append("")
-            lines.append(f"【程序归档 · 上一交易日成交】{trades}")
+            lines.append(f"【上一交易日成交】{trades}")
 
     if mode == "post_market_evening" and watchlist_scores is not None:
         score_lines = _format_watchlist_scores(watchlist_scores)
         if score_lines:
             lines.append("")
-            lines.append("【程序评分 · 晚间候选池】")
+            lines.append("【晚间候选池评分】")
             lines.extend(score_lines)
         if watchlist_added:
             names = "、".join(f"{r.get('股票名称')}({r.get('股票代码')})" for r in watchlist_added)
-            lines.append(f"【程序决策 · 新增自选】{names}")
+            lines.append(f"【新增自选参考】{names}")
         elif watchlist_scores is not None:
-            lines.append("【程序决策 · 新增自选】本轮无新增")
+            lines.append("【新增自选参考】本轮无新增")
 
     return "\n".join(lines)

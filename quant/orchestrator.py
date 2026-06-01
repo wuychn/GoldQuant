@@ -29,6 +29,7 @@ from quant.narrative.prompts import (
     prompt_pre_market,
 )
 from quant.pool.builder import build_candidates
+from quant.scoring.theme_tracker import update_main_theme_state
 from quant.pool.pkyd_util import stock_pkyd_tags
 from quant.push.feishu import get_token, send_msg
 from quant.push.format import format_push_message
@@ -86,10 +87,10 @@ def _no_trade_reason(mode: str, ctx: ScoreContext, buy_n: int, sell_n: int) -> s
     gates = check_global_gates(ctx).summary()
     regime = infer_regime(ctx.payload)
     if buy_n == 0 and sell_n == 0:
-        return f"原因：程序未产生买卖原始信号；市场状态{regime}；{gates}。"
+        return f"原因：暂无买卖信号；市场{regime}；{gates}。"
     return (
-        f"原因：有原始信号但未成交（买入{buy_n}条/卖出{sell_n}条，"
-        f"可能未过三确认或门禁）；市场状态{regime}；{gates}。"
+        f"原因：有信号未成交（买入{buy_n}条/卖出{sell_n}条，"
+        f"可能未过三确认或风控限制）；市场{regime}；{gates}。"
     )
 
 
@@ -259,6 +260,7 @@ def process_lunch_review(raw: dict) -> str:
 
 def process_evening_review(raw: dict) -> str:
     payload = _prepare_payload(raw)
+    update_main_theme_state(payload)
     ctx = ScoreContext.from_payload(payload, mode="post_market_evening")
 
     added, optional_section, scores = _update_watchlist_evening(ctx)

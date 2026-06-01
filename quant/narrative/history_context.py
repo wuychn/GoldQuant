@@ -8,9 +8,9 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from quant.scoring.theme_tracker import (
-    _history_in_window,
     _load_state,
     _theme_cfg,
+    resolve_main_theme_leaders,
     resolve_main_themes,
     snapshot_boards,
 )
@@ -78,39 +78,21 @@ def _load_evening_raw(date_str: str) -> dict | None:
 
 
 def format_main_theme_context() -> str:
-    """从 main_themes.json 输出确认主线与观察中概念（不写入新数据）。"""
+    """从 main_themes.json 输出确认主线（涨幅/资金各 1 条）。"""
     cfg = _theme_cfg()
     lookback = int(cfg.get("lookback_days", 5))
-    min_days = int(cfg.get("min_hit_days", 2))
-    require_fund = bool(cfg.get("require_fund_once", True))
-
-    confirmed = sorted(resolve_main_themes({}, update=False))
     state = _load_state()
     last_update = str(state.get("last_update_date") or "")
+    gain_main, fund_main = resolve_main_theme_leaders(state, lookback=lookback)
+    confirmed = sorted(resolve_main_themes({}, update=False))
 
     lines = [
-        f"规则：近{lookback}日内至少{min_days}次上榜"
-        + ("且至少1次资金流入榜" if require_fund else "")
-        + f"；状态最后更新 {last_update or '无'}。",
-        f"确认主线（{len(confirmed)}）: "
-        + ("、".join(confirmed) if confirmed else "暂无"),
+        f"规则：近{lookback}日滑动窗口，累计涨幅最大 + 累计资金流入各 1 条主线；"
+        f"状态最后更新 {last_update or '无'}。",
+        f"涨幅主线: {gain_main or '暂无'}",
+        f"资金主线: {fund_main or '暂无'}",
+        f"确认主线（{len(confirmed)}）: " + ("、".join(confirmed) if confirmed else "暂无"),
     ]
-
-    tracking: list[tuple[int, int, str]] = []
-    for name, entry in (state.get("concepts") or {}).items():
-        if name in confirmed:
-            continue
-        hist = _history_in_window(entry.get("history") or {}, lookback)
-        if not hist:
-            continue
-        fund_hits = sum(1 for f in hist.values() if f.get("fund"))
-        tracking.append((len(hist), fund_hits, name))
-
-    tracking.sort(key=lambda x: (-x[0], -x[1], x[2]))
-    if tracking:
-        top = tracking[:8]
-        parts = [f"{n}({d}日" + (f"/资金{f}次" if f else "") + ")" for d, f, n in top]
-        lines.append("观察中（未达主线阈值）: " + "、".join(parts))
 
     today_dual = state.get("today_dual") or []
     if today_dual:

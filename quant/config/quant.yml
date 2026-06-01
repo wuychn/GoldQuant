@@ -124,12 +124,10 @@ gates:
       min_interval_minutes: 30
       max_interval_minutes: 240
 
-  # 主线题材：多日 persistence，过滤单日轮动脉冲
+  # 主线题材：滑动窗口累计涨幅最大 + 累计资金流入最多，各 1 条；仅晚间复盘写入状态
   main_theme:
-    board_limit: 10                 # 概念涨幅榜/资金流入榜各取前 N
-    lookback_days: 5                # 回溯窗口（自然日）
-    min_hit_days: 2                 # 窗口内至少上榜天数
-    require_fund_once: true         # 窗口内须至少 1 次进资金流入榜
+    board_limit: 10                 # 每日快照：概念涨幅榜/资金流入榜各取前 N（仅 post_market_evening）
+    lookback_days: 5                # 滑动窗口（自然日）
     score_weights:                  # concept_theme 维度：各概念共振权重上限（合计约 100）
       confirmed: 40                 # 已确认主线
       gain_rank: 25                 # 涨幅榜排名（第 1 名满额，越靠后越低）

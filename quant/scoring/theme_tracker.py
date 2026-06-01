@@ -1,6 +1,7 @@
-"""主线题材跟踪：多日 persistence，过滤单日脉冲/轮动噪音。
+"""主线题材：滑动窗口内累计涨幅最大 + 累计资金流入最多，各 1 条（最多 2 条）。
 
-当日涨幅榜或资金榜前列 ≠ 主线。主线需在近 N 日内反复出现，且至少有一次资金榜确认。
+日快照与主线确认仅在 ``post_market_evening`` 写入 ``main_themes.json``；
+盘中/午间/盘前等模式只读已确认主线，不更新状态。
 """
 
 from __future__ import annotations
@@ -15,6 +16,12 @@ from quant.store.paths import state_file
 
 _SH_TZ = ZoneInfo("Asia/Shanghai")
 _STATE_NAME = "main_themes.json"
+MAIN_THEME_UPDATE_MODE = "post_market_evening"
+
+
+def should_update_main_theme(mode: str = "") -> bool:
+    """是否允许写入 ``main_themes.json``（仅晚间复盘）。"""
+    return mode == MAIN_THEME_UPDATE_MODE
 
 
 def _theme_cfg() -> dict[str, Any]:
@@ -26,6 +33,13 @@ def _board_rows(payload: dict, key: str, limit: int) -> list[dict]:
     boards = payload.get("概念板块") or {}
     rows = boards.get(key) or []
     return [r for r in rows[:limit] if isinstance(r, dict)]
+
+
+def _f(v: object, default: float = 0.0) -> float:
+    try:
+        return float(v)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
 
 
 def snapshot_boards(payload: dict, *, limit: int = 10) -> tuple[set[str], set[str]]:
@@ -43,17 +57,39 @@ def snapshot_boards(payload: dict, *, limit: int = 10) -> tuple[set[str], set[st
     return gain, fund
 
 
+def _snapshot_gain_rows(payload: dict, limit: int) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for row in _board_rows(payload, "涨幅榜", limit):
+        name = str(row.get("行业", "")).strip()
+        if not name:
+            continue
+        out.append({"行业": name, "行业-涨跌幅": _f(row.get("行业-涨跌幅"))})
+    return out
+
+
+def _snapshot_fund_rows(payload: dict, limit: int) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for row in _board_rows(payload, "资金流入榜", limit):
+        name = str(row.get("行业", "")).strip()
+        if not name:
+            continue
+        out.append({"行业": name, "净额": _f(row.get("净额"))})
+    return out
+
+
 def _load_state() -> dict[str, Any]:
     path = state_file(_STATE_NAME)
     if not path.is_file():
-        return {"concepts": {}, "last_update_date": ""}
+        return {"daily": {}, "last_update_date": ""}
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
-        return {"concepts": {}, "last_update_date": ""}
+        return {"daily": {}, "last_update_date": ""}
     if not isinstance(raw, dict):
-        return {"concepts": {}, "last_update_date": ""}
-    raw.setdefault("concepts", {})
+        return {"daily": {}, "last_update_date": ""}
+    if "daily" not in raw:
+        raw = {"daily": {}, "last_update_date": str(raw.get("last_update_date") or "")}
+    raw.setdefault("daily", {})
     return raw
 
 
@@ -71,66 +107,93 @@ def _window_start(lookback: int) -> str:
     return (date.today() - timedelta(days=lookback - 1)).isoformat()
 
 
-def _history_in_window(history: dict[str, Any], lookback: int) -> dict[str, dict[str, bool]]:
+def _trim_daily(state: dict[str, Any], lookback: int) -> None:
+    daily: dict[str, Any] = state.setdefault("daily", {})
     cutoff = _window_start(lookback)
-    out: dict[str, dict[str, bool]] = {}
-    for d, flags in (history or {}).items():
-        if d >= cutoff and isinstance(flags, dict):
-            out[d] = {
-                "gain": bool(flags.get("gain")),
-                "fund": bool(flags.get("fund")),
-            }
-    return out
+    for key in list(daily.keys()):
+        if key < cutoff:
+            del daily[key]
+
+
+def _max_by_total(totals: dict[str, float]) -> str | None:
+    if not totals:
+        return None
+    return max(totals.items(), key=lambda x: (x[1], x[0]))[0]
+
+
+def resolve_main_theme_leaders(state: dict[str, Any], *, lookback: int | None = None) -> tuple[str | None, str | None]:
+    """滑动窗口内：累计涨幅最大概念、累计资金净流入最大概念（各 1 条）。"""
+    cfg = _theme_cfg()
+    window = lookback if lookback is not None else int(cfg.get("lookback_days", 5))
+    cutoff = _window_start(window)
+    gain_totals: dict[str, float] = {}
+    fund_totals: dict[str, float] = {}
+
+    for d, snap in (state.get("daily") or {}).items():
+        if d < cutoff or not isinstance(snap, dict):
+            continue
+        for row in snap.get("gain") or []:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("行业", "")).strip()
+            if name:
+                gain_totals[name] = gain_totals.get(name, 0.0) + _f(row.get("行业-涨跌幅"))
+        for row in snap.get("fund") or []:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("行业", "")).strip()
+            if name:
+                fund_totals[name] = fund_totals.get(name, 0.0) + _f(row.get("净额"))
+
+    return _max_by_total(gain_totals), _max_by_total(fund_totals)
 
 
 def update_main_theme_state(payload: dict) -> dict[str, Any]:
-    """按日写入概念上榜记录（同一自然日只记一次）。"""
+    """按日写入概念榜快照（涨幅/资金各 top N），保留滑动窗口。"""
     cfg = _theme_cfg()
     limit = int(cfg.get("board_limit", 10))
     lookback = int(cfg.get("lookback_days", 5))
     today = _today()
-    gain, fund = snapshot_boards(payload, limit=limit)
     state = _load_state()
-    concepts: dict[str, dict] = state.setdefault("concepts", {})
+    daily: dict[str, Any] = state.setdefault("daily", {})
 
-    for name in gain | fund:
-        entry = concepts.setdefault(name, {"history": {}})
-        history: dict[str, Any] = entry.setdefault("history", {})
-        if today in history:
-            continue
-        history[today] = {"gain": name in gain, "fund": name in fund}
-        entry["history"] = _history_in_window(history, lookback)
+    if daily.get(today) is None:
+        daily[today] = {
+            "gain": _snapshot_gain_rows(payload, limit),
+            "fund": _snapshot_fund_rows(payload, limit),
+        }
 
+    _trim_daily(state, lookback)
+    gain, fund = snapshot_boards(payload, limit=limit)
     state["last_update_date"] = today
     state["today_gain"] = sorted(gain)
     state["today_fund"] = sorted(fund)
     state["today_dual"] = sorted(gain & fund)
+    gain_main, fund_main = resolve_main_theme_leaders(state, lookback=lookback)
+    state["gain_main"] = gain_main
+    state["fund_main"] = fund_main
     _save_state(state)
     return state
 
 
-def resolve_main_themes(payload: dict, *, update: bool = True) -> set[str]:
-    """确认主线：窗口内上榜天数 ≥ min_hit_days，且窗口内至少 1 次资金榜。"""
+def resolve_main_themes(payload: dict, *, update: bool = False) -> set[str]:
+    """确认主线：近 N 日累计涨幅最大 + 累计资金流入最多，最多 2 条。
+
+    ``update=True`` 时写入日快照（仅应由晚间复盘调用）；默认只读 ``main_themes.json``。
+    """
     cfg = _theme_cfg()
-    state = update_main_theme_state(payload) if update else _load_state()
     lookback = int(cfg.get("lookback_days", 5))
-    min_days = int(cfg.get("min_hit_days", 2))
-    require_fund = bool(cfg.get("require_fund_once", True))
-
-    confirmed: set[str] = set()
-    for name, entry in (state.get("concepts") or {}).items():
-        hist = _history_in_window(entry.get("history") or {}, lookback)
-        if len(hist) < min_days:
-            continue
-        fund_hits = sum(1 for f in hist.values() if f.get("fund"))
-        if require_fund and fund_hits < 1:
-            continue
-        confirmed.add(name)
-
-    return confirmed
+    state = update_main_theme_state(payload) if update else _load_state()
+    gain_main, fund_main = resolve_main_theme_leaders(state, lookback=lookback)
+    out: set[str] = set()
+    if gain_main:
+        out.add(gain_main)
+    if fund_main:
+        out.add(fund_main)
+    return out
 
 
-def concept_resonance_weights(payload: dict, *, update: bool = True) -> dict[str, float]:
+def concept_resonance_weights(payload: dict, *, update: bool = False) -> dict[str, float]:
     """各概念共振权重（0~100）：确认主线 + 涨幅榜排名 + 资金榜排名/净额。"""
     cfg = _theme_cfg()
     limit = int(cfg.get("board_limit", 10))
@@ -175,10 +238,7 @@ def _board_rank_and_fund(
         n = str(row.get("行业", "")).strip()
         if n and n not in fund_rank:
             fund_rank[n] = i + 1
-            try:
-                fund_net[n] = float(row.get("净额") or 0)
-            except (TypeError, ValueError):
-                fund_net[n] = 0.0
+            fund_net[n] = _f(row.get("净额"))
     return gain_rank, fund_rank, fund_net
 
 
@@ -192,7 +252,7 @@ def score_concept_resonance(
     stock_concepts: set[str],
     payload: dict,
     *,
-    update: bool = True,
+    update: bool = False,
 ) -> tuple[float, dict[str, Any]]:
     """个股概念与确认主线交集，按各概念权重计分。"""
     main = resolve_main_themes(payload, update=update)
@@ -211,13 +271,20 @@ def score_concept_resonance(
     return score, {"命中概念": sorted(hits), "命中权重": hit_weights, "峰值权重": round(peak, 2)}
 
 
-def theme_detail(payload: dict) -> dict[str, Any]:
-    """供评分维度输出的调试信息。"""
-    gain, fund = snapshot_boards(payload, limit=int(_theme_cfg().get("board_limit", 10)))
-    main = resolve_main_themes(payload)
+def theme_detail(payload: dict, *, update: bool = False) -> dict[str, Any]:
+    """供评分维度输出的调试信息（默认不写入主线状态）。"""
+    cfg = _theme_cfg()
+    limit = int(cfg.get("board_limit", 10))
+    lookback = int(cfg.get("lookback_days", 5))
+    gain, fund = snapshot_boards(payload, limit=limit)
+    main = resolve_main_themes(payload, update=update)
+    state = _load_state()
+    gain_main, fund_main = resolve_main_theme_leaders(state, lookback=lookback)
     return {
         "当日涨幅概念": sorted(gain),
         "当日资金概念": sorted(fund),
+        "涨幅主线": gain_main,
+        "资金主线": fund_main,
         "确认主线": sorted(main),
         "概念权重": concept_resonance_weights(payload, update=False),
     }

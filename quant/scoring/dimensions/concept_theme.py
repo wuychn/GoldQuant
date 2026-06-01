@@ -62,12 +62,12 @@ class ConceptThemeScorer:
     def score(self, ctx: ScoreContext, stock: dict) -> DimensionResult:
         stock = resolve_stock_concepts(stock, ctx.payload)
         concepts = _stock_concepts(stock)
-        detail = theme_detail(ctx.payload)
-        main = resolve_main_themes(ctx.payload)
+        detail = theme_detail(ctx.payload, update=False)
+        main = resolve_main_themes(ctx.payload, update=False)
         if not main:
             return DimensionResult(self.name, 50, 0, True, available=False, detail=detail)
 
-        raw_score, hit_detail = score_concept_resonance(concepts, ctx.payload)
+        raw_score, hit_detail = score_concept_resonance(concepts, ctx.payload, update=False)
         src = _concept_source(stock)
         return DimensionResult(
             self.name,

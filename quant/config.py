@@ -16,7 +16,10 @@ _PACKAGE_QUANT_YML = _PACKAGE_DIR / "config" / "quant.yml"
 STRATEGY_FILE = _PACKAGE_DIR / "strategy.md"
 BASE_URL = "http://localhost:8085"
 
-LLM_OUTPUT_FORMAT = "\n【输出格式要求】纯文本，禁止使用 markdown 的 #、*、- 等排版符号。\n"
+LLM_OUTPUT_FORMAT = (
+    "\n【输出格式要求】纯文本，禁止使用 markdown 的 #、*、- 等排版符号；"
+    "禁止出现「程序结论」「程序确认」「程序认定」「规则引擎」等系统用语。\n"
+)
 _RE_THINKING = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL)
 
 

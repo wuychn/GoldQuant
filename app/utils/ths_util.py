@@ -250,6 +250,7 @@ async def call_ths_wencai(
     ``Hexin-V`` 由问财 ``chameleon.js`` 动态生成；
     ``rsh`` 从 cookie ``userid`` / ``other_uid`` 解析（与问财前端逻辑一致）。
     """
+    return []
     hexin_v = get_iwencai_hexin_v()
     cookies = _parse_cookie_header(cookie)
     rsh = _resolve_iwencai_rsh(cookies)
