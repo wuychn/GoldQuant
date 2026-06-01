@@ -92,7 +92,7 @@ def build_engine_brief(
         f"当日涨幅榜概念：{'、'.join(gain[:10]) if gain else '暂无'}",
         f"当日资金流入概念：{'、'.join(fund[:10]) if fund else '暂无'}",
         f"主线龙头（{len(leaders)}）：{'、'.join(leaders) if leaders else '暂无（或当前无人气/自选数据）'}",
-        f"风控状态：{check_global_gates(ctx).summary()}",
+        f"市场环境：{check_global_gates(ctx).push_summary()}",
     ]
 
     rotation = format_concept_rotation()

@@ -36,10 +36,33 @@ class GateReport:
         return all(r.passed for r in self.results)
 
     def summary(self) -> str:
+        """内部日志/调试用语。"""
         fails = [r for r in self.results if not r.passed]
         if not fails:
             return "全局门禁通过"
         return "；".join(f"{r.name}:{r.reason}" for r in fails)
+
+    def push_summary(self) -> str:
+        """飞书推送/LLM 正文用的自然表述。"""
+        fails = [r for r in self.results if not r.passed]
+        if not fails:
+            return "市场环境正常，可参与交易"
+        labels = {
+            "极端熔断": "大盘急跌",
+            "每日亏损限额": "当日亏损偏大",
+            "连续缩量": "成交持续萎缩",
+            "标的池": "标的不在范围",
+            "止损冷却": "止损后冷却",
+            "全局门禁": "市场环境",
+        }
+        parts: list[str] = []
+        for r in fails:
+            label = labels.get(r.name, r.name)
+            if r.reason:
+                parts.append(f"{label}（{r.reason}）")
+            else:
+                parts.append(label)
+        return "；".join(parts) + "，暂不新开仓"
 
 
 def _symbol_ok(code: str, name: str, cfg: dict) -> GateResult:
@@ -62,13 +85,18 @@ def check_global_gates(ctx: ScoreContext) -> GateReport:
     idx_drop = float(cb.get("index_drop_pct", -2.0))
     chg = index_change(ctx.payload)
     if chg is not None and chg <= idx_drop:
-        results.append(GateResult(False, "极端熔断", f"上证涨跌幅{chg:.2f}%≤{idx_drop}%"))
+        results.append(
+            GateResult(False, "极端熔断", f"上证{chg:.2f}%，跌幅超过{abs(idx_drop):.1f}%")
+        )
 
     limit = float(cfg.get("daily_loss_limit_pct", -3.0))
     total = get_total_assets()
     pnl = sum_today_realized_pnl()
     if total > 0 and pnl / total * 100 <= limit:
-        results.append(GateResult(False, "每日亏损限额", f"当日已实现盈亏达{limit}%"))
+        pct = pnl / total * 100
+        results.append(
+            GateResult(False, "每日亏损限额", f"当日亏损约{pct:.2f}%，超过{abs(limit):.1f}%上限")
+        )
 
     shrink_days = int(cb.get("shrink_volume_days", 3))
     shrink_ratio = float(cb.get("shrink_volume_ratio", 0.8))
@@ -81,7 +109,7 @@ def check_global_gates(ctx: ScoreContext) -> GateReport:
             and amounts[-1] < amounts[0] * shrink_ratio
         ):
             results.append(
-                GateResult(False, "连续缩量", f"近{shrink_days}日全市场成交额连续缩量")
+                GateResult(False, "连续缩量", f"近{shrink_days}日成交额持续萎缩")
             )
 
     if not results:

@@ -18,7 +18,7 @@ BASE_URL = "http://localhost:8085"
 
 LLM_OUTPUT_FORMAT = (
     "\n【输出格式要求】纯文本，禁止使用 markdown 的 #、*、- 等排版符号；"
-    "禁止出现「程序结论」「程序确认」「程序认定」「规则引擎」等系统用语。\n"
+    "禁止出现「程序结论」「程序确认」「规则引擎」「全局门禁」「门禁」「标的池」等系统用语。\n"
 )
 _RE_THINKING = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL)
 

@@ -84,13 +84,13 @@ def _build_operation_section(
 
 def _no_trade_reason(mode: str, ctx: ScoreContext, buy_n: int, sell_n: int) -> str:
     """无成交说明：纯规则引擎事实，不经 LLM。"""
-    gates = check_global_gates(ctx).summary()
+    gates = check_global_gates(ctx).push_summary()
     regime = infer_regime(ctx.payload)
     if buy_n == 0 and sell_n == 0:
         return f"原因：暂无买卖信号；市场{regime}；{gates}。"
     return (
-        f"原因：有信号未成交（买入{buy_n}条/卖出{sell_n}条，"
-        f"可能未过三确认或风控限制）；市场{regime}；{gates}。"
+        f"原因：信号未成交（买入{buy_n}条/卖出{sell_n}条，"
+        f"条件尚未满足）；市场{regime}；{gates}。"
     )
 
 
