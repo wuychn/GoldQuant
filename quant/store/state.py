@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from quant.constants import STRATEGY_NAME
+from quant.scoring.tech_indicators import quote_last_price
 from quant.store.paths import (
     ensure_layout,
     state_file,
@@ -208,8 +209,7 @@ def compute_holdings_market_value(holdings: list[dict]) -> float:
         qty = int(h.get("持仓股数", 0) or 0)
         if qty <= 0:
             continue
-        pk = h.get("盘口") if isinstance(h.get("盘口"), dict) else {}
-        price = pk.get("最新", h.get("买入价", 0))
+        price = quote_last_price(h) or h.get("买入价", 0)
         try:
             total += qty * float(price)
         except (TypeError, ValueError):

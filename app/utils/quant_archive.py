@@ -364,18 +364,29 @@ def load_computed_metrics_zh(settings: Settings, symbol: str) -> dict[str, Any] 
         logger.warning("读取技术指标失败 symbol=%s: %s", symbol, e)
         return None
     macd = raw.get("MACD") if isinstance(raw.get("MACD"), dict) else {}
+    ma5, ma10, ma20, ma30 = raw.get("MA5"), raw.get("MA10"), raw.get("MA20"), raw.get("MA30")
+    latest = raw.get("latest_close")
+    atr14 = raw.get("ATR14")
+    macd_zh = {
+        "差离值": macd.get("dif"),
+        "信号线": macd.get("dea"),
+        "柱": macd.get("histogram"),
+    }
+    # 中文键供 LLM；英文键与 quant/scoring 消费端一致，避免只写中文导致评分读不到
     return {
-        "最新收盘价": raw.get("latest_close"),
-        "均线5日": raw.get("MA5"),
-        "均线10日": raw.get("MA10"),
-        "均线20日": raw.get("MA20"),
-        "均线30日": raw.get("MA30"),
-        "ATR14": raw.get("ATR14"),
-        "MACD": {
-            "差离值": macd.get("dif"),
-            "信号线": macd.get("dea"),
-            "柱": macd.get("histogram"),
-        },
+        "最新收盘价": latest,
+        "latest_close": latest,
+        "均线5日": ma5,
+        "MA5": ma5,
+        "均线10日": ma10,
+        "MA10": ma10,
+        "均线20日": ma20,
+        "MA20": ma20,
+        "均线30日": ma30,
+        "MA30": ma30,
+        "ATR14": atr14,
+        "atr14": atr14,
+        "MACD": macd_zh,
         "指标计算时间": raw.get("computed_at"),
     }
 

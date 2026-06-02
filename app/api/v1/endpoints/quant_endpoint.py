@@ -882,11 +882,11 @@ async def post_market(settings: SettingsDep, background_tasks: BackgroundTasks) 
     hot_ = await _enrich_stock_list(settings, _hot, include_pre_snapshot=True)
 
     # 盘口异动：问财所属概念 + 与人气/涨停交叉打标
-    pkyd_ = await _pkyd(settings)
-    pkyd_list = filter_pkyd_rows(pkyd_ if isinstance(pkyd_, list) else [])
-    tag_map = build_pkyd_tag_map(pkyd_list)
-    hot_ = enrich_list_with_pkyd_tags(hot_, tag_map)
-    zttj = enrich_zt_stats_with_pkyd(zttj, tag_map)
+    # pkyd_ = await _pkyd(settings)
+    # pkyd_list = filter_pkyd_rows(pkyd_ if isinstance(pkyd_, list) else [])
+    # tag_map = build_pkyd_tag_map(pkyd_list)
+    # hot_ = enrich_list_with_pkyd_tags(hot_, tag_map)
+    # zttj = enrich_zt_stats_with_pkyd(zttj, tag_map)
 
     zxg_, ccg_ = await _enrich_optional_and_holding(settings)
 
@@ -897,7 +897,7 @@ async def post_market(settings: SettingsDep, background_tasks: BackgroundTasks) 
         "概念板块": gn_bk,
         "涨停统计": zttj,
         "同花顺人气榜": hot_,
-        "盘口异动": pkyd_list,
+        # "盘口异动": pkyd_list,
         "自选股": zxg_,
         "持仓股": ccg_,
     }

@@ -5,6 +5,7 @@ from __future__ import annotations
 from quant.scoring.context import ScoreContext
 from quant.scoring.dimensions.base import clamp
 from quant.scoring.models import DimensionResult
+from quant.scoring.tech_indicators import metric_from_dict
 
 
 class MarketFundFlowScorer:
@@ -15,9 +16,13 @@ class MarketFundFlowScorer:
         if not isinstance(rows, list) or not rows:
             return DimensionResult(self.name, 50, 0, True, available=False, detail={})
         latest = rows[-1] if isinstance(rows[-1], dict) else {}
-        try:
-            main = float(latest.get("主力净流入-净额", 0) or 0)
-        except (TypeError, ValueError):
+        main = metric_from_dict(
+            latest,
+            "主力净流入-净额",
+            "主力净流入",
+            "主力净流入净额",
+        )
+        if main is None:
             main = 0.0
         if main > 0:
             s = 75

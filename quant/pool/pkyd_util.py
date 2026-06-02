@@ -8,7 +8,7 @@ from app.utils.common_util import (
     extract_stock_code,
     filter_symbol_pool_rows,
     is_allowed_symbol_pool_code,
-    row_allowed_symbol_pool,
+    row_allowed_symbol_pool, normalize_a_share_code,
 )
 from quant.config import load_gates_config
 from quant.scoring.dimensions.concept_theme import _stock_concepts, resolve_stock_concepts

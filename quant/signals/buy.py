@@ -9,21 +9,12 @@ from quant.scoring.context import ScoreContext
 from quant.scoring.engine import ScoringEngine
 from quant.signals.models import TradeSignal
 from quant.store.state import get_holdings
+from quant.scoring.tech_indicators import quote_last_price, quote_open_price
 from quant.strategy.main_wave import detect_buy_setup
 
 
 def _price(stock: dict) -> float | None:
-    pk = stock.get("盘口") if isinstance(stock.get("盘口"), dict) else {}
-    for key in ("最新", "今开", "最新价"):
-        v = pk.get(key)
-        if v is not None:
-            try:
-                p = float(v)
-                if p > 0:
-                    return p
-            except (TypeError, ValueError):
-                continue
-    return None
+    return quote_last_price(stock) or quote_open_price(stock)
 
 
 def generate_buy_signals(ctx: ScoreContext, *, mode: str) -> list[TradeSignal]:

@@ -5,41 +5,36 @@ from __future__ import annotations
 from quant.scoring.context import ScoreContext
 from quant.scoring.dimensions.base import clamp
 from quant.scoring.models import DimensionResult
+from quant.scoring.tech_indicators import parse_technical_indicators, quote_last_price
 
 
 class TechnicalScorer:
     name = "technical"
 
     def score(self, ctx: ScoreContext, stock: dict) -> DimensionResult:
-        t = stock.get("技术指标") or {}
-        if not isinstance(t, dict) or not t:
+        ti = parse_technical_indicators(stock.get("技术指标"))
+        ma5, ma10, ma20 = ti["ma5"], ti["ma10"], ti["ma20"]
+        if None in (ma5, ma10, ma20):
             return DimensionResult(self.name, 50, 0, True, available=False, detail={})
-        ma5 = t.get("MA5")
-        ma10 = t.get("MA10")
-        ma20 = t.get("MA20")
-        pk = stock.get("盘口") if isinstance(stock.get("盘口"), dict) else {}
-        last = pk.get("最新")
-        try:
-            last_f = float(last)
-            ma5f = float(ma5)
-            ma10f = float(ma10)
-            ma20f = float(ma20)
-        except (TypeError, ValueError):
+        last = quote_last_price(stock)
+        if last is None or last <= 0:
             return DimensionResult(self.name, 50, 0, True, available=False, detail={})
         s = 40
-        if last_f > ma5f > ma10f > ma20f:
+        if last > ma5 > ma10 > ma20:
             s = 95
-        elif last_f > ma20f:
+        elif last > ma20:
             s = 70
-        elif last_f > ma20f * 0.98:
+        elif last > ma20 * 0.98:
             s = 55
         else:
             s = 25
-        macd = t.get("MACD")
-        if macd is not None:
-            try:
-                if float(macd) > 0:
-                    s = min(100, s + 10)
-            except (TypeError, ValueError):
-                pass
-        return DimensionResult(self.name, clamp(s), 0, True, detail={"MA20": ma20, "最新": last})
+        macd = ti["macd"]
+        if macd is not None and macd > 0:
+            s = min(100, s + 10)
+        return DimensionResult(
+            self.name,
+            clamp(s),
+            0,
+            True,
+            detail={"MA5": ma5, "MA10": ma10, "MA20": ma20, "最新": last},
+        )

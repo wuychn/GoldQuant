@@ -24,6 +24,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from quant.scoring.tech_indicators import hist_close, quote_change_pct
+
 from quant.store.paths import QUANT_HOME
 
 
@@ -64,20 +66,15 @@ def _stock_return_from_payload(payload: dict, code: str) -> float | None:
         for row in payload.get(key) or []:
             if str(row.get("股票代码", "")).strip() != code:
                 continue
-            pk = row.get("盘口") if isinstance(row.get("盘口"), dict) else {}
-            try:
-                return float(pk.get("涨幅"))
-            except (TypeError, ValueError):
-                pass
+            chg = quote_change_pct(row)
+            if chg is not None:
+                return chg
             hist = row.get("历史行情") or []
             if isinstance(hist, list) and len(hist) >= 2:
-                try:
-                    c0 = float(hist[-2].get("收盘", 0) or 0)
-                    c1 = float(hist[-1].get("收盘", 0) or 0)
-                    if c0 > 0:
-                        return (c1 - c0) / c0 * 100
-                except (TypeError, ValueError):
-                    pass
+                c0 = hist_close(hist[-2])
+                c1 = hist_close(hist[-1])
+                if c0 and c1 and c0 > 0:
+                    return (c1 - c0) / c0 * 100
     return None
 
 

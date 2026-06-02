@@ -9,26 +9,17 @@ from typing import Any
 
 from quant.scoring.context import ScoreContext
 from quant.scoring.dimensions.concept_theme import _stock_concepts, resolve_stock_concepts
+from quant.scoring.tech_indicators import (
+    mas_from_stock,
+    quote_avg_price,
+    quote_change_pct,
+    quote_open_price,
+)
 from quant.scoring.theme_tracker import resolve_main_themes
 
 
-def _f(v: object, default: float = 0.0) -> float:
-    try:
-        return float(v)
-    except (TypeError, ValueError):
-        return default
-
-
 def _mas(stock: dict) -> dict[str, float | None]:
-    t = stock.get("技术指标") if isinstance(stock.get("技术指标"), dict) else {}
-    pk = stock.get("盘口") if isinstance(stock.get("盘口"), dict) else {}
-    return {
-        "ma5": _f(t.get("MA5")) if t.get("MA5") is not None else None,
-        "ma10": _f(t.get("MA10")) if t.get("MA10") is not None else None,
-        "ma20": _f(t.get("MA20")) if t.get("MA20") is not None else None,
-        "last": _f(pk.get("最新")) if pk.get("最新") is not None else None,
-        "macd": _f(t.get("MACD")) if t.get("MACD") is not None else None,
-    }
+    return mas_from_stock(stock)
 
 
 def ma_bull_stack(m: dict[str, float | None]) -> bool:
@@ -94,7 +85,6 @@ def detect_buy_setup(
     if not ma_bull_stack(m):
         return False, "", "均线非多头发散"
 
-    pk = stock.get("盘口") if isinstance(stock.get("盘口"), dict) else {}
     lo = float(cfg.get("pullback_ma_zone_low", 0.985))
     hi = float(cfg.get("pullback_ma_zone_high", 1.015))
 
@@ -102,7 +92,7 @@ def detect_buy_setup(
     if ma_diverging(m, min_spread_pct=min_spread):
         ma5 = m.get("ma5")
         if ma5 and last >= ma5:
-            avg = _f(pk.get("均价"))
+            avg = quote_avg_price(stock) or 0.0
             if avg <= 0 or last >= avg:
                 from quant.constants import BUY_KIND_ASCENT
 
@@ -114,8 +104,9 @@ def detect_buy_setup(
         zone_low = ma10 * lo
         zone_high = ma10 * hi
         if zone_low <= last <= zone_high or (ma20 <= last <= ma10 * 1.01):
-            chg = _f(pk.get("涨幅"))
-            if last >= _f(pk.get("今开", last)) or chg >= -1.5:
+            chg = quote_change_pct(stock)
+            open_p = quote_open_price(stock, fallback=last) or last
+            if last >= open_p or (chg is not None and chg >= -1.5):
                 from quant.constants import BUY_KIND_PULLBACK
 
                 return True, BUY_KIND_PULLBACK, "主线龙头回调至均线区企稳"
