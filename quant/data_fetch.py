@@ -71,7 +71,7 @@ def fetch_mode(mode: str) -> dict:
         raise ValueError(f"未知模式: {mode}")
     url = f"{BASE_URL}{path}"
     logger.info("HTTP API：mode=%s url=%s", mode, url)
-    resp = requests.get(url, timeout=600)
+    resp = requests.get(url, timeout=None)
     resp.raise_for_status()
     return resp.json()
 

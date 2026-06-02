@@ -69,26 +69,21 @@ def _evening_calendar_hit() -> bool:
     return is_real_workday_cn(d) or is_real_workday_cn(d + timedelta(days=1))
 
 
-def _invoke_quant_cli(mode: str, *, timeout_sec: float | None) -> None:
+def _invoke_quant_cli(mode: str) -> None:
     cmd = [sys.executable, "-m", "quant", mode]
     logger.info("[quant-scheduler] 执行: cwd=%s %s", _PROJECT_ROOT, " ".join(cmd))
     env = os.environ.copy()
     env.setdefault("PYTHONIOENCODING", "utf-8")
-    kw: dict = {
-        "cwd": str(_PROJECT_ROOT),
-        "env": env,
-        "capture_output": True,
-        "text": True,
-        "encoding": "utf-8",
-        "errors": "replace",
-    }
-    if timeout_sec is not None and timeout_sec > 0:
-        kw["timeout"] = timeout_sec
     try:
-        proc = subprocess.run(cmd, **kw)
-    except subprocess.TimeoutExpired:
-        logger.error("[quant-scheduler] 超时 mode=%s timeout=%s", mode, timeout_sec)
-        return
+        proc = subprocess.run(
+            cmd,
+            cwd=str(_PROJECT_ROOT),
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
     except Exception:
         logger.exception("[quant-scheduler] 子进程启动失败 mode=%s", mode)
         return
@@ -106,38 +101,32 @@ def _invoke_quant_cli(mode: str, *, timeout_sec: float | None) -> None:
         logger.info("[quant-scheduler] 完成 mode=%s", mode)
 
 
-def _job_news(settings: Settings) -> None:
-    _invoke_quant_cli("news", timeout_sec=settings.QUANT_SCHED_SUBPROCESS_TIMEOUT_SEC)
+def _job_news(_settings: Settings) -> None:
+    _invoke_quant_cli("news")
 
 
-def _job_pre_market(settings: Settings) -> None:
+def _job_pre_market(_settings: Settings) -> None:
     if not is_real_workday_cn():
         return
-    _invoke_quant_cli("pre_market", timeout_sec=settings.QUANT_SCHED_SUBPROCESS_TIMEOUT_SEC)
+    _invoke_quant_cli("pre_market")
 
 
-def _job_during_market(settings: Settings) -> None:
+def _job_during_market(_settings: Settings) -> None:
     if not is_real_workday_cn():
         return
-    _invoke_quant_cli("during_market", timeout_sec=settings.QUANT_SCHED_SUBPROCESS_TIMEOUT_SEC)
+    _invoke_quant_cli("during_market")
 
 
-def _job_post_market_lunch(settings: Settings) -> None:
+def _job_post_market_lunch(_settings: Settings) -> None:
     if not is_real_workday_cn():
         return
-    _invoke_quant_cli(
-        "post_market_lunch",
-        timeout_sec=settings.QUANT_SCHED_SUBPROCESS_TIMEOUT_SEC,
-    )
+    _invoke_quant_cli("post_market_lunch")
 
 
-def _job_post_market_evening(settings: Settings) -> None:
+def _job_post_market_evening(_settings: Settings) -> None:
     if not _evening_calendar_hit():
         return
-    _invoke_quant_cli(
-        "post_market_evening",
-        timeout_sec=settings.QUANT_SCHED_SUBPROCESS_TIMEOUT_SEC,
-    )
+    _invoke_quant_cli("post_market_evening")
 
 
 def build_quant_scheduler(settings: Settings) -> BackgroundScheduler | None:

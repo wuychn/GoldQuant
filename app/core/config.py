@@ -113,8 +113,6 @@ class Settings(BaseSettings):
     QUANT_SCHED_POST_MARKET_LUNCH_TIME: str = "11:50"
     #: 晚间复盘（`post_market_evening`）；工作日当晚 + 假日前一夜（详见 orchestrator）。
     QUANT_SCHED_POST_MARKET_EVENING_TIME: str = "20:10"
-    #: `python -m quant` 子进程超时（秒）；``None`` 表示不限制（长耗时拉数/LLM 时慎用上限）。
-    QUANT_SCHED_SUBPROCESS_TIMEOUT_SEC: float | None = None
     #: 错过触发窗口后的仍可执行宽限（秒）。
     QUANT_SCHED_MISFIRE_GRACE_SEC: int = Field(default=600, ge=60, le=86400)
 
