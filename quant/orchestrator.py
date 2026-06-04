@@ -31,6 +31,7 @@ from quant.narrative.prompts import (
 from quant.pool.builder import build_candidates
 from quant.scoring.theme_tracker import update_main_theme_state
 from quant.pool.pkyd_util import stock_pkyd_tags
+from quant.narrative.push_sanitize import sanitize_feishu_body
 from quant.push.feishu import get_token, send_msg
 from quant.push.format import format_push_message
 from quant.scoring.context import ScoreContext, infer_regime
@@ -336,7 +337,7 @@ def run_mode(mode: str, timestamp: str) -> None:
         print(f"分析失败: {e}")
         body = f"服务异常，请稍后重试。({e})"
 
-    message = format_push_message(label, timestamp, body)
+    message = format_push_message(label, timestamp, sanitize_feishu_body(body))
     save_review(mode, message)
 
     if mode == "post_market_evening":

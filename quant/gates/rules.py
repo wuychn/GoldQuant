@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from quant.config import load_gates_config
+from quant.constants import STRATEGY_NAME
 from quant.market.turnover import load_completed_day_turnovers
 from quant.scoring.context import ScoreContext, index_change, infer_regime
 from quant.store.state import get_total_assets, stoploss_cooldown_codes, sum_today_realized_pnl

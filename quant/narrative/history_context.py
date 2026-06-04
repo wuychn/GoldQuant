@@ -210,13 +210,13 @@ def build_cross_day_context(mode: str) -> str:
         excerpt = _read_review_excerpt("evening.md", prev_ds, max_chars=2000 if mode == "pre_market" else 1400)
         if excerpt:
             sections.append(
-                f"【历史叙述参考 · 上一交易日复盘 {prev_ds}（勿据此重新判定主线/龙头）】\n{excerpt}"
+                f"昨日复盘摘录（{prev_ds}，勿抄标题、勿据此重判主线/龙头）：\n{excerpt}"
             )
 
     if mode == "post_market_lunch":
         today = datetime.now(_SH_TZ).date().isoformat()
         pre_excerpt = _read_review_excerpt("pre_market.md", today, max_chars=800)
         if pre_excerpt:
-            sections.append(f"【历史叙述参考 · 当日盘前推送 {today}】\n{pre_excerpt}")
+            sections.append(f"今日盘前推送摘录（{today}，勿抄标题）：\n{pre_excerpt}")
 
     return "\n\n".join(sections)

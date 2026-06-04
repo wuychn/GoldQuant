@@ -113,6 +113,19 @@ def hist_change_pct(row: dict) -> float | None:
     return 0.0 if f is None else f
 
 
+def stock_daily_change_pct(stock: dict) -> float | None:
+    """个股当日涨跌幅(%)：盘口优先，否则取历史行情最近一条（缺失则为 None）。"""
+    chg = quote_change_pct(stock)
+    if chg is not None:
+        return chg
+    hist = stock.get("历史行情") or []
+    if isinstance(hist, list) and hist:
+        last = hist[-1]
+        if isinstance(last, dict):
+            return metric_from_dict(last, "涨跌幅", "pct_chg", "涨跌")
+    return None
+
+
 def mas_from_stock(stock: dict) -> dict[str, float | None]:
     """主升浪 / 技术评分共用的均线 + 现价 + MACD 包。"""
     ti = parse_technical_indicators(stock.get("技术指标"))

@@ -21,7 +21,7 @@ class StockHistoryScorer:
             if not isinstance(row, dict):
                 continue
             chg = hist_change_pct(row)
-            if chg > 0:
+            if chg is not None and chg > 0:
                 ups += 1
         ratio = ups / max(1, len(recent))
         last_close = hist_close(recent[-1]) if recent else None

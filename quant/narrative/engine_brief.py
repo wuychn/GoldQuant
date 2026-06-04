@@ -14,7 +14,9 @@ from quant.scoring.context import (
     profit_effect,
     zt_height,
 )
+from quant.narrative.push_style import BRIEF_PREAMBLE
 from quant.scoring.theme_tracker import theme_detail
+from quant.scoring.tech_indicators import stock_daily_change_pct
 from quant.strategy.main_wave import is_theme_leader
 
 
@@ -42,8 +44,13 @@ def _collect_theme_leaders(ctx: ScoreContext, payload: dict) -> list[str]:
                 continue
             seen.add(code)
             rank = row.get("人气排名")
-            rank_s = f" 人气{rank}" if rank is not None else ""
-            out.append(f"{_stock_name(row) or code}({code}){rank_s}")
+            chg = stock_daily_change_pct(row)
+            extra = ""
+            if rank is not None:
+                extra += f" 人气{rank}"
+            if chg is not None:
+                extra += f" 涨跌幅{chg:+.2f}%"
+            out.append(f"{_stock_name(row) or code}({code}){extra}")
     return out
 
 
@@ -65,7 +72,7 @@ def build_engine_brief(
     watchlist_scores: list[Any] | None = None,
     watchlist_added: list[dict] | None = None,
 ) -> str:
-    """组装研判要点块（供 LLM 引用，勿原样复制标签进推送正文）。"""
+    """组装写作参考块（供 LLM 引用，勿原样复制标签进飞书正文）。"""
     detail = theme_detail(payload)
     confirmed = detail.get("确认主线") or []
     gain_main = detail.get("涨幅主线")
@@ -85,38 +92,39 @@ def build_engine_brief(
     idx_s = f"{idx:.2f}" if idx is not None else "—"
 
     lines = [
-        "【研判要点 · 须写入正文，勿自拟主线/龙头/买卖；勿把本段标题抄进正文】",
-        f"仓位档位：{regime}（上证{idx_s}% 上涨{up}/下跌{down} 涨停{zt_cnt}/跌停{dt_cnt} 最高{height}板）",
+        BRIEF_PREAMBLE,
+        f"市场档位：{regime}（上证{idx_s}% 上涨{up}/下跌{down} 涨停{zt_cnt}/跌停{dt_cnt} 最高{height}板）",
         f"当前主线（{len(confirmed)}）：{'、'.join(confirmed) if confirmed else '暂无'}"
-        f"（涨幅·{gain_main or '暂无'}；资金·{fund_main or '暂无'}）",
-        f"当日涨幅榜概念：{'、'.join(gain[:10]) if gain else '暂无'}",
-        f"当日资金流入概念：{'、'.join(fund[:10]) if fund else '暂无'}",
-        f"主线龙头（{len(leaders)}）：{'、'.join(leaders) if leaders else '暂无（或当前无人气/自选数据）'}",
-        f"市场环境：{check_global_gates(ctx).push_summary()}",
+        f"（涨幅侧 {gain_main or '暂无'}；资金侧 {fund_main or '暂无'}）",
+        f"当日涨幅：{'、'.join(gain[:10]) if gain else '暂无'}",
+        f"资金流入：{'、'.join(fund[:10]) if fund else '暂无'}",
+        f"主线龙头（{len(leaders)}只，当日跌幅≤5%）："
+        f"{'、'.join(leaders) if leaders else '暂无'}",
+        f"交易环境：{check_global_gates(ctx).push_summary()}",
     ]
 
     rotation = format_concept_rotation()
     if rotation and "暂无" not in rotation[:20]:
         lines.append("")
-        lines.append("【近几日概念轮动】")
+        lines.append("近几日概念轮动：")
         lines.append(rotation)
 
     if mode == "pre_market":
         trades = format_yesterday_trades()
         if trades:
             lines.append("")
-            lines.append(f"【上一交易日成交】{trades}")
+            lines.append(f"上一交易日成交：{trades}")
 
     if mode == "post_market_evening" and watchlist_scores is not None:
         score_lines = _format_watchlist_scores(watchlist_scores)
         if score_lines:
             lines.append("")
-            lines.append("【晚间候选池评分】")
+            lines.append("晚间候选池评分：")
             lines.extend(score_lines)
         if watchlist_added:
             names = "、".join(f"{r.get('股票名称')}({r.get('股票代码')})" for r in watchlist_added)
-            lines.append(f"【新增自选参考】{names}")
+            lines.append(f"本轮拟新增自选：{names}")
         elif watchlist_scores is not None:
-            lines.append("【新增自选参考】本轮无新增")
+            lines.append("本轮拟新增自选：无")
 
     return "\n".join(lines)

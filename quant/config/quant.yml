@@ -138,6 +138,7 @@ gates:
   main_wave:
     min_ma_spread_pct: 0.8          # MA5 相对 MA20 最小发散(%)
     leader_max_rank: 15             # 主线龙头：人气排名 ≤ 此值
+    leader_max_daily_drop_pct: 5    # 当日跌幅超过此值(%) 不计为主线龙头
     pullback_ma_zone_low: 0.985     # 回调企稳：现价/MA10 下限
     pullback_ma_zone_high: 1.015    # 回调企稳：现价/MA10 上限
     ma5_break_ratio: 0.995          # 卖-破5日线：现价 < MA5×此值

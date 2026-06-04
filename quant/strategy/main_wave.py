@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from quant.config import load_gates_config
 from quant.scoring.context import ScoreContext
 from quant.scoring.dimensions.concept_theme import _stock_concepts, resolve_stock_concepts
 from quant.scoring.tech_indicators import (
@@ -14,6 +15,7 @@ from quant.scoring.tech_indicators import (
     quote_avg_price,
     quote_change_pct,
     quote_open_price,
+    stock_daily_change_pct,
 )
 from quant.scoring.theme_tracker import resolve_main_themes
 
@@ -42,7 +44,13 @@ def ma_diverging(m: dict[str, float | None], *, min_spread_pct: float) -> bool:
 
 
 def is_theme_leader(stock: dict, ctx: ScoreContext, *, max_rank: int) -> bool:
-    """主线题材中的龙头：概念共振 + 人气排名靠前。"""
+    """主线题材中的龙头：概念共振 + 人气排名靠前；当日跌幅超过阈值的不算龙头。"""
+    mw_cfg = load_gates_config().get("main_wave") or {}
+    max_drop = float(mw_cfg.get("leader_max_daily_drop_pct", 5))
+    chg = stock_daily_change_pct(stock)
+    if chg is not None and chg < -max_drop:
+        return False
+
     stock = resolve_stock_concepts(stock, ctx.payload)
     tops = resolve_main_themes(ctx.payload)
     concepts = _stock_concepts(stock)
