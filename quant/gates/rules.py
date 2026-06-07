@@ -20,6 +20,13 @@ from quant.scoring.context import ScoreContext, index_change, infer_regime
 from quant.store.state import get_total_assets, stoploss_cooldown_codes, sum_today_realized_pnl
 from app.utils.common_util import is_allowed_symbol_pool_code, normalize_a_share_code
 
+# infer_regime 档位 → 飞书推送自然表述
+_PROFIT_EFFECT_PUSH_LABELS = {
+    "强势": "强",
+    "震荡": "一般",
+    "弱势": "差",
+}
+
 
 @dataclass
 class GateResult:
@@ -43,18 +50,29 @@ class GateReport:
             return "全局门禁通过"
         return "；".join(f"{r.name}:{r.reason}" for r in fails)
 
-    def push_summary(self) -> str:
+    def push_summary(self, payload: dict | None = None) -> str:
         """飞书推送/LLM 正文用的自然表述。"""
         fails = [r for r in self.results if not r.passed]
         if not fails:
-            return "市场环境正常，可参与交易"
+            regime = infer_regime(payload) if payload else "震荡"
+            level = _PROFIT_EFFECT_PUSH_LABELS.get(regime, "一般")
+            limits = position_limits(ScoreContext.from_payload(payload)) if payload else None
+            if limits:
+                single_pct = float((limits.get("single_pct") or {}).get(STRATEGY_NAME, 8))
+                return (
+                    f"赚钱效应{level}，"
+                    f"总仓位上限{limits['total_pct']:.0f}%，"
+                    f"最多持仓{limits['max_stocks']}只，"
+                    f"单票上限{single_pct:.0f}%"
+                )
+            return "赚钱效应一般，总仓位上限50%，最多持仓3只，单票上限8%"
         labels = {
             "极端熔断": "大盘急跌",
             "每日亏损限额": "当日亏损偏大",
             "连续缩量": "成交持续萎缩",
             "标的池": "标的不在范围",
             "止损冷却": "止损后冷却",
-            "全局门禁": "市场环境",
+            "全局门禁": "赚钱效应",
         }
         parts: list[str] = []
         for r in fails:

@@ -100,7 +100,7 @@ def build_engine_brief(
         f"资金流入：{'、'.join(fund[:10]) if fund else '暂无'}",
         f"主线龙头（{len(leaders)}只，当日跌幅≤5%）："
         f"{'、'.join(leaders) if leaders else '暂无'}",
-        f"交易环境：{check_global_gates(ctx).push_summary()}",
+        f"仓位控制：{check_global_gates(ctx).push_summary(ctx.payload)}",
     ]
 
     rotation = format_concept_rotation()
