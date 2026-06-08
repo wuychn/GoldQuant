@@ -25,6 +25,7 @@ from quant.pool.sources import (
     prefilter_popularity,
     prefilter_zt_pool,
 )
+from quant.progress_log import log_progress, log_progress_done
 
 
 async def _prefilter_popularity(settings: Settings, cfg: dict) -> list[dict]:
@@ -108,24 +109,44 @@ async def build_all_source_candidates(
     *,
     zt_rows: list[dict] | None = None,
     include_pre_snapshot: bool = False,
+    progress_scope: str = "candidates",
 ) -> dict[str, list[dict]]:
     """串行初筛三来源 → 按代码合并 → 一次问财+enrich → 拆回 payload 键。"""
     cfg = load_candidate_config()
+    log_progress(progress_scope, "初筛：人气榜")
     pop_rows = await _prefilter_popularity(settings, cfg)
+    log_progress(progress_scope, "初筛：涨停池")
     zt_rows_f = await _prefilter_zt(settings, cfg, zt_rows=zt_rows)
+    log_progress(progress_scope, "初筛：盘口异动")
     pkyd_rows = await _prefilter_pkyd(settings, cfg)
+    log_progress(
+        progress_scope,
+        "初筛完成",
+        detail=f"人气 {len(pop_rows)} / 涨停 {len(zt_rows_f)} / 异动 {len(pkyd_rows)}",
+    )
 
     merged_rows, source_orders = merge_prefiltered_sources(pop_rows, zt_rows_f, pkyd_rows)
+    log_progress(progress_scope, "合并去重", detail=f"unique {len(merged_rows)} 只")
     enriched = await run_candidate_pipeline(
         settings,
         merged_rows,
         payload,
         include_pre_snapshot=include_pre_snapshot,
+        progress_scope=progress_scope,
     )
     by_source = split_enriched_by_source(enriched, source_orders)
-
-    return {
+    result = {
         PAYLOAD_KEY_POPULARITY: by_source.get(SOURCE_LABEL_POPULARITY, []),
         PAYLOAD_KEY_ZT: by_source.get(SOURCE_LABEL_ZT, []),
         PAYLOAD_KEY_PKYD: by_source.get(SOURCE_LABEL_PKYD, []),
     }
+    log_progress_done(
+        progress_scope,
+        "三来源候选就绪",
+        detail=(
+            f"人气 {len(result[PAYLOAD_KEY_POPULARITY])} / "
+            f"涨停 {len(result[PAYLOAD_KEY_ZT])} / "
+            f"异动 {len(result[PAYLOAD_KEY_PKYD])}"
+        ),
+    )
+    return result

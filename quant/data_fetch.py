@@ -14,6 +14,7 @@ import requests
 
 from app.core.config import get_settings
 from quant.config import BASE_URL
+from quant.progress_log import log_progress, log_progress_done
 
 logger = logging.getLogger(__name__)
 
@@ -64,15 +65,16 @@ def fetch_mode(mode: str) -> dict:
     settings = get_settings()
     if settings.QUANT_USE_LOCAL_FIXTURE:
         path = fixture_path_for_mode(mode)
-        logger.info("本地 fixture：mode=%s path=%s", mode, path)
+        log_progress(mode, "读取本地 fixture", detail=str(path))
         return load_mode_fixture(mode)
     path = _ENDPOINTS.get(mode)
     if not path:
         raise ValueError(f"未知模式: {mode}")
     url = f"{BASE_URL}{path}"
-    logger.info("HTTP API：mode=%s url=%s", mode, url)
+    log_progress(mode, "请求 HTTP API", detail=url)
     resp = requests.get(url, timeout=None)
     resp.raise_for_status()
+    log_progress_done(mode, "HTTP 响应成功")
     return resp.json()
 
 

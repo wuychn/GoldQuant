@@ -27,9 +27,11 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from quant.orchestrator import run_mode
+from quant.progress_log import configure_progress_logging
 
 
 def main():
+    configure_progress_logging()
     if len(sys.argv) < 2:
         print("用法: python -m quant <mode>")
         print("可用模式: news | pre_market | during_market | post_market_lunch | post_market_evening")

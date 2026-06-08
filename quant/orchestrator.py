@@ -15,6 +15,7 @@ from app.utils.common_util import is_real_workday_cn
 from app.core.config import get_settings
 
 from quant.data_fetch import fetch_mode, fixture_path_for_mode, unwrap_payload
+from quant.progress_log import configure_progress_logging, log_progress, log_progress_done
 from quant.constants import STRATEGY_NAME
 from quant.execution.executor import ExecutedTrade, execute_signals
 from quant.gates.rules import check_global_gates
@@ -130,14 +131,18 @@ def _watchlist_add_reason(score, candidate_row: dict) -> str:
 
 def _update_watchlist_evening(ctx: ScoreContext) -> tuple[list[dict], str]:
     """晚间复盘：对候选池评分，达标者 append 到 state/optional.jsonl。"""
+    scope = "post_market_evening"
+    log_progress(scope, "合并三来源候选")
     engine = ScoringEngine()
     candidates = build_candidates(ctx.payload)
+    log_progress(scope, "候选池评分", detail=f"共 {len(candidates)} 只")
     by_code = {str(c.get("股票代码", "")).strip(): c for c in candidates}
     scores = engine.apply_threshold(
         engine.score_many(ctx, candidates),
         kind="watchlist",
     )
     passed = [s for s in scores if s.passed_threshold]
+    log_progress(scope, "评分完成", detail=f"达标 {len(passed)}/{len(scores)} 只")
 
     existing = get_optional()
     codes = {str(r.get("股票代码", "")).strip() for r in existing}
@@ -165,6 +170,9 @@ def _update_watchlist_evening(ctx: ScoreContext) -> tuple[list[dict], str]:
             merged,
             delta={"added": added, "removed": []},
         )
+        log_progress(scope, "写入自选", detail=f"新增 {len(added)} 只")
+    else:
+        log_progress(scope, "自选无新增")
 
     save_derived("scores_watchlist.json", [s.to_dict() for s in scores])
     save_derived("optional_delta.json", {"added": added, "removed": []})
@@ -182,24 +190,32 @@ def _update_watchlist_evening(ctx: ScoreContext) -> tuple[list[dict], str]:
 
 
 def process_news(raw: dict, timestamp: str) -> str:
+    scope = "news"
     payload = unwrap_payload(raw)
     news_list = payload if isinstance(payload, list) else [payload]
+    log_progress(scope, "LLM 新闻解读", detail=f"共 {len(news_list)} 条")
     user = json.dumps({"news": news_list}, ensure_ascii=False)[:140000]
     summary = call_llm(prompt_news(), user, max_tokens=4000)
     if "综合解读" in summary:
         tail = summary.split("综合解读", 1)[-1]
         write_news_summary(f"综合解读{tail.strip()[:800]}")
+    log_progress_done(scope, "新闻分析完成")
     return summary
 
 
 def process_pre_market(raw: dict) -> str:
+    scope = "pre_market"
+    log_progress(scope, "开始盘前分析")
     payload = _prepare_payload(raw)
     ctx = ScoreContext.from_payload(payload, mode="pre_market")
 
+    log_progress(scope, "生成买卖信号")
     raw_buy, raw_sell, executable, audit = generate_confirmed_signals(ctx, mode="pre_market")
+    log_progress(scope, "执行模拟成交", detail=f"可执行 {len(executable)} 条")
     executed = execute_signals(executable)
     brief = build_engine_brief(ctx, payload, mode="pre_market")
 
+    log_progress(scope, "LLM 盘前文案")
     narrative = call_llm(
         prompt_pre_market(),
         build_user_msg(payload, mode="pre_market", engine_brief=brief),
@@ -216,17 +232,23 @@ def process_pre_market(raw: dict) -> str:
             "confirmation_audit": audit,
         },
     )
+    log_progress_done(scope, "盘前分析完成", detail=f"成交 {len(executed)} 笔")
     return narrative.rstrip() + "\n\n" + ops
 
 
 def process_during_market(raw: dict) -> str:
+    scope = "during_market"
+    log_progress(scope, "开始盘中分析")
     payload = _prepare_payload(raw)
     ctx = ScoreContext.from_payload(payload, mode="during_market")
 
+    log_progress(scope, "生成买卖信号")
     raw_buy, raw_sell, executable, audit = generate_confirmed_signals(ctx, mode="during_market")
+    log_progress(scope, "执行模拟成交", detail=f"可执行 {len(executable)} 条")
     executed = execute_signals(executable)
 
     engine = ScoringEngine()
+    log_progress(scope, "持仓评分")
     holding_scores = engine.score_many(ctx, payload.get("持仓股") or get_optional())
     save_derived("scores_holding.json", [s.to_dict() for s in holding_scores])
     save_derived(
@@ -252,29 +274,38 @@ def process_during_market(raw: dict) -> str:
         "during_market", ctx, len(raw_buy), len(raw_sell)
     )
     ops = _build_operation_section(executed, section="四、操作", no_trade_detail=no_trade)
+    log_progress_done(scope, "盘中分析完成", detail=f"成交 {len(executed)} 笔")
     return narrative.rstrip() + "\n\n" + ops
 
 
 def process_lunch_review(raw: dict) -> str:
+    scope = "post_market_lunch"
+    log_progress(scope, "开始午间复盘")
     payload = _prepare_payload(raw)
     ctx = ScoreContext.from_payload(payload, mode="post_market_lunch")
 
     brief = build_engine_brief(ctx, payload, mode="post_market_lunch")
+    log_progress(scope, "LLM 午间文案")
     narrative = call_llm(
         prompt_lunch_review(),
         build_user_msg(payload, mode="post_market_lunch", engine_brief=brief),
         max_tokens=8000,
         temperature=0.1,
     )
+    log_progress_done(scope, "午间复盘完成")
     return narrative.rstrip()
 
 
 def process_evening_review(raw: dict) -> str:
+    scope = "post_market_evening"
     payload = _prepare_payload(raw)
+    log_progress(scope, "更新主线题材快照 main_themes.json")
     update_main_theme_state(payload)
     ctx = ScoreContext.from_payload(payload, mode="post_market_evening")
 
+    log_progress(scope, "自选池更新与评分")
     added, optional_section, scores = _update_watchlist_evening(ctx)
+    log_progress(scope, "生成引擎摘要")
     brief = build_engine_brief(
         ctx,
         payload,
@@ -282,12 +313,14 @@ def process_evening_review(raw: dict) -> str:
         watchlist_scores=scores,
         watchlist_added=added,
     )
+    log_progress(scope, "LLM 晚间复盘文案")
     narrative = call_llm(
         prompt_evening_review(),
         build_user_msg(payload, mode="post_market_evening", engine_brief=brief),
         max_tokens=9000,
         temperature=0.1,
     )
+    log_progress_done(scope, "晚间复盘分析完成")
     return narrative.rstrip() + "\n\n" + optional_section
 
 
@@ -308,27 +341,32 @@ def pipeline_allowed_for_mode(mode: str, *, on: date | None = None) -> bool:
 
 def run_mode(mode: str, timestamp: str) -> None:
     """单次运行完整流水线：fetch → process → save → feishu。"""
+    configure_progress_logging()
     settings = get_settings()
     label = _MODE_LABELS.get(mode, mode)
+    log_progress(mode, f"开始 {label}", detail=timestamp)
 
     if not settings.QUANT_TEST_PHASE and not pipeline_allowed_for_mode(mode):
-        print("当前日期/模式不满足交易日历条件，跳过")
+        log_progress(mode, "跳过：当前日期/模式不满足交易日历")
         return
 
     try:
+        log_progress(mode, "拉取数据")
         raw = fetch_mode(mode)
         if settings.QUANT_USE_LOCAL_FIXTURE:
-            print(f"本地数据：已加载 {fixture_path_for_mode(mode)}")
+            log_progress(mode, "本地 fixture 已加载", detail=str(fixture_path_for_mode(mode)))
         else:
-            print("数据拉取成功（HTTP API）")
+            log_progress(mode, "HTTP API 拉取成功")
     except Exception as e:
-        print(f"数据拉取失败: {e}")
+        log_progress(mode, "数据拉取失败", detail=str(e))
         sys.exit(1)
 
+    log_progress(mode, "保存原始快照")
     payload = _prepare_payload(raw)
     save_raw(mode, payload)
 
     try:
+        log_progress(mode, "分析处理")
         if mode == "news":
             body = process_news(raw, timestamp)
         elif mode == "pre_market":
@@ -340,18 +378,19 @@ def run_mode(mode: str, timestamp: str) -> None:
         elif mode == "post_market_evening":
             body = process_evening_review(raw)
         else:
-            print(f"未知模式: {mode}")
+            log_progress(mode, f"未知模式: {mode}")
             sys.exit(1)
-        print("分析完成")
     except Exception as e:
-        print(f"分析失败: {e}")
+        log_progress(mode, "分析失败", detail=str(e))
         body = f"服务异常，请稍后重试。({e})"
 
+    log_progress(mode, "保存复盘文案")
     message = format_push_message(label, timestamp, sanitize_feishu_body(body))
     save_review(mode, message)
 
     if mode == "post_market_evening":
         try:
+            log_progress(mode, "提炼经验教训")
             lesson = call_llm(
                 "提取本次复盘中的1-3条可执行经验教训，80字以内，纯文本。",
                 body[-3000:],
@@ -359,15 +398,17 @@ def run_mode(mode: str, timestamp: str) -> None:
             )
             append_lesson(lesson.strip())
         except Exception as e:
-            print(f"经验提炼失败: {e}")
+            log_progress(mode, "经验提炼失败", detail=str(e))
 
     try:
+        log_progress(mode, "飞书推送")
         token = get_token()
         send_msg(message, token)
-        print("飞书推送成功")
+        log_progress_done(mode, "飞书推送成功")
     except Exception as e:
-        print(f"飞书推送失败: {e}")
+        log_progress(mode, "飞书推送失败", detail=str(e))
 
+    log_progress_done(mode, f"{label} 全流程结束")
     print("\n" + "=" * 60)
     print(message[:2000] if len(message) > 2000 else message)
     print("=" * 60)

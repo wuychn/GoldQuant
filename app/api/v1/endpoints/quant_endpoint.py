@@ -40,6 +40,7 @@ from quant.pool.pkyd_util import (
 )
 from quant.pool.sources import prefilter_popularity
 from quant.pool.symbol_filter import apply_symbol_pool_filter
+from quant.progress_log import log_progress, log_progress_count, log_progress_done
 
 logger = logging.getLogger(__name__)
 
@@ -218,10 +219,20 @@ async def _async_holding_rows(_settings: SettingsDep) -> list:
     return await run_in_threadpool(lambda: _load_stock_rows_from_quant_file(QUANT_HOLDING_FILENAME))
 
 
-async def _enrich_optional_and_holding(settings: SettingsDep) -> tuple[list, list]:
+async def _enrich_optional_and_holding(
+    settings: SettingsDep,
+    *,
+    progress_scope: str | None = None,
+) -> tuple[list, list]:
     """自选 + 持仓两行列表，结构与原先两次 ``_enrich_stock_list`` 调用一致。"""
+    if progress_scope:
+        log_progress(progress_scope, "enrich 自选股")
     zxg = await _enrich_stock_list(settings, _async_optional_rows, include_pre_snapshot=True)
+    if progress_scope:
+        log_progress(progress_scope, "enrich 持仓股", detail=f"自选 {len(zxg)} 只")
     ccg = await _enrich_stock_list(settings, _async_holding_rows, include_pre_snapshot=True)
+    if progress_scope:
+        log_progress(progress_scope, "自选/持仓 enrich 完成", detail=f"持仓 {len(ccg)} 只")
     return zxg, ccg
 
 
@@ -389,18 +400,24 @@ async def _ztgk(settings: SettingsDep, more: bool = False, *, zt_full: list | No
         return {}
 
 
-async def _hot(settings: SettingsDep):
+async def _hot(settings: SettingsDep, *, progress_scope: str | None = "during_market"):
     """盘中等人气榜展示：初筛 + 问财概念（不走完整 enrich）。"""
     try:
         n = settings.quant_hot_list_limit()
         raw_hot = await hot_stock(settings, n)
         rows = prefilter_popularity(raw_hot if isinstance(raw_hot, list) else [])
+        scope = progress_scope or "during_market"
+        log_progress(scope, "人气榜问财补概念", detail=f"共 {len(rows)} 只")
         out: list[dict[str, Any]] = []
         cache: dict[str, list[str] | None] = {}
-        for item in rows:
+        total = len(rows)
+        for i, item in enumerate(rows):
             if not isinstance(item, dict):
                 continue
             out.append(await attach_stock_concepts_from_wencai(item, cache=cache))
+            if total and (i == 0 or i + 1 == total or (i + 1) % 5 == 0):
+                code = str(item.get("股票代码", "")).strip()
+                log_progress_count(scope, "问财", i + 1, total, detail=code)
         return out
     except Exception:
         _log_api_error("同花顺人气股 | ths.hot_stock (no enrich)")
@@ -430,10 +447,12 @@ async def news(settings: SettingsDep) -> Response:
     成功则 **覆盖** 写入 ``~/.quant/news_market_impact_summary.txt``；
     未配置密钥或 LLM 失败则不覆盖该文件。
     """
-
+    scope = "news"
+    log_progress(scope, "开始聚合新闻")
     news: list = []
 
     # 全球财经资讯
+    log_progress(scope, "拉取东方财富全球资讯")
     try:
         dfcf_data = dataframe_to_records(await run_in_threadpool(ak.stock_info_global_em))
         if dfcf_data:
@@ -452,6 +471,7 @@ async def news(settings: SettingsDep) -> Response:
         _log_api_error("GET /quant/market/news | ak.stock_info_global_em")
 
     # 同花顺财经
+    log_progress(scope, "拉取同花顺财经", detail=f"已累计 {len(news)} 条")
     try:
         ths_data = dataframe_to_records(await run_in_threadpool(ak.stock_info_global_ths))
         if ths_data:
@@ -470,25 +490,29 @@ async def news(settings: SettingsDep) -> Response:
         _log_api_error("GET /quant/market/news | ak.stock_info_global_ths")
 
     # 财联社电报
+    log_progress(scope, "拉取财联社电报", detail=f"已累计 {len(news)} 条")
     try:
-        cls_data = dataframe_to_records(await run_in_threadpool(ak.stock_info_global_cls))
-        if cls_data:
-            for d in cls_data:
-                if get_val(d, "标题", "") or get_val(d, "摘要", ""):
-                    news.append(
-                        {
-                            "标题": get_val(d, "标题"),
-                            "摘要": get_val(d, "摘要"),
-                            "发布时间": _combine_cls_publish_datetime(
-                                get_val(d, "发布日期"),
-                                get_val(d, "发布时间"),
-                            ),
-                            "来源": "财联社",
-                        }
-                    )
+        # 财联社404 TODO
+        pass
+        # cls_data = dataframe_to_records(await run_in_threadpool(ak.stock_info_global_cls))
+        # if cls_data:
+        #     for d in cls_data:
+        #         if get_val(d, "标题", "") or get_val(d, "摘要", ""):
+        #             news.append(
+        #                 {
+        #                     "标题": get_val(d, "标题"),
+        #                     "摘要": get_val(d, "摘要"),
+        #                     "发布时间": _combine_cls_publish_datetime(
+        #                         get_val(d, "发布日期"),
+        #                         get_val(d, "发布时间"),
+        #                     ),
+        #                     "来源": "财联社",
+        #                 }
+        #             )
     except Exception:
         _log_api_error("GET /quant/market/news | ak.stock_info_global_cls")
 
+    log_progress_done(scope, "新闻聚合完成", detail=f"共 {len(news)} 条")
     return Response(data=_finalize_quant_payload(news))
 
 
@@ -502,16 +526,18 @@ async def pre_market(settings: SettingsDep, background_tasks: BackgroundTasks) -
     """
     盘前
     """
-    # 大盘指数
+    scope = "pre_market"
+    log_progress(scope, "开始构建盘前 payload")
+    log_progress(scope, "拉取大盘指数")
     dpzs_ = await _dpzs()
 
-    # 赚钱效应
+    log_progress(scope, "拉取赚钱效应")
     zqxy_ = await _zqxy(market_phase="intraday")
 
-    # 涨停概况
+    log_progress(scope, "拉取涨停概况")
     ztgk_ = await _ztgk(settings)
 
-    zxg_, ccg_ = await _enrich_optional_and_holding(settings)
+    zxg_, ccg_ = await _enrich_optional_and_holding(settings, progress_scope=scope)
 
     result = {
         "大盘指数": dpzs_,
@@ -521,6 +547,7 @@ async def pre_market(settings: SettingsDep, background_tasks: BackgroundTasks) -
         "持仓股": ccg_,
     }
 
+    log_progress_done(scope, "盘前 payload 完成")
     return Response(data=_finalize_quant_payload(result))
 
 
@@ -534,14 +561,16 @@ async def during_market(settings: SettingsDep, background_tasks: BackgroundTasks
     """
     盘中
     """
+    scope = "during_market"
+    log_progress(scope, "开始构建盘中 payload")
 
-    # 大盘指数
+    log_progress(scope, "拉取大盘指数")
     dpzs = await _dpzs()
 
-    # 赚钱效应
+    log_progress(scope, "拉取赚钱效应")
     zqxy_ = await _zqxy(market_phase="intraday")
 
-    # 涨幅前十概念
+    log_progress(scope, "拉取概念四榜")
     jrzfqsgn = await _stock_fund_flow_concept_or_none(
         "涨幅前十概念 | ths.stock_fund_flow_concept",
         "行业-涨跌幅",
@@ -571,12 +600,13 @@ async def during_market(settings: SettingsDep, background_tasks: BackgroundTasks
     gn_bk = _merge_concept_boards(jrzfqsgn, jrzjlrqsgn, jrdfqsgn, jrzjlcqsgn)
 
     # 涨停概况
+    log_progress(scope, "拉取涨停统计")
     zttj = await _ztgk(settings, True)
 
-    # 人气股
+    log_progress(scope, "拉取人气榜并问财补概念")
     hot_ = await _hot(settings)
 
-    zxg_, ccg_ = await _enrich_optional_and_holding(settings)
+    zxg_, ccg_ = await _enrich_optional_and_holding(settings, progress_scope=scope)
 
     result = {
         "大盘指数": dpzs,
@@ -587,6 +617,7 @@ async def during_market(settings: SettingsDep, background_tasks: BackgroundTasks
         "自选股": zxg_,
         "持仓股": ccg_,
     }
+    log_progress_done(scope, "盘中 payload 完成")
     return Response(data=_finalize_quant_payload(result))
 
 
@@ -600,13 +631,16 @@ async def post_market_lunch(settings: SettingsDep) -> Response:
     """
     盘后
     """
-    # 大盘指数
+    scope = "post_market_lunch"
+    log_progress(scope, "开始构建午间 payload")
+
+    log_progress(scope, "拉取大盘指数")
     dpzs = await _dpzs()
 
-    # 赚钱效应
+    log_progress(scope, "拉取赚钱效应")
     zqxy_ = await _zqxy(market_phase="intraday")
 
-    # 涨幅前十概念
+    log_progress(scope, "拉取概念四榜")
     jrzfqsgn = await _stock_fund_flow_concept_or_none(
         "涨幅前十概念 | ths.stock_fund_flow_concept",
         "行业-涨跌幅",
@@ -636,10 +670,10 @@ async def post_market_lunch(settings: SettingsDep) -> Response:
     gn_bk = _merge_concept_boards(jrzfqsgn, jrzjlrqsgn, jrdfqsgn, jrzjlcqsgn)
 
     # 涨停概况
+    log_progress(scope, "拉取涨停统计")
     zttj = await _ztgk(settings, True)
 
-    # 自选、持仓
-    zxg_, ccg_ = await _enrich_optional_and_holding(settings)
+    zxg_, ccg_ = await _enrich_optional_and_holding(settings, progress_scope=scope)
 
     result = {
         "大盘指数": dpzs,
@@ -649,6 +683,7 @@ async def post_market_lunch(settings: SettingsDep) -> Response:
         "自选股": zxg_,
         "持仓股": ccg_,
     }
+    log_progress_done(scope, "午间 payload 完成")
     return Response(data=_finalize_quant_payload(result))
 
 
@@ -662,16 +697,19 @@ async def post_market(settings: SettingsDep, background_tasks: BackgroundTasks) 
     """
     盘后
     """
-    # 大盘指数
+    scope = "post_market_evening"
+    log_progress(scope, "开始构建晚间 payload")
+
+    log_progress(scope, "拉取大盘指数")
     dpzs = await _dpzs()
 
-    # 赚钱效应
+    log_progress(scope, "拉取赚钱效应")
     zqxy_ = await _zqxy(market_phase="closed")
 
-    # 大盘资金流
+    log_progress(scope, "拉取大盘资金流")
     zjl = await zjl_(3)
 
-    # 涨幅前十概念
+    log_progress(scope, "拉取概念四榜")
     jrzfqsgn = await _stock_fund_flow_concept_or_none(
         "涨幅前十概念 | ths.stock_fund_flow_concept",
         "行业-涨跌幅",
@@ -700,15 +738,18 @@ async def post_market(settings: SettingsDep, background_tasks: BackgroundTasks) 
     # 合并涨幅和资金流入
     gn_bk = _merge_concept_boards(jrzfqsgn, jrzjlrqsgn, jrdfqsgn, jrzjlcqsgn)
 
+    log_progress(scope, "拉取涨停全量")
     zt_full = await run_in_threadpool(ztgc)
     zttj = await _ztgk(settings, True, zt_full=zt_full if isinstance(zt_full, list) else [])
 
     payload_stub = _concept_payload_stub(gn_bk)
+    log_progress(scope, "构建三来源候选（初筛→问财→enrich）")
     sources = await build_all_source_candidates(
         settings,
         payload_stub,
         zt_rows=zt_full if isinstance(zt_full, list) else [],
         include_pre_snapshot=True,
+        progress_scope=scope,
     )
     hot_ = sources[PAYLOAD_KEY_POPULARITY]
     zt_candidates = sources[PAYLOAD_KEY_ZT]
@@ -717,7 +758,7 @@ async def post_market(settings: SettingsDep, background_tasks: BackgroundTasks) 
     hot_ = enrich_list_with_pkyd_tags(hot_, tag_map)
     zttj = enrich_zt_stats_with_pkyd(zttj, tag_map)
 
-    zxg_, ccg_ = await _enrich_optional_and_holding(settings)
+    zxg_, ccg_ = await _enrich_optional_and_holding(settings, progress_scope=scope)
 
     result = {
         "大盘指数": dpzs,
@@ -731,4 +772,5 @@ async def post_market(settings: SettingsDep, background_tasks: BackgroundTasks) 
         "自选股": zxg_,
         "持仓股": ccg_,
     }
+    log_progress_done(scope, "晚间 payload 完成")
     return Response(data=_finalize_quant_payload(result))

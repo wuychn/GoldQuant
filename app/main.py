@@ -20,6 +20,7 @@ from app.core.exception_handlers import (
 )
 from app.core.eastmoney_headers import apply_eastmoney_requests_patch
 from app.core.proxy import apply_process_proxy
+from quant.progress_log import configure_progress_logging
 
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(_: FastAPI):
         # 对 requests 打补丁：东财域名合并 `.eastmoney.header`（须在首次调用 akshare 前）
         apply_eastmoney_requests_patch()
+        configure_progress_logging()
         # 写入 HTTP_PROXY / HTTPS_PROXY，供 AKShare（requests/curl_cffi）等出站请求使用
         apply_process_proxy(settings)
         sched = None

@@ -15,6 +15,7 @@ from app.utils.quant_archive import (
 )
 from app.utils.quant_market_enrich import pre_auction_minute_zh
 from app.utils.ths_util import ggzjl, wcxg
+from quant.progress_log import log_progress_count
 
 logger = logging.getLogger(__name__)
 
@@ -163,13 +164,19 @@ async def attach_concepts_to_rows(
     rows: list[dict],
     *,
     cache: dict[str, list[str] | None] | None = None,
+    progress_scope: str | None = None,
+    progress_label: str = "问财",
 ) -> list[dict]:
     store = cache if cache is not None else _concept_cache
     out: list[dict] = []
-    for row in rows:
+    total = len(rows)
+    for i, row in enumerate(rows):
         if not isinstance(row, dict):
             continue
         out.append(await attach_stock_concepts_from_wencai(row, cache=store))
+        if progress_scope and total and (i == 0 or i + 1 == total or (i + 1) % 5 == 0):
+            code = str(row.get("股票代码", "")).strip()
+            log_progress_count(progress_scope, progress_label, i + 1, total, detail=code)
     return out
 
 
@@ -266,10 +273,13 @@ async def enrich_stock_rows(
     include_pre_snapshot: bool = False,
     skip_wencai: bool = False,
     concept_cache: dict[str, list[str] | None] | None = None,
+    progress_scope: str | None = None,
+    progress_label: str = "enrich",
 ) -> list[dict]:
     cache = concept_cache if concept_cache is not None else _concept_cache
     out: list[dict] = []
-    for row in rows:
+    total = len(rows)
+    for i, row in enumerate(rows):
         if not isinstance(row, dict):
             continue
         out.append(
@@ -281,4 +291,7 @@ async def enrich_stock_rows(
                 skip_wencai=skip_wencai,
             )
         )
+        if progress_scope and total and (i == 0 or i + 1 == total or (i + 1) % 5 == 0):
+            code = str(row.get("股票代码", "")).strip()
+            log_progress_count(progress_scope, progress_label, i + 1, total, detail=code)
     return out
