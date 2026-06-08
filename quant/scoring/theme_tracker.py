@@ -1,4 +1,4 @@
-"""主线题材：滑动窗口内累计涨幅最大 + 累计资金流入最多，各 1 条（最多 2 条）。
+"""主线题材：滑动窗口概念榜快照 + 概念净分（涨/跌、流入/流出）+ 个股 concept_theme 打分。
 
 日快照与主线确认仅在 ``post_market_evening`` 写入 ``main_themes.json``；
 盘中/午间/盘前等模式只读已确认主线，不更新状态。
@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+from collections import defaultdict
 from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -67,9 +68,29 @@ def _snapshot_gain_rows(payload: dict, limit: int) -> list[dict[str, Any]]:
     return out
 
 
+def _snapshot_loss_rows(payload: dict, limit: int) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for row in _board_rows(payload, "跌幅榜", limit):
+        name = str(row.get("行业", "")).strip()
+        if not name:
+            continue
+        out.append({"行业": name, "行业-涨跌幅": _f(row.get("行业-涨跌幅"))})
+    return out
+
+
 def _snapshot_fund_rows(payload: dict, limit: int) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for row in _board_rows(payload, "资金流入榜", limit):
+        name = str(row.get("行业", "")).strip()
+        if not name:
+            continue
+        out.append({"行业": name, "净额": _f(row.get("净额"))})
+    return out
+
+
+def _snapshot_fund_out_rows(payload: dict, limit: int) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for row in _board_rows(payload, "资金流出榜", limit):
         name = str(row.get("行业", "")).strip()
         if not name:
             continue
@@ -149,7 +170,7 @@ def resolve_main_theme_leaders(state: dict[str, Any], *, lookback: int | None = 
 
 
 def update_main_theme_state(payload: dict) -> dict[str, Any]:
-    """按日写入概念榜快照（涨幅/资金各 top N），保留滑动窗口。"""
+    """按日写入概念四榜快照，保留滑动窗口。"""
     cfg = _theme_cfg()
     limit = int(cfg.get("board_limit", 10))
     lookback = int(cfg.get("lookback_days", 5))
@@ -160,7 +181,9 @@ def update_main_theme_state(payload: dict) -> dict[str, Any]:
     if daily.get(today) is None:
         daily[today] = {
             "gain": _snapshot_gain_rows(payload, limit),
+            "loss": _snapshot_loss_rows(payload, limit),
             "fund": _snapshot_fund_rows(payload, limit),
+            "fund_out": _snapshot_fund_out_rows(payload, limit),
         }
 
     _trim_daily(state, lookback)
@@ -177,10 +200,7 @@ def update_main_theme_state(payload: dict) -> dict[str, Any]:
 
 
 def resolve_main_themes(payload: dict, *, update: bool = False) -> set[str]:
-    """确认主线：近 N 日累计涨幅最大 + 累计资金流入最多，最多 2 条。
-
-    ``update=True`` 时写入日快照（仅应由晚间复盘调用）；默认只读 ``main_themes.json``。
-    """
+    """确认主线：近 N 日累计涨幅最大 + 累计资金流入最多，最多 2 条。"""
     cfg = _theme_cfg()
     lookback = int(cfg.get("lookback_days", 5))
     state = update_main_theme_state(payload) if update else _load_state()
@@ -193,59 +213,85 @@ def resolve_main_themes(payload: dict, *, update: bool = False) -> set[str]:
     return out
 
 
-def concept_resonance_weights(payload: dict, *, update: bool = False) -> dict[str, float]:
-    """各概念共振权重（0~100）：确认主线 + 涨幅榜排名 + 资金榜排名/净额。"""
-    cfg = _theme_cfg()
-    limit = int(cfg.get("board_limit", 10))
-    w_cfg = cfg.get("score_weights") or {}
-    w_main = float(w_cfg.get("confirmed", 40))
-    w_gain = float(w_cfg.get("gain_rank", 25))
-    w_fund_rank = float(w_cfg.get("fund_rank", 20))
-    w_fund_amt = float(w_cfg.get("fund_amount", 15))
-
-    main = resolve_main_themes(payload, update=update)
-    gain_rank, fund_rank, fund_net = _board_rank_and_fund(payload, limit)
-    max_net = max((v for v in fund_net.values() if v > 0), default=0.0)
-
-    weights: dict[str, float] = {}
-    for name in main | set(gain_rank) | set(fund_rank):
-        w = 0.0
-        if name in main:
-            w += w_main
-        if name in gain_rank:
-            w += _rank_bonus(gain_rank[name], limit, w_gain)
-        if name in fund_rank:
-            w += _rank_bonus(fund_rank[name], limit, w_fund_rank)
-            if max_net > 0:
-                net = max(0.0, fund_net.get(name, 0.0))
-                w += w_fund_amt * (net / max_net)
-        weights[name] = round(w, 2)
-    return weights
-
-
-def _board_rank_and_fund(
-    payload: dict,
-    limit: int,
-) -> tuple[dict[str, int], dict[str, int], dict[str, float]]:
-    gain_rank: dict[str, int] = {}
-    fund_rank: dict[str, int] = {}
-    fund_net: dict[str, float] = {}
-    for i, row in enumerate(_board_rows(payload, "涨幅榜", limit)):
-        n = str(row.get("行业", "")).strip()
-        if n and n not in gain_rank:
-            gain_rank[n] = i + 1
-    for i, row in enumerate(_board_rows(payload, "资金流入榜", limit)):
-        n = str(row.get("行业", "")).strip()
-        if n and n not in fund_rank:
-            fund_rank[n] = i + 1
-            fund_net[n] = _f(row.get("净额"))
-    return gain_rank, fund_rank, fund_net
-
-
 def _rank_bonus(rank: int, limit: int, max_pts: float) -> float:
     if rank <= 0 or rank > limit:
         return 0.0
     return max_pts * (limit - rank + 1) / limit
+
+
+def _daily_snap(snap: dict) -> dict[str, list[dict[str, Any]]]:
+    return {
+        "gain": [r for r in (snap.get("gain") or []) if isinstance(r, dict)],
+        "loss": [r for r in (snap.get("loss") or []) if isinstance(r, dict)],
+        "fund": [r for r in (snap.get("fund") or []) if isinstance(r, dict)],
+        "fund_out": [r for r in (snap.get("fund_out") or []) if isinstance(r, dict)],
+    }
+
+
+def build_concept_net_scores(
+    state: dict[str, Any] | None = None,
+    *,
+    lookback: int | None = None,
+) -> dict[str, float]:
+    """滑动窗口内各概念净倾向分：涨/流入加分，跌/流出减分；同概念对立榜自然对冲。"""
+    cfg = _theme_cfg()
+    limit = int(cfg.get("board_limit", 10))
+    window = lookback if lookback is not None else int(cfg.get("lookback_days", 5))
+    w_cfg = cfg.get("score_weights") or {}
+    w_gain = float(w_cfg.get("gain_rank", 25))
+    w_loss = float(w_cfg.get("loss_rank", 25))
+    w_fund_in = float(w_cfg.get("fund_rank", 20))
+    w_fund_out = float(w_cfg.get("fund_out_rank", 20))
+    w_confirmed = float(w_cfg.get("confirmed", 40))
+
+    st = state if state is not None else _load_state()
+    cutoff = _window_start(window)
+    scores: dict[str, float] = defaultdict(float)
+
+    for d, snap in (st.get("daily") or {}).items():
+        if d < cutoff or not isinstance(snap, dict):
+            continue
+        boards = _daily_snap(snap)
+        for i, row in enumerate(boards["gain"]):
+            name = str(row.get("行业", "")).strip()
+            if name:
+                scores[name] += _rank_bonus(i + 1, limit, w_gain)
+        for i, row in enumerate(boards["loss"]):
+            name = str(row.get("行业", "")).strip()
+            if name:
+                scores[name] -= _rank_bonus(i + 1, limit, w_loss)
+        for i, row in enumerate(boards["fund"]):
+            name = str(row.get("行业", "")).strip()
+            if name:
+                scores[name] += _rank_bonus(i + 1, limit, w_fund_in)
+        for i, row in enumerate(boards["fund_out"]):
+            name = str(row.get("行业", "")).strip()
+            if name:
+                scores[name] -= _rank_bonus(i + 1, limit, w_fund_out)
+
+    gain_main, fund_main = resolve_main_theme_leaders(st, lookback=window)
+    if gain_main:
+        scores[gain_main] += w_confirmed
+    if fund_main and fund_main != gain_main:
+        scores[fund_main] += w_confirmed
+
+    return dict(scores)
+
+
+def max_concept_net_score(stock_concepts: set[str], payload: dict | None = None) -> float:
+    """个股概念集合在窗口净分中的最高值（无匹配为 0）。"""
+    del payload
+    if not stock_concepts:
+        return 0.0
+    nets = build_concept_net_scores()
+    matched = [nets[c] for c in stock_concepts if c in nets]
+    return max(matched) if matched else 0.0
+
+
+def concept_resonance_weights(payload: dict, *, update: bool = False) -> dict[str, float]:
+    """兼容旧引用：返回滑动窗口概念净分。"""
+    del payload, update
+    return build_concept_net_scores()
 
 
 def score_concept_resonance(
@@ -254,21 +300,36 @@ def score_concept_resonance(
     *,
     update: bool = False,
 ) -> tuple[float, dict[str, Any]]:
-    """个股概念与确认主线交集，按各概念权重计分。"""
-    main = resolve_main_themes(payload, update=update)
-    if not main:
-        return 50.0, {"available": False}
+    """个股 concept_theme：最强正向概念加分 + 最强负向概念减分（中性 50）。"""
+    del payload, update
+    cfg = _theme_cfg()
+    w_cfg = cfg.get("score_weights") or {}
+    neutral = float(w_cfg.get("neutral", 50))
+    w_pos = float(w_cfg.get("stock_pos_weight", 0.6))
+    w_neg = float(w_cfg.get("stock_neg_weight", 0.3))
 
-    weights = concept_resonance_weights(payload, update=False)
-    hits = stock_concepts & main
-    if not hits:
-        return 25.0, {"命中概念": [], "命中权重": {}}
+    nets = build_concept_net_scores()
+    if not nets:
+        return neutral, {"available": False}
 
-    hit_weights = {c: weights.get(c, float((_theme_cfg().get("score_weights") or {}).get("confirmed", 40))) for c in hits}
-    peak = max(hit_weights.values())
-    extra = min(15.0, max(0, len(hits) - 1) * 5.0)
-    score = min(100.0, 30.0 + peak * 0.7 + extra)
-    return score, {"命中概念": sorted(hits), "命中权重": hit_weights, "峰值权重": round(peak, 2)}
+    matched = {c: nets[c] for c in stock_concepts if c in nets}
+    if not matched:
+        return neutral, {"命中概念": [], "概念净分": {}, "available": True}
+
+    pos_vals = [v for v in matched.values() if v > 0]
+    neg_vals = [v for v in matched.values() if v < 0]
+    pos_peak = max(pos_vals) if pos_vals else 0.0
+    neg_trough = min(neg_vals) if neg_vals else 0.0
+
+    raw = neutral + w_pos * pos_peak + w_neg * neg_trough
+    score = max(0.0, min(100.0, raw))
+    return score, {
+        "available": True,
+        "命中概念": sorted(matched.keys()),
+        "概念净分": {k: round(v, 2) for k, v in sorted(matched.items(), key=lambda x: -x[1])},
+        "正向峰值": round(pos_peak, 2),
+        "负向峰值": round(neg_trough, 2),
+    }
 
 
 def theme_detail(payload: dict, *, update: bool = False) -> dict[str, Any]:
@@ -280,11 +341,16 @@ def theme_detail(payload: dict, *, update: bool = False) -> dict[str, Any]:
     main = resolve_main_themes(payload, update=update)
     state = _load_state()
     gain_main, fund_main = resolve_main_theme_leaders(state, lookback=lookback)
+    nets = build_concept_net_scores(state, lookback=lookback)
+    top_pos = sorted(nets.items(), key=lambda x: -x[1])[:8]
+    top_neg = sorted(nets.items(), key=lambda x: x[1])[:8]
     return {
         "当日涨幅概念": sorted(gain),
         "当日资金概念": sorted(fund),
         "涨幅主线": gain_main,
         "资金主线": fund_main,
         "确认主线": sorted(main),
-        "概念权重": concept_resonance_weights(payload, update=False),
+        "概念净分": {k: round(v, 2) for k, v in nets.items()},
+        "净分靠前": top_pos,
+        "净分靠后": top_neg,
     }

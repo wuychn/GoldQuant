@@ -1,82 +1,78 @@
-"""晚间候选池：同花顺人气榜 + 主线概念 + 盘口异动概念共振。"""
+"""晚间候选池：三来源独立进入，已在 API 层完成初筛 + 问财 + enrich。"""
 
 from __future__ import annotations
 
-from quant.config import load_scoring_config
-from quant.pool.pkyd_util import (
-    attach_pkyd_tags,
-    build_pkyd_tag_map,
-    merge_pkyd_rows_by_code,
-    pkyd_row_matches_hot_concepts,
-    stock_pkyd_tags,
+from quant.pool.candidate_config import (
+    PAYLOAD_KEY_PKYD,
+    PAYLOAD_KEY_POPULARITY,
+    PAYLOAD_KEY_ZT,
+    load_candidate_config,
 )
-from quant.scoring.dimensions.concept_theme import _stock_concepts, resolve_stock_concepts
-from quant.scoring.theme_tracker import resolve_main_themes
+from quant.pool.pkyd_util import attach_pkyd_tags, build_pkyd_tag_map, stock_pkyd_tags
 
 
 def _code(row: dict) -> str:
     return str(row.get("股票代码") or row.get("代码") or "").strip()
 
 
+def _merge_source_label(existing: dict, row: dict) -> None:
+    label = str(row.get("候选来源") or "").strip()
+    if not label:
+        return
+    prev = existing.get("候选来源")
+    if not prev:
+        existing["候选来源"] = label
+        return
+    if isinstance(prev, list):
+        if label not in prev:
+            prev.append(label)
+        return
+    if prev != label:
+        existing["候选来源"] = [prev, label]
+
+
 def build_candidates(payload: dict) -> list[dict]:
-    cfg = load_scoring_config().get("candidate") or {}
-    limit = int(cfg.get("popularity_limit", 20))
-    include_zt = bool(cfg.get("include_zt_pool", False))
-    include_pkyd = bool(cfg.get("include_pkyd_concept_match", True))
-    tops = resolve_main_themes(payload)
-    tag_map = build_pkyd_tag_map(payload.get("盘口异动"))
-    pkyd_rows = merge_pkyd_rows_by_code(rows=payload.get("盘口异动"))
+    """合并三来源候选（payload 中应已通过通用漏斗）。"""
+    cfg = load_candidate_config()
+    if not bool(cfg.get("include_zt_pool", True)):
+        zt_key = None
+    else:
+        zt_key = PAYLOAD_KEY_ZT
+    if not bool(cfg.get("include_pkyd_pool", True)):
+        pkyd_key = None
+    else:
+        pkyd_key = PAYLOAD_KEY_PKYD
+
+    tag_map = build_pkyd_tag_map(payload.get(PAYLOAD_KEY_PKYD))
+    source_keys = [PAYLOAD_KEY_POPULARITY]
+    if zt_key:
+        source_keys.append(zt_key)
+    if pkyd_key:
+        source_keys.append(pkyd_key)
 
     merged: dict[str, dict] = {}
-
-    for row in (payload.get("同花顺人气榜") or [])[:limit]:
-        if not isinstance(row, dict):
-            continue
-        code = _code(row)
-        if not code:
-            continue
-        merged[code] = attach_pkyd_tags(dict(row), tag_map)
-
-    # 概念涨幅/资金榜前列个股补充（若在 enrich 列表中）
-    for key in ("自选股", "同花顺人气榜"):
+    for key in source_keys:
         for row in payload.get(key) or []:
             if not isinstance(row, dict):
                 continue
             code = _code(row)
             if not code:
                 continue
-            row = resolve_stock_concepts(row, payload)
-            concepts = _stock_concepts(row)
-            if tops and concepts & tops:
-                merged[code] = attach_pkyd_tags({**merged.get(code, {}), **row}, tag_map)
+            tagged = attach_pkyd_tags(dict(row), tag_map)
+            if code in merged:
+                _merge_source_label(merged[code], tagged)
+                combined = dict(merged[code])
+                for k, v in tagged.items():
+                    if k != "候选来源":
+                        combined[k] = v
+                merged[code] = attach_pkyd_tags(combined, tag_map)
+            else:
+                merged[code] = tagged
 
-    if include_pkyd:
-        for row in pkyd_rows:
-            if not isinstance(row, dict):
-                continue
-            code = _code(row)
-            if not code or code in merged:
-                continue
-            if not pkyd_row_matches_hot_concepts(row, payload):
-                continue
-            tags = tag_map.get(code) or stock_pkyd_tags(row)
-            merged[code] = {
-                **row,
-                "盘口异动标签": tags,
-                "候选来源": "盘口异动",
-            }
-
-    if include_zt:
-        zt = payload.get("涨停统计") or payload.get("涨停概况") or {}
-        pool = zt.get("今日涨停") if isinstance(zt, dict) else []
-        for row in pool or []:
-            if not isinstance(row, dict):
-                continue
-            code = _code(row)
-            if code and code not in merged:
-                merged[code] = attach_pkyd_tags(
-                    {"股票代码": code, "股票名称": row.get("名称", ""), **row},
-                    tag_map,
-                )
-
-    return list(merged.values())
+    out: list[dict] = []
+    for row in merged.values():
+        tags = stock_pkyd_tags(row)
+        if tags and not row.get("盘口异动标签"):
+            row = {**row, "盘口异动标签": tags}
+        out.append(row)
+    return out

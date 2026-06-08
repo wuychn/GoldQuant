@@ -19,14 +19,16 @@ scoring:
   buy_threshold: 72         # 产生买入原始信号
   sell_threshold: 45        # 持仓「去弱留强」：低于此分可触发卖出
 
-  # 晚间候选池构建（pool/builder.py）
+  # 晚间候选池（初筛在 quant/pool/sources.py，问财+enrich 在 quant/pool/pipeline.py）
   candidate:
-    popularity_limit: 30    # 同花顺人气榜取前 N 只（须 ≤ API 返回条数；QUANT_TEST_PHASE 时 API 截为 3）
-    # CLI 本地数据：GOLDQUANT_QUANT_USE_LOCAL_FIXTURE=true 时从 data/<mode>.json 读，不走 HTTP
-    include_zt_pool: false  # 是否并入当日涨停池（主升浪默认不依赖）
-    include_pkyd_concept_match: true  # 盘口异动且概念共振时纳入候选
-    require_main_wave: true # 加自选须 main_wave 维度达标
-    require_main_wave_pkyd: false  # 盘口异动概念共振候选可不强制 main_wave
+    popularity_limit: 30        # 人气榜初筛：取前 N
+    zt_min_boards: 2            # 涨停池初筛：连板数 ≥
+    pkyd_dual_tag_limit: 20     # 盘口异动初筛：双标签取前 N
+    pkyd_labels:                # 东财盘口异动类型
+      - 60日新高
+      - 60日大幅上涨
+    include_zt_pool: true       # 涨停池作为独立候选来源
+    include_pkyd_pool: true      # 盘口异动作为独立候选来源
 
   # 评分维度：enabled 关闭则不参与；weight 为加权系数
   dimensions:
@@ -130,20 +132,25 @@ gates:
       min_interval_minutes: 30
       max_interval_minutes: 240
 
-  # 主线题材：滑动窗口累计涨幅最大 + 累计资金流入最多，各 1 条；仅晚间复盘写入状态
+  # 主线题材：滑动窗口四榜快照 + concept_theme 净分；仅晚间复盘写入状态
   main_theme:
-    board_limit: 10                 # 每日快照：概念涨幅榜/资金流入榜各取前 N（仅 post_market_evening）
+    board_limit: 10                 # 每日快照：涨/跌/流入/流出榜各取前 N
     lookback_days: 5                # 滑动窗口（自然日）
-    score_weights:                  # concept_theme 维度：各概念共振权重上限（合计约 100）
-      confirmed: 40                 # 已确认主线
-      gain_rank: 25                 # 涨幅榜排名（第 1 名满额，越靠后越低）
-      fund_rank: 20                 # 资金流入榜排名
-      fund_amount: 15               # 资金净额占当日榜内最大值的比例
+    score_weights:                  # concept_theme：概念净分 + 个股聚合
+      confirmed: 40                 # 窗口累计涨幅/资金主线概念额外加分
+      gain_rank: 25                 # 涨幅榜出现：第 1 名满额，越靠后越低
+      loss_rank: 25                 # 跌幅榜出现：减分，排名越靠前减越多
+      fund_rank: 20                 # 资金流入榜出现加分
+      fund_out_rank: 20             # 资金流出榜出现减分
+      neutral: 50                   # 无命中或正负对冲时的中性分
+      stock_pos_weight: 0.6         # 个股最强正向概念净分权重
+      stock_neg_weight: 0.3         # 个股最强负向概念净分权重（值为负）
 
   # 主升浪战法：买点/卖点/龙头判定
   main_wave:
     min_ma_spread_pct: 0.8          # MA5 相对 MA20 最小发散(%)
     leader_max_rank: 15             # 主线龙头：人气排名 ≤ 此值
+    leader_min_concept_net: 15      # 或概念净分峰值 ≥ 此值 / 命中确认主线
     leader_max_daily_drop_pct: 5    # 当日跌幅超过此值(%) 不计为主线龙头
     pullback_ma_zone_low: 0.985     # 回调企稳：现价/MA10 下限
     pullback_ma_zone_high: 1.015    # 回调企稳：现价/MA10 上限

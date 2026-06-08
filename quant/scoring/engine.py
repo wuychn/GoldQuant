@@ -93,24 +93,11 @@ class ScoringEngine:
         scores: list[StockScore],
         *,
         kind: str = "watchlist",
-        stock_rows: dict[str, dict] | None = None,
     ) -> list[StockScore]:
         key = f"{kind}_threshold"
         threshold = float(self.config.get(key, 65))
-        cand_cfg = self.config.get("candidate") or {}
-        require_mw = bool(cand_cfg.get("require_main_wave", True))
-        require_mw_pkyd = bool(cand_cfg.get("require_main_wave_pkyd", False))
-        rows = stock_rows or {}
         out: list[StockScore] = []
         for s in scores:
-            ok = s.total >= threshold
-            if require_mw and kind == "watchlist":
-                row = rows.get(s.code, {})
-                from_pkyd = str(row.get("候选来源") or "").strip() == "盘口异动"
-                if from_pkyd and not require_mw_pkyd:
-                    pass
-                else:
-                    ok = ok and self.passes_main_wave(s)
-            s.passed_threshold = ok
+            s.passed_threshold = s.total >= threshold
             out.append(s)
         return out

@@ -104,15 +104,27 @@ def _score_summary_lines(scores: list) -> list[str]:
 
 def _watchlist_add_reason(score, candidate_row: dict) -> str:
     parts = [f"评分{score.total:.1f}"]
-    source = str(candidate_row.get("候选来源") or "").strip()
-    if source == "盘口异动":
-        tags = "、".join(stock_pkyd_tags(candidate_row)) or "盘口异动"
-        parts.append(f"盘口异动({tags})+概念共振")
+    raw_source = candidate_row.get("候选来源")
+    if isinstance(raw_source, list):
+        sources = [str(s).strip() for s in raw_source if str(s).strip()]
     else:
+        sources = [str(raw_source).strip()] if str(raw_source or "").strip() else []
+    if "盘口异动" in sources:
+        tags = "、".join(stock_pkyd_tags(candidate_row)) or "盘口异动"
+        parts.append(f"盘口异动({tags})")
+    if "涨停池" in sources:
+        boards = candidate_row.get("连板数")
+        parts.append(f"涨停池(连板{boards})" if boards is not None else "涨停池")
+    if "人气榜" in sources:
+        rank = candidate_row.get("人气排名")
+        parts.append(f"人气榜(排名{rank})" if rank is not None else "人气榜")
+    if not sources or sources == ["人气榜"]:
         tags = stock_pkyd_tags(candidate_row)
         if tags:
             parts.append(f"盘口异动({ '、'.join(tags) })")
-        parts.append("主线主升浪龙头")
+        if "人气榜" not in sources and "涨停池" not in sources and "盘口异动" not in sources:
+            parts.append("主线主升浪龙头")
+    parts.append("概念共振")
     return "；".join(parts)
 
 
@@ -124,7 +136,6 @@ def _update_watchlist_evening(ctx: ScoreContext) -> tuple[list[dict], str]:
     scores = engine.apply_threshold(
         engine.score_many(ctx, candidates),
         kind="watchlist",
-        stock_rows=by_code,
     )
     passed = [s for s in scores if s.passed_threshold]
 

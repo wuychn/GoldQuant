@@ -11,7 +11,6 @@ from app.utils.common_util import (
     row_allowed_symbol_pool, normalize_a_share_code,
 )
 from quant.config import load_gates_config
-from quant.scoring.dimensions.concept_theme import _stock_concepts, resolve_stock_concepts
 from quant.scoring.theme_tracker import resolve_main_themes, snapshot_boards
 
 _PKYD_TAG_KEYS = ("盘口异动标签", "异动类型", "原因")
@@ -155,11 +154,10 @@ def hot_concept_targets(payload: dict) -> set[str]:
 
 
 def pkyd_row_matches_hot_concepts(row: dict, payload: dict) -> bool:
-    targets = hot_concept_targets(payload)
-    if not targets:
-        return False
-    row = resolve_stock_concepts(row, payload)
-    return bool(_stock_concepts(row) & targets)
+    """兼容旧引用；逻辑见 ``quant.pool.concept_filter``。"""
+    from quant.pool.concept_filter import matches_main_theme_concepts
+
+    return matches_main_theme_concepts(row, payload)
 
 
 def stock_pkyd_tags(stock: dict) -> list[str]:

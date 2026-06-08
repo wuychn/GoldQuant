@@ -17,7 +17,8 @@ from quant.scoring.tech_indicators import (
     quote_open_price,
     stock_daily_change_pct,
 )
-from quant.scoring.theme_tracker import resolve_main_themes
+from quant.pool.candidate_config import PAYLOAD_KEY_POPULARITY
+from quant.scoring.theme_tracker import resolve_main_themes, max_concept_net_score
 
 
 def _mas(stock: dict) -> dict[str, float | None]:
@@ -52,9 +53,12 @@ def is_theme_leader(stock: dict, ctx: ScoreContext, *, max_rank: int) -> bool:
         return False
 
     stock = resolve_stock_concepts(stock, ctx.payload)
-    tops = resolve_main_themes(ctx.payload)
     concepts = _stock_concepts(stock)
-    if not tops or not (concepts & tops):
+    min_net = float(mw_cfg.get("leader_min_concept_net", 15))
+    tops = resolve_main_themes(ctx.payload)
+    net_peak = max_concept_net_score(concepts, ctx.payload)
+    on_theme = bool(tops and (concepts & tops))
+    if net_peak < min_net and not on_theme:
         return False
     rank = stock.get("人气排名")
     if rank is not None:
@@ -63,7 +67,7 @@ def is_theme_leader(stock: dict, ctx: ScoreContext, *, max_rank: int) -> bool:
         except (TypeError, ValueError):
             pass
     code = str(stock.get("股票代码", "")).strip()
-    for row in ctx.payload.get("同花顺人气榜") or []:
+    for row in ctx.payload.get(PAYLOAD_KEY_POPULARITY) or []:
         if str(row.get("股票代码", "")).strip() != code:
             continue
         try:

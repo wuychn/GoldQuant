@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from quant.pool.candidate_config import PAYLOAD_KEY_POPULARITY
 from quant.scoring.context import ScoreContext
 from quant.scoring.dimensions.base import clamp
 from quant.scoring.models import DimensionResult
@@ -41,7 +42,7 @@ def resolve_stock_concepts(stock: dict, payload: dict) -> dict:
     code = str(stock.get("股票代码", "")).strip()
     if not code:
         return stock
-    for row in payload.get("同花顺人气榜") or []:
+    for row in payload.get(PAYLOAD_KEY_POPULARITY) or []:
         if not isinstance(row, dict):
             continue
         if str(row.get("股票代码", "")).strip() != code:
@@ -64,16 +65,17 @@ class ConceptThemeScorer:
         concepts = _stock_concepts(stock)
         detail = theme_detail(ctx.payload, update=False)
         main = resolve_main_themes(ctx.payload, update=False)
-        if not main:
-            return DimensionResult(self.name, 50, 0, True, available=False, detail=detail)
-
         raw_score, hit_detail = score_concept_resonance(concepts, ctx.payload, update=False)
         src = _concept_source(stock)
+        available = hit_detail.get("available", True)
+        if not main and not hit_detail.get("概念净分"):
+            available = bool(hit_detail.get("available", False))
         return DimensionResult(
             self.name,
             clamp(raw_score),
             0,
             True,
+            available=available,
             detail={
                 **detail,
                 **hit_detail,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from quant.pool.candidate_config import PAYLOAD_KEY_POPULARITY
 from quant.scoring.context import ScoreContext
 from quant.scoring.dimensions.base import clamp
 from quant.scoring.models import DimensionResult
@@ -15,7 +16,7 @@ def _popularity_rank(stock: dict, payload: dict) -> int | None:
         except (TypeError, ValueError):
             pass
     code = str(stock.get("股票代码", "")).strip()
-    for row in payload.get("同花顺人气榜") or []:
+    for row in payload.get(PAYLOAD_KEY_POPULARITY) or []:
         if str(row.get("股票代码", "")).strip() == code:
             try:
                 return int(row.get("人气排名"))
