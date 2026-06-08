@@ -108,6 +108,98 @@ def hist_close(row: dict) -> float | None:
     return metric_from_dict(row, "收盘", "close", "收盘价")
 
 
+def hist_rows_sorted(hist: object) -> list[dict]:
+    """历史行情按日期升序的有效 K 线行。"""
+    if not isinstance(hist, list):
+        return []
+    rows = [r for r in hist if isinstance(r, dict) and hist_close(r) is not None]
+    rows.sort(key=lambda r: str(r.get("日期") or r.get("date") or ""))
+    return rows
+
+
+def hist_daily_changes(hist: object) -> list[float]:
+    """相邻交易日收盘涨跌幅(%)，有行内涨跌幅则用之，否则由收盘价推算。"""
+    rows = hist_rows_sorted(hist)
+    changes: list[float] = []
+    prev_close: float | None = None
+    for row in rows:
+        close = hist_close(row)
+        if close is None:
+            continue
+        if prev_close is not None and prev_close > 0:
+            explicit = metric_from_dict(row, "涨跌幅", "pct_chg", "涨跌")
+            if explicit is not None:
+                changes.append(explicit)
+            else:
+                changes.append((close - prev_close) / prev_close * 100)
+        prev_close = close
+    return changes
+
+
+def hist_closes(hist: object) -> list[float]:
+    return [c for c in (hist_close(r) for r in hist_rows_sorted(hist)) if c is not None]
+
+
+def _hist_row_date(row: dict) -> str:
+    return str(row.get("日期") or row.get("date") or "").strip()[:10]
+
+
+def _period_closes(hist: object, *, period: str) -> list[float]:
+    """由日线聚合周/月收盘价序列（每周期取最后一根收盘）。"""
+    from datetime import datetime
+
+    rows = hist_rows_sorted(hist)
+    if not rows:
+        return []
+    buckets: dict[str, float] = {}
+    for row in rows:
+        ds = _hist_row_date(row)
+        close = hist_close(row)
+        if not ds or close is None:
+            continue
+        try:
+            dt = datetime.strptime(ds.replace("/", "-"), "%Y-%m-%d")
+        except ValueError:
+            continue
+        if period == "weekly":
+            key = f"{dt.isocalendar().year}-W{dt.isocalendar().week:02d}"
+        else:
+            key = f"{dt.year}-{dt.month:02d}"
+        buckets[key] = close
+    return [buckets[k] for k in sorted(buckets)]
+
+
+def period_trend_up(closes: list[float]) -> bool:
+    """周期收盘序列末端向上（最新 > 前一周期，且不低于前三周期）。"""
+    if len(closes) < 2:
+        return False
+    if closes[-1] <= closes[-2]:
+        return False
+    if len(closes) >= 3:
+        return closes[-1] >= closes[-3]
+    return True
+
+
+def ma_spread_pct(closes: list[float]) -> float | None:
+    """日线 MA5 相对 MA20 的发散幅度(%)。"""
+    if len(closes) < 20:
+        return None
+    ma5 = sum(closes[-5:]) / 5
+    ma20 = sum(closes[-20:]) / 20
+    if ma20 <= 0:
+        return None
+    return (ma5 - ma20) / ma20 * 100
+
+
+def ma_bull_from_closes(closes: list[float]) -> bool:
+    if len(closes) < 20:
+        return False
+    ma5 = sum(closes[-5:]) / 5
+    ma10 = sum(closes[-10:]) / 10
+    ma20 = sum(closes[-20:]) / 20
+    return ma5 > ma10 > ma20
+
+
 def hist_change_pct(row: dict) -> float | None:
     f = metric_from_dict(row, "涨跌幅", "pct_chg", "涨跌")
     return 0.0 if f is None else f

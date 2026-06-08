@@ -7,7 +7,15 @@ from datetime import datetime
 
 from quant.config import LLM_OUTPUT_FORMAT
 from quant.narrative.history_context import build_cross_day_context
+from quant.narrative.push_style import DEPRECATED_PUSH_TERMS
 from quant.store.state import get_total_assets, read_lessons, read_news_summary
+
+
+def _push_vocabulary_note() -> str:
+    return (
+        "行情强弱统一写「赚钱效应强/一般/差」，仓位上限写「仓位控制」及具体比例；"
+        f"禁止「{'」「'.join(DEPRECATED_PUSH_TERMS)}」等旧表述。\n"
+    )
 
 
 def _persona() -> str:
@@ -20,6 +28,7 @@ def _persona() -> str:
         "禁止「研判中的当日涨幅」「研判要点」「写作参考」「接口数据 JSON」等内部用语。\n"
         "正文禁止出现「程序结论」「程序确认」「程序认定」「规则引擎」「程序归档」"
         "「全局门禁」「门禁」「标的池」等系统用语。\n"
+        + _push_vocabulary_note()
     )
 
 
@@ -98,7 +107,8 @@ def _data_semantics_note(mode: str) -> str:
 
 _NARRATIVE_RULE_HEAD = (
     "\n【叙述规则】"
-    "章节标题用「一、大盘概况」等自然小节名。"
+    "章节标题用「一、大盘概况」等自然小节名；"
+    "描述行情强弱用「赚钱效应强/一般/差」，描述仓位用「仓位控制」及具体比例。"
     "主线、龙头、概念名单须与写作参考一致，可补充指数/涨跌/成交等客观数据，"
     "但不得新增参考中未列出的主线或龙头。"
     "叙述主线龙头时勿纳入当日跌幅超过 5% 的个股。"
@@ -120,7 +130,7 @@ def prompt_pre_market() -> str:
         + "撰写盘前一至三节纯叙述文案。\n"
         + _data_semantics_note("pre_market")
         + _narrative_rule(ops_note="勿输出买卖指令；操作结果以文末「操作」段为准。")
-        + "\n\n一、今日开盘概况\n二、自选股开盘分析\n三、持仓股开盘分析\n"
+        + "\n\n一、大盘概况\n二、自选股开盘分析\n三、持仓股开盘分析\n"
         + LLM_OUTPUT_FORMAT
     )
 
@@ -146,10 +156,10 @@ def prompt_during_market() -> str:
 def prompt_lunch_review() -> str:
     return (
         _persona()
-        + "撰写午间复盘一至五节纯叙述文案，不要输出自选更新。\n"
+        + "撰写午间复盘一至四节纯叙述文案，不要输出自选更新。\n"
         + _data_semantics_note("post_market_lunch")
         + _narrative_rule(ops_note="勿输出买卖指令或自选变更；不要输出自选更新小节。")
-        + "\n\n一、上午大盘\n二、主线变化\n三、自选股表现\n四、持仓跟踪\n五、下午策略\n"
+        + "\n\n一、大盘概况\n二、自选股表现\n三、持仓跟踪\n四、下午策略\n"
         + LLM_OUTPUT_FORMAT
     )
 
@@ -157,12 +167,16 @@ def prompt_lunch_review() -> str:
 def prompt_evening_review() -> str:
     return (
         _persona()
-        + "撰写晚间复盘一至八节纯叙述文案，不要输出自选更新。\n"
+        + "撰写晚间复盘一至七节纯叙述文案，不要输出自选更新。\n"
         + _data_semantics_note("post_market_evening")
         + _narrative_rule(
-            ops_note="勿输出买卖指令或自选变更；自选结果以文末「自选更新」段为准，正文不要输出自选更新小节。"
+            ops_note=(
+                "勿输出买卖指令或自选变更；自选结果以文末「自选更新」段为准，正文不要输出自选更新小节。"
+                "大盘概况须一并交代指数、涨跌家数、成交、当前主线与概念动向，"
+                "勿另设「主线复盘」「主线变化」等独立小节。"
+            )
         )
-        + "\n\n一、全天大盘\n二、主线复盘\n三、自选股表现\n四、持仓复盘\n"
-        + "五、盈亏总结\n六、经验总结\n七、明日展望\n八、风险提示\n"
+        + "\n\n一、大盘概况\n二、自选股表现\n三、持仓复盘\n"
+        + "四、盈亏总结\n五、经验总结\n六、明日展望\n七、风险提示\n"
         + LLM_OUTPUT_FORMAT
     )

@@ -16,16 +16,10 @@ from dataclasses import dataclass, field
 from quant.config import load_gates_config
 from quant.constants import STRATEGY_NAME
 from quant.market.turnover import load_completed_day_turnovers
+from quant.narrative.push_style import profit_effect_level
 from quant.scoring.context import ScoreContext, index_change, infer_regime
 from quant.store.state import get_total_assets, stoploss_cooldown_codes, sum_today_realized_pnl
 from app.utils.common_util import is_allowed_symbol_pool_code, normalize_a_share_code
-
-# infer_regime 档位 → 飞书推送自然表述
-_PROFIT_EFFECT_PUSH_LABELS = {
-    "强势": "强",
-    "震荡": "一般",
-    "弱势": "差",
-}
 
 
 @dataclass
@@ -54,18 +48,8 @@ class GateReport:
         """飞书推送/LLM 正文用的自然表述。"""
         fails = [r for r in self.results if not r.passed]
         if not fails:
-            regime = infer_regime(payload) if payload else "震荡"
-            level = _PROFIT_EFFECT_PUSH_LABELS.get(regime, "一般")
-            limits = position_limits(ScoreContext.from_payload(payload)) if payload else None
-            if limits:
-                single_pct = float((limits.get("single_pct") or {}).get(STRATEGY_NAME, 8))
-                return (
-                    f"赚钱效应{level}，"
-                    f"总仓位上限{limits['total_pct']:.0f}%，"
-                    f"最多持仓{limits['max_stocks']}只，"
-                    f"单票上限{single_pct:.0f}%"
-                )
-            return "赚钱效应一般，总仓位上限50%，最多持仓3只，单票上限8%"
+            level = profit_effect_level(payload)
+            return f"赚钱效应{level}，{format_position_control(payload)}"
         labels = {
             "极端熔断": "大盘急跌",
             "每日亏损限额": "当日亏损偏大",
@@ -150,6 +134,19 @@ def check_buy_gates(stock: dict, ctx: ScoreContext) -> GateReport:
     global_report = check_global_gates(ctx)
     results.extend(global_report.results)
     return GateReport(results=results)
+
+
+def format_position_control(payload: dict | None) -> str:
+    """推送用仓位上限表述（不含赚钱效应档位）。"""
+    limits = position_limits(ScoreContext.from_payload(payload)) if payload else None
+    if limits:
+        single_pct = float((limits.get("single_pct") or {}).get(STRATEGY_NAME, 8))
+        return (
+            f"总仓位上限{limits['total_pct']:.0f}%，"
+            f"最多持仓{limits['max_stocks']}只，"
+            f"单票上限{single_pct:.0f}%"
+        )
+    return "总仓位上限50%，最多持仓3只，单票上限8%"
 
 
 def position_limits(ctx: ScoreContext) -> dict:

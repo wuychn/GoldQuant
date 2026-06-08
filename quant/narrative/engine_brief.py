@@ -5,16 +5,15 @@ from __future__ import annotations
 from typing import Any
 
 from quant.config import load_gates_config
-from quant.gates.rules import check_global_gates
+from quant.gates.rules import check_global_gates, format_position_control
 from quant.narrative.history_context import format_concept_rotation, format_yesterday_trades
 from quant.scoring.context import (
     ScoreContext,
     index_change,
-    infer_regime,
     profit_effect,
     zt_height,
 )
-from quant.narrative.push_style import BRIEF_PREAMBLE
+from quant.narrative.push_style import BRIEF_PREAMBLE, profit_effect_level
 from quant.scoring.theme_tracker import theme_detail
 from quant.scoring.tech_indicators import stock_daily_change_pct
 from quant.strategy.main_wave import is_theme_leader
@@ -88,20 +87,24 @@ def build_engine_brief(
     dt_cnt = int(profit.get("跌停", 0) or 0)
     idx = index_change(payload)
     height = zt_height(payload)
-    regime = infer_regime(payload)
     idx_s = f"{idx:.2f}" if idx is not None else "—"
+    effect_level = profit_effect_level(payload)
+    gates = check_global_gates(ctx)
 
     lines = [
         BRIEF_PREAMBLE,
-        f"市场档位：{regime}（上证{idx_s}% 上涨{up}/下跌{down} 涨停{zt_cnt}/跌停{dt_cnt} 最高{height}板）",
+        f"赚钱效应：{effect_level}（上证{idx_s}% 上涨{up}/下跌{down} 涨停{zt_cnt}/跌停{dt_cnt} 最高{height}板）",
         f"当前主线（{len(confirmed)}）：{'、'.join(confirmed) if confirmed else '暂无'}"
         f"（涨幅侧 {gain_main or '暂无'}；资金侧 {fund_main or '暂无'}）",
         f"当日涨幅：{'、'.join(gain[:10]) if gain else '暂无'}",
         f"资金流入：{'、'.join(fund[:10]) if fund else '暂无'}",
         f"主线龙头（{len(leaders)}只，当日跌幅≤5%）："
         f"{'、'.join(leaders) if leaders else '暂无'}",
-        f"仓位控制：{check_global_gates(ctx).push_summary(ctx.payload)}",
     ]
+    if gates.passed:
+        lines.append(f"仓位控制：{format_position_control(payload)}")
+    else:
+        lines.append(gates.push_summary(payload))
 
     rotation = format_concept_rotation()
     if rotation and "暂无" not in rotation[:20]:
