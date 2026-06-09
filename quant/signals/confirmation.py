@@ -124,11 +124,29 @@ def _holding_late_final(entry: PendingSignal, required: int, sig: TradeSignal, l
     return last_dt.date() == now.date()
 
 
+def _clear_opposite_pending(raw_signals: list[TradeSignal]) -> None:
+    """同代码出现反向原始信号时，清除对向三确认进度，避免买卖计数来回打架。"""
+    if not raw_signals:
+        return
+    pending = load_pending()
+    changed = False
+    for sig in raw_signals:
+        opp = "买入" if sig.action == "卖出" else "卖出"
+        for key in list(pending.keys()):
+            entry = pending[key]
+            if entry.code == sig.code and entry.action == opp:
+                del pending[key]
+                changed = True
+    if changed:
+        save_pending(pending)
+
+
 def apply_three_confirmations(
     raw_signals: list[TradeSignal],
     ctx: ScoreContext,
 ) -> tuple[list[TradeSignal], list[dict]]:
     """返回可执行信号 + 审计日志（含各阶段确认状态）。"""
+    _clear_opposite_pending(raw_signals)
     now = _now()
     pending = load_pending()
     executable: list[TradeSignal] = []

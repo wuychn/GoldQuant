@@ -1,6 +1,6 @@
 """五模式编排：拉数 → 评分/三确认信号 → 落盘 → LLM 文案 → 飞书。
 
-策略与交易决策均由规则引擎完成（主线/龙头/买卖/加自选）；LLM 只读「程序结论」生成叙述，不参与决策。
+策略与交易决策均由规则引擎完成；LLM 只读「程序结论」生成叙述，不参与决策。
 """
 
 from __future__ import annotations
@@ -45,6 +45,7 @@ from quant.store.state import (
     save_optional,
     write_news_summary,
 )
+from quant.store.watchlist import merge_watchlist_evening, watchlist_retain_days
 
 _MODE_LABELS = {
     "news": "新闻聚焦",
@@ -119,19 +120,15 @@ def _watchlist_add_reason(score, candidate_row: dict) -> str:
     if "人气榜" in sources:
         rank = candidate_row.get("人气排名")
         parts.append(f"人气榜(排名{rank})" if rank is not None else "人气榜")
-    if not sources or sources == ["人气榜"]:
-        tags = stock_pkyd_tags(candidate_row)
-        if tags:
-            parts.append(f"盘口异动({ '、'.join(tags) })")
-        if "人气榜" not in sources and "涨停池" not in sources and "盘口异动" not in sources:
-            parts.append("主线主升浪龙头")
-    parts.append("概念共振")
+    if not sources:
+        parts.append("候选池达标")
     return "；".join(parts)
 
 
 def _update_watchlist_evening(ctx: ScoreContext) -> tuple[list[dict], str]:
-    """晚间复盘：对候选池评分，达标者 append 到 state/optional.jsonl。"""
+    """晚间复盘：达标写入自选；未达标但末次入选≤N 个交易日仍保留，超期移出。"""
     scope = "post_market_evening"
+    retain = watchlist_retain_days()
     log_progress(scope, "合并三来源候选")
     engine = ScoringEngine()
     candidates = build_candidates(ctx.payload)
@@ -141,15 +138,15 @@ def _update_watchlist_evening(ctx: ScoreContext) -> tuple[list[dict], str]:
         engine.score_many(ctx, candidates),
         kind="watchlist",
     )
-    passed = [s for s in scores if s.passed_threshold]
+    passed = sorted(
+        [s for s in scores if s.passed_threshold],
+        key=lambda x: x.total,
+        reverse=True,
+    )
     log_progress(scope, "评分完成", detail=f"达标 {len(passed)}/{len(scores)} 只")
 
-    existing = get_optional()
-    codes = {str(r.get("股票代码", "")).strip() for r in existing}
-    added: list[dict] = []
+    passed_rows: list[dict] = []
     for s in passed:
-        if s.code in codes:
-            continue
         cand = by_code.get(s.code, {})
         row = {
             "股票代码": s.code,
@@ -161,32 +158,49 @@ def _update_watchlist_evening(ctx: ScoreContext) -> tuple[list[dict], str]:
         pkyd_tags = stock_pkyd_tags(cand)
         if pkyd_tags:
             row["盘口异动标签"] = pkyd_tags
-        added.append(row)
-        codes.add(s.code)
+        passed_rows.append(row)
 
-    if added:
-        merged = existing + added
-        save_optional(
-            merged,
-            delta={"added": added, "removed": []},
-        )
-        log_progress(scope, "写入自选", detail=f"新增 {len(added)} 只")
-    else:
-        log_progress(scope, "自选无新增")
+    existing = get_optional()
+    merged, added, removed = merge_watchlist_evening(existing, passed_rows)
+    save_optional(merged, delta={"added": added, "removed": removed})
+    log_progress(
+        scope,
+        "写入自选（滚动保留）",
+        detail=f"共 {len(merged)} 只，新增 {len(added)}，移出 {len(removed)}，保留 {retain} 交易日",
+    )
 
     save_derived("scores_watchlist.json", [s.to_dict() for s in scores])
-    save_derived("optional_delta.json", {"added": added, "removed": []})
+    save_derived(
+        "optional_delta.json",
+        {"added": added, "removed": removed, "total": len(merged), "retain_days": retain},
+    )
 
+    threshold = engine.config.get("watchlist_threshold", 65)
     section_lines = ["九、自选更新", ""]
-    if added:
-        section_lines.append("【新增自选】")
-        for r in added:
-            section_lines.append(f"· {r['股票名称']}（{r['股票代码']}）评分{r['评分']} [{r['战法']}]")
+    section_lines.append(
+        f"【自选池】共 {len(merged)} 只（当晚达标≥{threshold}；"
+        f"未达标保留 {retain} 个交易日，超期移出）"
+    )
+    if merged:
+        for r in merged[:20]:
+            last = r.get("最后入选日期") or "—"
+            section_lines.append(
+                f"· {r['股票名称']}（{r['股票代码']}）评分{r['评分']} 末次入选{last} [{r['战法']}]"
+            )
+        if len(merged) > 20:
+            section_lines.append(f"· …其余 {len(merged) - 20} 只见 optional.jsonl")
     else:
-        section_lines.append("【新增自选】")
-        section_lines.append("本轮无新增；候选评分摘要：")
+        section_lines.append("自选池为空；候选评分摘要：")
         section_lines.extend(_score_summary_lines(scores) or ["· 无候选数据"])
-    return added, "\n".join(section_lines), scores
+    if added:
+        section_lines.append("")
+        section_lines.append(f"【本轮新入选】{len(added)} 只")
+    if removed:
+        section_lines.append("")
+        codes = ", ".join(str(r.get("股票代码", "")) for r in removed[:12])
+        section_lines.append(f"【移出自选】{len(removed)} 只（超 {retain} 个交易日未再入选）：{codes}"
+                             + ("…" if len(removed) > 12 else ""))
+    return merged, "\n".join(section_lines), scores
 
 
 def process_news(raw: dict, timestamp: str) -> str:

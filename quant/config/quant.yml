@@ -23,19 +23,21 @@ scoring:
   candidate:
     popularity_limit: 30        # 人气榜初筛：取前 N
     zt_min_boards: 2            # 涨停池初筛：连板数 ≥
-    pkyd_dual_tag_limit: 20     # 盘口异动初筛：双标签取前 N
+    pkyd_dual_tag_limit: 20     # 盘口异动：加速过滤后取前 N（按近一月涨幅）
+    pkyd_prefilter_pool: 60     # 盘口异动：enrich 前双标签池上限
     pkyd_labels:                # 东财盘口异动类型
       - 60日新高
       - 60日大幅上涨
     include_zt_pool: true       # 涨停池作为独立候选来源
     include_pkyd_pool: true      # 盘口异动作为独立候选来源
+    watchlist_retain_days: 5     # 末次入选后 N 个交易日未再入选则移出自选
 
   # 评分维度：enabled 关闭则不参与；weight 为加权系数
   dimensions:
-    main_wave:              # 主升浪：主线龙头 + 均线发散 + 买点形态
+    main_wave:              # 主升浪加速段形态 + 买点
       enabled: true
-      weight: 22
-    concept_theme:          # 个股概念与确认主线的共振
+      weight: 24
+    concept_theme:          # 个股概念与板块四榜净分共振
       enabled: true
       weight: 14
     popularity_rank:        # 同花顺人气排名
@@ -51,7 +53,7 @@ scoring:
       weight: 12
     stock_history:          # 近30日：5%+涨幅占比、均线发散、周/月线向上
       enabled: true
-      weight: 10
+      weight: 11
       lookback_days: 30
       big_move_pct: 5.0           # 单日涨幅≥此值(%) 计为大涨日
       big_move_weight: 0.40       # 大涨占比子分权重
@@ -63,13 +65,13 @@ scoring:
       weight: 8
     market_index:           # 大盘指数涨跌
       enabled: true
-      weight: 8
+      weight: 4
     market_sentiment:       # 赚钱效应、涨停家数等
       enabled: true
-      weight: 8
+      weight: 4
     market_fund_flow:       # 大盘资金流
       enabled: true
-      weight: 6
+      weight: 4
     zt_count:               # 涨停家数（主升浪默认关闭）
       enabled: false
       weight: 4
@@ -109,10 +111,13 @@ gates:
 
   daily_loss_limit_pct: -3.0        # 当日已实现盈亏占总资产 ≤ 此值 → 禁止新开仓
   stoploss_cooldown_days: 3         # 止损卖出后 N 日内不再买同代码
+  block_same_day_rebuy_after_sell: true  # 当日卖出过的代码当日不再买入
 
   # 三确认：同 code+方向+signal_kind 连续 N 次信号才 execute
   confirmation:
     required_count: 3
+    skip_count_modes:             # 这些模式只生成原始信号，不计入三确认
+      - pre_market                  # 首次计数从 09:37 盘中开始
     # 按 signal_kind 覆盖 min/max 间隔（分钟）
     by_kind:
       破5日线:
@@ -126,7 +131,7 @@ gates:
       min_interval_minutes: 15
       max_interval_minutes: 120
     震荡:
-      min_interval_minutes: 20
+      min_interval_minutes: 10      # 与盘中 10 分钟调度对齐
       max_interval_minutes: 180
     弱势:
       min_interval_minutes: 30
@@ -136,8 +141,8 @@ gates:
   main_theme:
     board_limit: 10                 # 每日快照：涨/跌/流入/流出榜各取前 N
     lookback_days: 5                # 滑动窗口（自然日）
-    score_weights:                  # concept_theme：概念净分 + 个股聚合
-      confirmed: 40                 # 窗口累计涨幅/资金主线概念额外加分
+    score_weights:                  # concept_theme：概念净分 + 个股聚合（无主线额外加分）
+      confirmed: 0                  # 已废弃：决策不看主线，仅保留键兼容
       gain_rank: 25                 # 涨幅榜出现：第 1 名满额，越靠后越低
       loss_rank: 25                 # 跌幅榜出现：减分，排名越靠前减越多
       fund_rank: 20                 # 资金流入榜出现加分
@@ -146,12 +151,21 @@ gates:
       stock_pos_weight: 0.6         # 个股最强正向概念净分权重
       stock_neg_weight: 0.3         # 个股最强负向概念净分权重（值为负）
 
-  # 主升浪战法：买点/卖点/龙头判定
+  # 主升浪战法：仅加速段 + 震荡剔除（不要求整理/启动）
   main_wave:
     min_ma_spread_pct: 0.8          # MA5 相对 MA20 最小发散(%)
-    leader_max_rank: 15             # 主线龙头：人气排名 ≤ 此值
-    leader_min_concept_net: 15      # 或概念净分峰值 ≥ 此值 / 命中确认主线
-    leader_max_daily_drop_pct: 5    # 当日跌幅超过此值(%) 不计为主线龙头
+    spread_accel_days: 5            # 发散度加速观察窗口（日）
+    spread_accel_min_pct: 0.12      # 发散度相对 N 日前最小增量(%)
+    choppy_lookback_days: 60        # 震荡剔除：回看交易日
+    choppy_path_ratio: 3.5          # 路径/净涨幅 超过此值视为上蹿下跳
+    choppy_flip_rate: 0.42          # 涨跌反转频率上限
+    choppy_min_net_pct: 5.0         # 回看期内净涨幅低于此视为无趋势
+    trend_ma20_floor: 0.985         # 趋势有效：现价不低于 MA20×此值
+    trend_peak_spread_days: 15      # 近 N 日峰值发散（回调期 spread 可收窄）
+    pullback_spread_ratio: 0.55     # 回调期允许的发散度下限 = min_spread×此值
+    pullback_above_ma5_ratio: 1.02  # 价高于 MA5×此值视为加速段而非回调
+    accel_price_ma5_ratio: 0.97     # 加速段：现价不低于 MA5×此值
+    monthly_return_days: 22         # 盘口异动排序：近 N 日涨幅
     pullback_ma_zone_low: 0.985     # 回调企稳：现价/MA10 下限
     pullback_ma_zone_high: 1.015    # 回调企稳：现价/MA10 上限
     ma5_break_ratio: 0.995          # 卖-破5日线：现价 < MA5×此值

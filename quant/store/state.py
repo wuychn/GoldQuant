@@ -157,10 +157,35 @@ def stoploss_cooldown_codes(days: int = 3) -> set[str]:
     return codes
 
 
-def holding_codes_bought_today(holdings: list[dict], today: date | None = None) -> set[str]:
+def codes_sold_today(date_str: str | None = None) -> set[str]:
+    """当日已卖出代码（防同日反复买卖）。"""
+    from quant.store.snapshot import daily_trades_path
+
+    date_str = date_str or datetime.now().strftime("%Y-%m-%d")
+    path = daily_trades_path("executed.json", date_str)
+    if not path.is_file():
+        return set()
+    try:
+        rows = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return set()
+    out: set[str] = set()
+    for r in rows or []:
+        if not isinstance(r, dict):
+            continue
+        if str(r.get("方向", "")).strip() != "卖出":
+            continue
+        code = str(r.get("股票代码", "")).strip()
+        if code:
+            out.add(code)
+    return out
+
+
+def holding_codes_bought_today(holdings: list[dict] | None = None, today: date | None = None) -> set[str]:
     today = today or datetime.now().date()
+    rows = holdings if holdings is not None else get_holdings()
     locked: set[str] = set()
-    for h in holdings:
+    for h in rows:
         code = str(h.get("股票代码", "")).strip()
         ts = str(h.get("买入时间", ""))[:10]
         try:

@@ -1,4 +1,4 @@
-"""规则引擎结论 → 供 LLM 叙述引用的结构化摘要（LLM 不得自行推断主线/龙头）。"""
+"""规则引擎结论 → 供 LLM 叙述引用的结构化摘要。"""
 
 from __future__ import annotations
 
@@ -16,7 +16,8 @@ from quant.scoring.context import (
 from quant.narrative.push_style import BRIEF_PREAMBLE, profit_effect_level
 from quant.scoring.theme_tracker import theme_detail
 from quant.scoring.tech_indicators import stock_daily_change_pct
-from quant.strategy.main_wave import is_theme_leader
+from quant.store.watchlist import watchlist_retain_days
+from quant.strategy.main_wave import is_in_main_wave
 
 
 def _stock_code(row: dict) -> str:
@@ -27,29 +28,25 @@ def _stock_name(row: dict) -> str:
     return str(row.get("股票名称") or row.get("名称") or "").strip()
 
 
-def _collect_theme_leaders(ctx: ScoreContext, payload: dict) -> list[str]:
+def _collect_main_wave_stocks(ctx: ScoreContext, payload: dict) -> list[str]:
     mw_cfg = load_gates_config().get("main_wave") or {}
-    max_rank = int(mw_cfg.get("leader_max_rank", 15))
     seen: set[str] = set()
     out: list[str] = []
-    for key in ("同花顺人气榜", "自选股", "持仓股"):
+    for key in ("同花顺人气榜", "自选股", "持仓股", "盘口异动"):
         for row in payload.get(key) or []:
             if not isinstance(row, dict):
                 continue
             code = _stock_code(row)
             if not code or code in seen:
                 continue
-            if not is_theme_leader(row, ctx, max_rank=max_rank):
+            ok, note = is_in_main_wave(row, mw_cfg)
+            if not ok:
                 continue
             seen.add(code)
-            rank = row.get("人气排名")
             chg = stock_daily_change_pct(row)
-            extra = ""
-            if rank is not None:
-                extra += f" 人气{rank}"
-            if chg is not None:
-                extra += f" 涨跌幅{chg:+.2f}%"
-            out.append(f"{_stock_name(row) or code}({code}){extra}")
+            extra = f" 涨跌幅{chg:+.2f}%" if chg is not None else ""
+            tag = f" [{note}]" if note else ""
+            out.append(f"{_stock_name(row) or code}({code}){extra}{tag}")
     return out
 
 
@@ -73,12 +70,9 @@ def build_engine_brief(
 ) -> str:
     """组装写作参考块（供 LLM 引用，勿原样复制标签进飞书正文）。"""
     detail = theme_detail(payload)
-    confirmed = detail.get("确认主线") or []
-    gain_main = detail.get("涨幅主线")
-    fund_main = detail.get("资金主线")
     gain = detail.get("当日涨幅概念") or []
     fund = detail.get("当日资金概念") or []
-    leaders = _collect_theme_leaders(ctx, payload)
+    accel = _collect_main_wave_stocks(ctx, payload)
 
     profit = profit_effect(payload)
     up = int(profit.get("上涨", 0) or 0)
@@ -94,12 +88,9 @@ def build_engine_brief(
     lines = [
         BRIEF_PREAMBLE,
         f"赚钱效应：{effect_level}（上证{idx_s}% 上涨{up}/下跌{down} 涨停{zt_cnt}/跌停{dt_cnt} 最高{height}板）",
-        f"当前主线（{len(confirmed)}）：{'、'.join(confirmed) if confirmed else '暂无'}"
-        f"（涨幅侧 {gain_main or '暂无'}；资金侧 {fund_main or '暂无'}）",
-        f"当日涨幅：{'、'.join(gain[:10]) if gain else '暂无'}",
-        f"资金流入：{'、'.join(fund[:10]) if fund else '暂无'}",
-        f"主线龙头（{len(leaders)}只，当日跌幅≤5%）："
-        f"{'、'.join(leaders) if leaders else '暂无'}",
+        f"当日涨幅概念：{'、'.join(gain[:10]) if gain else '暂无'}",
+        f"资金流入概念：{'、'.join(fund[:10]) if fund else '暂无'}",
+        f"主升波段（{len(accel)}只）：{'、'.join(accel[:12]) if accel else '暂无'}",
     ]
     if gates.passed:
         lines.append(f"仓位控制：{format_position_control(payload)}")
@@ -117,6 +108,7 @@ def build_engine_brief(
         if trades:
             lines.append("")
             lines.append(f"上一交易日成交：{trades}")
+        lines.append("三确认：盘前不计数，买卖确认自09:37盘中首次调度起算。")
 
     if mode == "post_market_evening" and watchlist_scores is not None:
         score_lines = _format_watchlist_scores(watchlist_scores)
@@ -124,10 +116,12 @@ def build_engine_brief(
             lines.append("")
             lines.append("晚间候选池评分：")
             lines.extend(score_lines)
-        if watchlist_added:
-            names = "、".join(f"{r.get('股票名称')}({r.get('股票代码')})" for r in watchlist_added)
-            lines.append(f"本轮拟新增自选：{names}")
-        elif watchlist_scores is not None:
-            lines.append("本轮拟新增自选：无")
+        if watchlist_added is not None:
+            retain = watchlist_retain_days()
+            if watchlist_added:
+                names = "、".join(f"{r.get('股票名称')}({r.get('股票代码')})" for r in watchlist_added)
+                lines.append(f"本轮自选池（滚动保留{retain}交易日）：{names}")
+            else:
+                lines.append(f"本轮自选池为空（滚动保留{retain}交易日）")
 
     return "\n".join(lines)

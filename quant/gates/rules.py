@@ -19,6 +19,7 @@ from quant.market.turnover import load_completed_day_turnovers
 from quant.narrative.push_style import profit_effect_level
 from quant.scoring.context import ScoreContext, index_change, infer_regime
 from quant.store.state import (
+    codes_sold_today,
     compute_holdings_market_value,
     get_cash,
     get_holdings,
@@ -63,6 +64,7 @@ class GateReport:
             "连续缩量": "成交持续萎缩",
             "标的池": "标的不在范围",
             "止损冷却": "止损后冷却",
+            "当日卖出冷却": "当日已卖出",
             "全局门禁": "赚钱效应",
         }
         parts: list[str] = []
@@ -137,6 +139,9 @@ def check_buy_gates(stock: dict, ctx: ScoreContext) -> GateReport:
     cooldown = int(cfg.get("stoploss_cooldown_days", 3))
     if code in stoploss_cooldown_codes(cooldown):
         results.append(GateResult(False, "止损冷却", f"{code} 在冷却期"))
+
+    if cfg.get("block_same_day_rebuy_after_sell", True) and code in codes_sold_today():
+        results.append(GateResult(False, "当日卖出冷却", f"{code} 当日已卖出，不再开仓"))
 
     global_report = check_global_gates(ctx)
     results.extend(global_report.results)

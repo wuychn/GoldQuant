@@ -11,6 +11,7 @@ from quant.signals.models import TradeSignal
 from quant.store.state import get_holdings
 from quant.scoring.tech_indicators import quote_last_price, quote_open_price
 from quant.strategy.main_wave import detect_buy_setup
+from quant.strategy.trend import trend_allows_buy
 
 
 def _price(stock: dict) -> float | None:
@@ -35,6 +36,10 @@ def generate_buy_signals(ctx: ScoreContext, *, mode: str) -> list[TradeSignal]:
         if not code or code in held:
             continue
         if not check_buy_gates(stock, ctx).passed:
+            continue
+
+        ok_trend, _ = trend_allows_buy(stock, mw_cfg)
+        if not ok_trend:
             continue
 
         score = engine.score_stock(ctx, stock)

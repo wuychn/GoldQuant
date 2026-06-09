@@ -270,10 +270,11 @@ def build_concept_net_scores(
                 scores[name] -= _rank_bonus(i + 1, limit, w_fund_out)
 
     gain_main, fund_main = resolve_main_theme_leaders(st, lookback=window)
-    if gain_main:
-        scores[gain_main] += w_confirmed
-    if fund_main and fund_main != gain_main:
-        scores[fund_main] += w_confirmed
+    if w_confirmed > 0:
+        if gain_main:
+            scores[gain_main] += w_confirmed
+        if fund_main and fund_main != gain_main:
+            scores[fund_main] += w_confirmed
 
     return dict(scores)
 

@@ -30,6 +30,11 @@ def zt_min_boards(cfg: dict | None = None) -> int:
     return int(c.get("zt_min_boards", 2))
 
 
+def pkyd_prefilter_pool(cfg: dict | None = None) -> int:
+    c = cfg or load_candidate_config()
+    return int(c.get("pkyd_prefilter_pool", 60))
+
+
 def pkyd_dual_tag_limit(cfg: dict | None = None) -> int:
     c = cfg or load_candidate_config()
     return int(c.get("pkyd_dual_tag_limit", 20))

@@ -100,6 +100,7 @@ def execute_signals(signals: list[TradeSignal]) -> list[ExecutedTrade]:
                 "股票名称": signal.name,
                 "买入价": signal.price,
                 "买入时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "买入类型": signal.signal_kind or "",
                 "买入原因": signal.reason[:120],
                 "战法": signal.strategy,
                 "持仓股数": signal.quantity,

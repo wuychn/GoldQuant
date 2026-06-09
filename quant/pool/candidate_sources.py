@@ -22,6 +22,7 @@ from quant.pool.pipeline import run_candidate_pipeline
 from quant.pool.source_merge import merge_prefiltered_sources, split_enriched_by_source
 from quant.pool.sources import (
     merge_pkyd_from_batches,
+    postfilter_pkyd_acceleration,
     prefilter_popularity,
     prefilter_zt_pool,
 )
@@ -135,10 +136,17 @@ async def build_all_source_candidates(
         progress_scope=progress_scope,
     )
     by_source = split_enriched_by_source(enriched, source_orders)
+    pkyd_enriched = by_source.get(SOURCE_LABEL_PKYD, [])
+    pkyd_filtered = postfilter_pkyd_acceleration(pkyd_enriched, cfg=cfg)
+    log_progress(
+        progress_scope,
+        "盘口异动主升筛选",
+        detail=f"{len(pkyd_enriched)} → {len(pkyd_filtered)} 只",
+    )
     result = {
         PAYLOAD_KEY_POPULARITY: by_source.get(SOURCE_LABEL_POPULARITY, []),
         PAYLOAD_KEY_ZT: by_source.get(SOURCE_LABEL_ZT, []),
-        PAYLOAD_KEY_PKYD: by_source.get(SOURCE_LABEL_PKYD, []),
+        PAYLOAD_KEY_PKYD: pkyd_filtered,
     }
     log_progress_done(
         progress_scope,

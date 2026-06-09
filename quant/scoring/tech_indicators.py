@@ -218,6 +218,18 @@ def stock_daily_change_pct(stock: dict) -> float | None:
     return None
 
 
+def monthly_return_pct(stock: dict, *, days: int = 22) -> float | None:
+    """近 N 个交易日涨幅(%)，默认约一月。"""
+    closes = hist_closes(stock.get("历史行情") or [])
+    if len(closes) < days + 1:
+        return None
+    start = closes[-days - 1]
+    end = closes[-1]
+    if start <= 0:
+        return None
+    return (end - start) / start * 100
+
+
 def mas_from_stock(stock: dict) -> dict[str, float | None]:
     """主升浪 / 技术评分共用的均线 + 现价 + MACD 包。"""
     ti = parse_technical_indicators(stock.get("技术指标"))

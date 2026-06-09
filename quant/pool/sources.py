@@ -9,6 +9,7 @@ from quant.pool.candidate_config import (
     load_candidate_config,
     pkyd_dual_tag_limit,
     pkyd_labels,
+    pkyd_prefilter_pool,
     popularity_limit,
     zt_min_boards,
 )
@@ -57,8 +58,8 @@ def prefilter_zt_pool(rows: list[dict] | None, *, cfg: dict | None = None) -> li
 
 
 def prefilter_pkyd(rows: list[dict] | None, *, cfg: dict | None = None) -> list[dict]:
-    """盘口异动：标的池 + 非 ST → 双标签优先取前 N。"""
-    limit = pkyd_dual_tag_limit(cfg)
+    """盘口异动：标的池 + 非 ST → 双标签，enrich 前取较宽池。"""
+    pool = pkyd_prefilter_pool(cfg)
     filtered = apply_symbol_pool_filter(rows)
     dual: list[dict] = []
     for row in filtered:
@@ -68,7 +69,30 @@ def prefilter_pkyd(rows: list[dict] | None, *, cfg: dict | None = None) -> list[
         if norm:
             dual.append(norm)
     dual.sort(key=lambda r: (-_pkyd_tag_count(r), str(r.get("股票代码", ""))))
-    return dual[:limit]
+    return dual[:pool]
+
+
+def postfilter_pkyd_acceleration(rows: list[dict], *, cfg: dict | None = None) -> list[dict]:
+    """enrich 后：须主升加速段，再按近一月涨幅取前 N。"""
+    from quant.config import load_gates_config
+    from quant.scoring.tech_indicators import monthly_return_pct
+    from quant.strategy.main_wave import PHASE_ACCEL, PHASE_PULLBACK, main_wave_phase
+
+    c = cfg or load_candidate_config()
+    mw = load_gates_config().get("main_wave") or {}
+    days = int(mw.get("monthly_return_days", 22))
+    limit = pkyd_dual_tag_limit(c)
+
+    passed: list[dict] = []
+    for row in rows:
+        ok, phase, _ = main_wave_phase(row, mw)
+        if ok and phase in (PHASE_ACCEL, PHASE_PULLBACK):
+            passed.append(row)
+    passed.sort(
+        key=lambda r: monthly_return_pct(r, days=days) or -1e9,
+        reverse=True,
+    )
+    return passed[:limit]
 
 
 def merge_pkyd_from_batches(
