@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from quant.config import load_gates_config
 from quant.constants import STRATEGY_NAME
-from quant.gates.rules import calc_buy_quantity, check_buy_gates
+from quant.gates.rules import calc_buy_quantity, check_buy_gates, active_holding_count, position_limits
 from quant.scoring.context import ScoreContext
 from quant.scoring.engine import ScoringEngine
 from quant.signals.models import TradeSignal
@@ -23,9 +23,14 @@ def generate_buy_signals(ctx: ScoreContext, *, mode: str) -> list[TradeSignal]:
     buy_cfg = (load_gates_config().get("buy") or {}).get("during_market" if mode == "during_market" else "pre_market") or {}
     engine = ScoringEngine()
     held = {str(h.get("股票代码", "")).strip() for h in get_holdings()}
+    limits = position_limits(ctx)
+    max_stocks = int(limits["max_stocks"])
+    slots_left = max(0, max_stocks - active_holding_count())
     signals: list[TradeSignal] = []
 
     for stock in ctx.payload.get("自选股") or []:
+        if slots_left <= 0:
+            break
         code = str(stock.get("股票代码", "")).strip()
         if not code or code in held:
             continue
@@ -68,4 +73,5 @@ def generate_buy_signals(ctx: ScoreContext, *, mode: str) -> list[TradeSignal]:
                 signal_kind=kind,
             )
         )
+        slots_left -= 1
     return signals

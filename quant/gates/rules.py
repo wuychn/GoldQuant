@@ -18,7 +18,14 @@ from quant.constants import STRATEGY_NAME
 from quant.market.turnover import load_completed_day_turnovers
 from quant.narrative.push_style import profit_effect_level
 from quant.scoring.context import ScoreContext, index_change, infer_regime
-from quant.store.state import get_total_assets, stoploss_cooldown_codes, sum_today_realized_pnl
+from quant.store.state import (
+    compute_holdings_market_value,
+    get_cash,
+    get_holdings,
+    get_total_assets,
+    stoploss_cooldown_codes,
+    sum_today_realized_pnl,
+)
 from app.utils.common_util import is_allowed_symbol_pool_code, normalize_a_share_code
 
 
@@ -140,13 +147,14 @@ def format_position_control(payload: dict | None) -> str:
     """推送用仓位上限表述（不含赚钱效应档位）。"""
     limits = position_limits(ScoreContext.from_payload(payload)) if payload else None
     if limits:
-        single_pct = float((limits.get("single_pct") or {}).get(STRATEGY_NAME, 8))
+        per = per_stock_pct_at_full(limits, STRATEGY_NAME)
+        per_s = f"{per:.1f}".rstrip("0").rstrip(".")
         return (
             f"总仓位上限{limits['total_pct']:.0f}%，"
             f"最多持仓{limits['max_stocks']}只，"
-            f"单票上限{single_pct:.0f}%"
+            f"满配单票约{per_s}%"
         )
-    return "总仓位上限50%，最多持仓3只，单票上限8%"
+    return "总仓位上限50%，最多持仓3只，满配单票约16.7%"
 
 
 def position_limits(ctx: ScoreContext) -> dict:
@@ -162,14 +170,46 @@ def position_limits(ctx: ScoreContext) -> dict:
     }
 
 
+def per_stock_pct_at_full(limits: dict, strategy: str) -> float:
+    """满配时单票目标占比：默认 total_pct / max_stocks，可被 single_pct 覆盖。"""
+    overrides = limits.get("single_pct") or {}
+    if strategy in overrides:
+        return float(overrides[strategy])
+    max_stocks = max(1, int(limits.get("max_stocks", 1)))
+    return float(limits.get("total_pct", 50)) / max_stocks
+
+
+def active_holding_count(holdings: list[dict] | None = None) -> int:
+    rows = holdings if holdings is not None else get_holdings()
+    return sum(1 for h in rows if int(h.get("持仓股数", 0) or 0) > 0)
+
+
 def calc_buy_quantity(stock: dict, ctx: ScoreContext, price: float) -> int:
-    """按战法单票上限与可用资金计算买入股数（100 股整数倍）。"""
+    """按总仓位上限与剩余空位均分预算，计算买入股数（100 股整数倍）。
+
+    例：震荡 total=50%、max=3 → 空仓时每笔约 16.7% 总资产，满 3 只合计约 50%。
+    """
     limits = position_limits(ctx)
-    total_assets = get_total_assets()
-    strategy = str(stock.get("战法", STRATEGY_NAME))
-    single_pct = float((limits["single_pct"] or {}).get(strategy, 8))
-    budget = total_assets * single_pct / 100
-    if price <= 0:
+    max_stocks = int(limits["max_stocks"])
+    held = active_holding_count()
+    if held >= max_stocks or price <= 0:
         return 0
+
+    total_assets = get_total_assets()
+    if total_assets <= 0:
+        return 0
+
+    current_mv = compute_holdings_market_value(get_holdings())
+    total_cap = total_assets * float(limits["total_pct"]) / 100
+    room = max(0.0, total_cap - current_mv)
+    if room <= 0:
+        return 0
+
+    remaining_slots = max_stocks - held
+    strategy = str(stock.get("战法", STRATEGY_NAME))
+    budget = min(room / remaining_slots, get_cash())
+    cap_value = total_assets * per_stock_pct_at_full(limits, strategy) / 100
+    budget = min(budget, cap_value)
+
     qty = int(budget / price / 100) * 100
     return max(qty, 0)

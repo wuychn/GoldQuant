@@ -157,23 +157,18 @@ gates:
     ma5_break_ratio: 0.995          # 卖-破5日线：现价 < MA5×此值
     ma20_break_ratio: 0.995         # 卖-趋势衰竭：现价 < MA20×此值
 
-  # 仓位：按强势/震荡/弱势（由大盘指数/赚钱效应/涨停统计内部推断）
+  # 仓位：按强势/震荡/弱势（infer_regime → 总仓 80% / 50% / 20%）
+  # 单票买入预算 = 剩余仓位 / 剩余空位，满配时合计 ≈ total_pct
   position:
     强势:
       total_pct: 80                 # 总仓位上限(%)
-      max_stocks: 5                 # 最多持仓只数
-      single_pct:
-        主升浪战法: 12              # 单票占总资产上限(%)
+      max_stocks: 5                 # 最多持仓只数（满配单票约 16%）
     震荡:
       total_pct: 50
-      max_stocks: 3
-      single_pct:
-        主升浪战法: 8
+      max_stocks: 3                 # 满配单票约 16.7%
     弱势:
       total_pct: 20
-      max_stocks: 2
-      single_pct:
-        主升浪战法: 5
+      max_stocks: 2                 # 满配单票约 10%
 
   # 买入：涨幅过高不追
   buy:
