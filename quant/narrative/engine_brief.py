@@ -6,12 +6,19 @@ from typing import Any
 
 from quant.config import load_gates_config
 from quant.gates.rules import check_global_gates, format_position_control
-from quant.narrative.holdings_context import format_holdings_summary
+from quant.narrative.holdings_context import format_holdings_performance, format_holdings_summary
 from quant.narrative.history_context import (
     format_concept_rotation,
     format_today_pnl_summary,
     format_today_trades,
     format_yesterday_trades,
+)
+from quant.narrative.stock_lines import (
+    format_optional_performance_lines,
+    format_score_bullet,
+    name_code_label,
+    stock_code,
+    stock_name,
 )
 from quant.scoring.context import (
     ScoreContext,
@@ -22,16 +29,7 @@ from quant.scoring.context import (
 from quant.narrative.push_style import BRIEF_PREAMBLE, profit_effect_level
 from quant.scoring.theme_tracker import theme_detail
 from quant.scoring.tech_indicators import stock_daily_change_pct
-from quant.store.watchlist import watchlist_retain_days
 from quant.strategy.main_wave import is_in_main_wave
-
-
-def _stock_code(row: dict) -> str:
-    return str(row.get("股票代码") or row.get("代码") or "").strip()
-
-
-def _stock_name(row: dict) -> str:
-    return str(row.get("股票名称") or row.get("名称") or "").strip()
 
 
 def _collect_main_wave_stocks(ctx: ScoreContext, payload: dict) -> list[str]:
@@ -42,7 +40,7 @@ def _collect_main_wave_stocks(ctx: ScoreContext, payload: dict) -> list[str]:
         for row in payload.get(key) or []:
             if not isinstance(row, dict):
                 continue
-            code = _stock_code(row)
+            code = stock_code(row)
             if not code or code in seen:
                 continue
             ok, note = is_in_main_wave(row, mw_cfg)
@@ -52,7 +50,7 @@ def _collect_main_wave_stocks(ctx: ScoreContext, payload: dict) -> list[str]:
             chg = stock_daily_change_pct(row)
             extra = f" 涨跌幅{chg:+.2f}%" if chg is not None else ""
             tag = f" [{note}]" if note else ""
-            out.append(f"{_stock_name(row) or code}({code}){extra}{tag}")
+            out.append(f"{stock_name(row) or code}({code}){extra}{tag}")
     return out
 
 
@@ -62,8 +60,16 @@ def _format_watchlist_scores(scores: list[Any] | None, *, limit: int = 8) -> lis
     lines: list[str] = []
     for s in sorted(scores, key=lambda x: getattr(x, "total", 0), reverse=True)[:limit]:
         mark = "达标" if getattr(s, "passed_threshold", False) else "未达标"
-        lines.append(f"· {getattr(s, 'name', '')}({getattr(s, 'code', '')}) {getattr(s, 'total', 0):.1f}分 [{mark}]")
+        lines.append(
+            f"· {getattr(s, 'name', '')}({getattr(s, 'code', '')}) "
+            f"{getattr(s, 'total', 0):.1f}分 [{mark}]"
+        )
     return lines
+
+
+def _append_holdings_performance_block(lines: list[str]) -> None:
+    lines.append("")
+    lines.append("持仓股表现（第三节须与此一致）：")
 
 
 def build_engine_brief(
@@ -121,6 +127,14 @@ def build_engine_brief(
             lines.append(f"上一交易日成交：{trades}")
         lines.append("三确认：盘前不计数，买卖确认自09:37盘中首次调度起算。")
 
+    if mode == "post_market_lunch":
+        opt_rows = [r for r in (payload.get("自选股") or []) if isinstance(r, dict)]
+        lines.append("")
+        lines.append("自选股表现范围：")
+        lines.extend(format_optional_performance_lines(opt_rows) or ["· 暂无"])
+        _append_holdings_performance_block(lines)
+        lines.append(format_holdings_performance(payload))
+
     if mode == "post_market_evening":
         trades = format_today_trades()
         lines.append("")
@@ -149,28 +163,18 @@ def build_engine_brief(
                 for r in watchlist_pool
                 if str(r.get("股票代码", "")).strip() not in added_codes
             ]
-            retain = watchlist_retain_days()
             lines.append("")
-            lines.append(
-                f"自选股表现范围（共{len(pre_existing)}只，不含本轮新入选；"
-                f"滚动保留{retain}交易日）："
-            )
+            lines.append("自选股表现范围（不含本轮新入选）：")
             if pre_existing:
                 for r in pre_existing:
-                    last = r.get("最后入选日期") or "—"
-                    score = r.get("评分", "—")
-                    lines.append(
-                        f"· {_stock_name(r) or r.get('股票代码')}({r.get('股票代码')}) "
-                        f"评分{score} 末次入选{last}"
-                    )
+                    lines.append(format_score_bullet(r))
             else:
-                lines.append("· 暂无（均为本轮新入选或自选池为空）")
+                lines.append("· 暂无")
             if watchlist_added:
-                names = "、".join(
-                    f"{r.get('股票名称')}({r.get('股票代码')})" for r in watchlist_added
-                )
-                lines.append(
-                    f"本轮新入选（{len(watchlist_added)}只，勿写入「自选股表现」）：{names}"
-                )
+                names = "、".join(name_code_label(r) for r in watchlist_added)
+                lines.append(f"本轮新入选勿写入「自选股表现」：{names}")
+
+        _append_holdings_performance_block(lines)
+        lines.append(format_holdings_performance(payload))
 
     return "\n".join(lines)

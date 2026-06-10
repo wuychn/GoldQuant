@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import re
 
-from quant.narrative.push_style import DEPRECATED_PUSH_TERMS
+from quant.narrative.push_style import (
+    DEPRECATED_PUSH_TERMS,
+    DEPRECATED_TERM_REPLACEMENTS,
+    PUSH_OPS_SECTION_MARKERS,
+)
 
 # 误带入正文的内部前缀 / 字段名
 _STRIP_PREFIXES = (
@@ -51,41 +55,42 @@ _RE_INTERNAL_PHRASES: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"主线题材"), "概念板块"),
     (re.compile(r"当前主线"), "概念板块"),
     (re.compile(r"主线复盘"), "大盘概况"),
+    (re.compile(r"三、持仓跟踪"), "三、持仓股表现"),
+    (re.compile(r"七、自选更新"), "八、自选更新"),
 ]
 _RE_BLANK_LINES = re.compile(r"\n{3,}")
-_RE_INLINE_OPS_LINE = re.compile(r"(?m)^操作[：:].+\n?")
+_RE_INLINE_OPS_LINE = re.compile(r"(?m)^(?:今日)?操作[：:].+\n?")
+_RE_NO_TRADE_LINE = re.compile(r"(?m)^(?:今日)?无买卖(?:操作)?[。.]?\s*\n?")
+
+
+def _protected_ops_boundary(text: str) -> int:
+    """允许出现买卖表述的最前位置（操作复盘/操作/自选更新段）。"""
+    idx = len(text)
+    for marker in PUSH_OPS_SECTION_MARKERS:
+        pos = text.find(marker)
+        if pos != -1 and pos < idx:
+            idx = pos
+    return idx
 
 
 def _strip_inline_ops_lines(text: str) -> str:
-    """正文误带的「操作：…」行仅保留在「四、操作」段。"""
-    marker = "四、操作"
-    idx = text.find(marker)
-    if idx == -1:
-        return _RE_INLINE_OPS_LINE.sub("", text)
-    return _RE_INLINE_OPS_LINE.sub("", text[:idx]) + text[idx:]
+    """正文误带的「操作：…」行仅保留在操作专节。"""
+    idx = _protected_ops_boundary(text)
+    head = text if idx >= len(text) else text[:idx]
+    tail = "" if idx >= len(text) else text[idx:]
+    head = _RE_INLINE_OPS_LINE.sub("", head)
+    head = _RE_NO_TRADE_LINE.sub("", head)
+    return head + tail
 
 
 def sanitize_feishu_body(text: str) -> str:
     if not text or not text.strip():
         return text
     out = text
-    _TERM_REPLACEMENTS = {
-        "市场环境": "赚钱效应",
-        "市场档位": "赚钱效应",
-        "市场状态": "赚钱效应",
-        "交易环境": "仓位控制",
-        "主线龙头": "主升波段",
-        "确认主线": "概念板块",
-        "涨幅主线": "涨幅靠前概念",
-        "资金主线": "资金流入概念",
-        "主线复盘": "大盘概况",
-        "主线与概念": "概念板块",
-        "主线变化": "概念板块",
-    }
     for term in DEPRECATED_PUSH_TERMS:
         if term == "可参与交易":
             continue
-        repl = _TERM_REPLACEMENTS.get(term, "仓位控制")
+        repl = DEPRECATED_TERM_REPLACEMENTS.get(term, "仓位控制")
         out = out.replace(term, repl)
     out = re.sub(r"(?<![\u4e00-\u9fff])主线(?![\u4e00-\u9fff])", "趋势", out)
     out = re.sub(r"(?<![\u4e00-\u9fff])龙头(?![\u4e00-\u9fff])", "标的", out)

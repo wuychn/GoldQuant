@@ -2,8 +2,20 @@
 
 from __future__ import annotations
 
-from quant.scoring.tech_indicators import quote_last_price, stock_daily_change_pct
+from quant.narrative.stock_lines import daily_change_suffix, name_code_label
+from quant.scoring.tech_indicators import stock_daily_change_pct
 from quant.store.state import get_holdings, resolve_payload_holdings
+
+
+def format_holdings_performance(payload: dict | None = None) -> str:
+    """持仓股表现：名称、代码、当日涨跌（供午间/晚间第三节）。"""
+    rows = resolve_payload_holdings(payload)
+    if not rows:
+        return "暂无持仓。"
+    lines: list[str] = []
+    for h in rows:
+        lines.append(f"· {name_code_label(h)} {daily_change_suffix(h)}")
+    return "\n".join(lines)
 
 
 def format_holdings_summary(payload: dict | None = None) -> str:
@@ -15,13 +27,11 @@ def format_holdings_summary(payload: dict | None = None) -> str:
 
     lines = [f"当前持仓（共{len(rows)}只）："]
     for h in rows:
-        code = str(h.get("股票代码", "")).strip()
-        name = str(h.get("股票名称") or code).strip()
         qty = int(h.get("持仓股数", 0) or 0)
         buy = h.get("买入价", "—")
         chg = stock_daily_change_pct(h)
         chg_s = f" 当日{chg:+.2f}%" if chg is not None else ""
-        lines.append(f"· {name}（{code}）{qty}股 买入价{buy}{chg_s}")
+        lines.append(f"· {name_code_label(h)} {qty}股 买入价{buy}{chg_s}")
 
     payload_n = len((payload or {}).get("持仓股") or [])
     if state_rows and payload_n != len(state_rows):

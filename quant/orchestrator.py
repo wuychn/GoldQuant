@@ -20,6 +20,7 @@ from quant.constants import STRATEGY_NAME
 from quant.execution.executor import ExecutedTrade, execute_signals
 from quant.narrative.engine_brief import build_engine_brief
 from quant.narrative.ops_context import build_no_trade_note
+from quant.narrative.stock_lines import build_watchlist_push_section
 from quant.narrative.llm import call_llm
 from quant.narrative.prompts import (
     build_user_msg,
@@ -51,7 +52,7 @@ from quant.store.watchlist import merge_watchlist_evening, watchlist_retain_days
 
 _MODE_LABELS = {
     "news": "新闻聚焦",
-    "pre_market": "盘前分析",
+    "pre_market": "开盘啦",
     "during_market": "智能盯盘",
     "post_market_lunch": "午间复盘",
     "post_market_evening": "晚间复盘",
@@ -85,14 +86,6 @@ def _build_operation_section(
             f"理由：{s.reason}{pnl}"
         )
     return "\n".join(lines)
-
-
-def _score_summary_lines(scores: list) -> list[str]:
-    lines = []
-    for s in sorted(scores, key=lambda x: x.total, reverse=True)[:10]:
-        mark = "✓" if s.passed_threshold else "×"
-        lines.append(f"· {mark} {s.name}({s.code}) {s.total:.1f}分 [{STRATEGY_NAME}]")
-    return lines
 
 
 def _watchlist_add_reason(score, candidate_row: dict) -> str:
@@ -166,36 +159,8 @@ def _update_watchlist_evening(ctx: ScoreContext) -> tuple[list[dict], list[dict]
         {"added": added, "removed": removed, "total": len(merged), "retain_days": retain},
     )
 
-    threshold = engine.config.get("watchlist_threshold", 65)
-    section_lines = ["七、自选更新", ""]
-    section_lines.append(
-        f"【自选池】共 {len(merged)} 只（当晚达标≥{threshold}；"
-        f"未达标保留 {retain} 个交易日，超期移出）"
-    )
-    if merged:
-        for r in merged:
-            last = r.get("最后入选日期") or "—"
-            section_lines.append(
-                f"· {r['股票名称']}（{r['股票代码']}）评分{r['评分']} 末次入选{last} [{r['战法']}]"
-            )
-    else:
-        section_lines.append("自选池为空；候选评分摘要：")
-        section_lines.extend(_score_summary_lines(scores) or ["· 无候选数据"])
-    if added:
-        section_lines.append("")
-        section_lines.append(f"【本轮新入选】{len(added)} 只")
-        for r in added:
-            section_lines.append(
-                f"· {r['股票名称']}（{r['股票代码']}）评分{r['评分']}"
-            )
-    if removed:
-        section_lines.append("")
-        section_lines.append(f"【移出自选】{len(removed)} 只（超 {retain} 个交易日未再入选）：")
-        for r in removed:
-            section_lines.append(
-                f"· {r.get('股票名称', '')}（{r.get('股票代码', '')}）"
-            )
-    return merged, added, "\n".join(section_lines), scores
+    optional_section = build_watchlist_push_section(merged, added, removed)
+    return merged, added, optional_section, scores
 
 
 def process_news(raw: dict, timestamp: str) -> str:
@@ -214,7 +179,7 @@ def process_news(raw: dict, timestamp: str) -> str:
 
 def process_pre_market(raw: dict) -> str:
     scope = "pre_market"
-    log_progress(scope, "开始盘前分析")
+    log_progress(scope, "开始开盘啦分析")
     payload = _prepare_payload(raw)
     ctx = ScoreContext.from_payload(payload, mode="pre_market")
 
@@ -247,7 +212,7 @@ def process_pre_market(raw: dict) -> str:
             "confirmation_audit": audit,
         },
     )
-    log_progress_done(scope, "盘前分析完成", detail=f"成交 {len(executed)} 笔")
+    log_progress_done(scope, "开盘啦分析完成", detail=f"成交 {len(executed)} 笔")
     return narrative.rstrip() + "\n\n" + ops
 
 
