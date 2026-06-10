@@ -36,21 +36,21 @@ scoring:
   dimensions:
     main_wave:              # 主升浪加速段形态 + 买点
       enabled: true
-      weight: 24
-    concept_theme:          # 个股概念与板块四榜净分共振
+      weight: 22
+    concept_theme:          # 个股概念与板块概念权重共振
       enabled: true
-      weight: 14
+      weight: 18
     popularity_rank:        # 同花顺人气排名
       enabled: true
-      weight: 12
+      weight: 10
     pkyd_signal:            # 盘口异动（60日新高 / 60日大幅上涨）
       enabled: true
-      weight: 8
+      weight: 5
       base_score: 55
       score_per_tag: 22
     technical:              # MACD、均线等技术指标
       enabled: true
-      weight: 12
+      weight: 9
     stock_history:          # 近30日：5%+涨幅占比、均线发散、周/月线向上
       enabled: true
       weight: 11
@@ -66,27 +66,27 @@ scoring:
     market_index:           # 大盘指数涨跌
       enabled: true
       weight: 4
-    market_sentiment:       # 赚钱效应、涨停家数等
+    market_sentiment:       # 赚钱效应（涨跌比 + 涨停家数）
       enabled: true
       weight: 4
     market_fund_flow:       # 大盘资金流
       enabled: true
       weight: 4
-    zt_count:               # 涨停家数（主升浪默认关闭）
+    zt_count:               # 涨停家数（与 market_sentiment 重叠，已关闭）
       enabled: false
-      weight: 4
-    zt_height:              # 连板高度（主升浪默认关闭）
-      enabled: false
-      weight: 4
+      weight: 0
+    zt_height:              # 连板高度
+      enabled: true
+      weight: 3
     minute_bars:            # 分钟 K 形态
       enabled: false
-      weight: 4
-    us_overnight:           # 美股隔夜
+      weight: 0
+    us_overnight:           # 美股隔夜（数据未接入，暂关闭）
       enabled: false
-      weight: 4
+      weight: 0
     stock_news:             # 个股新闻情绪
       enabled: false
-      weight: 4
+      weight: 0
 
 # -----------------------------------------------------------------------------
 # gates — 硬门禁 + 战法参数 + 三确认（不可被 LLM 修改）
@@ -137,19 +137,15 @@ gates:
       min_interval_minutes: 30
       max_interval_minutes: 240
 
-  # 主线题材：滑动窗口四榜快照 + concept_theme 净分；仅晚间复盘写入状态
+  # 主线题材：滑动窗口四榜快照 + concept_theme 概念权重；仅晚间复盘写入状态
   main_theme:
     board_limit: 10                 # 每日快照：涨/跌/流入/流出榜各取前 N
-    lookback_days: 5                # 滑动窗口（自然日）
-    score_weights:                  # concept_theme：概念净分 + 个股聚合（无主线额外加分）
-      confirmed: 0                  # 已废弃：决策不看主线，仅保留键兼容
-      gain_rank: 25                 # 涨幅榜出现：第 1 名满额，越靠后越低
-      loss_rank: 25                 # 跌幅榜出现：减分，排名越靠前减越多
-      fund_rank: 20                 # 资金流入榜出现加分
-      fund_out_rank: 20             # 资金流出榜出现减分
-      neutral: 50                   # 无命中或正负对冲时的中性分
-      stock_pos_weight: 0.6         # 个股最强正向概念净分权重
-      stock_neg_weight: 0.3         # 个股最强负向概念净分权重（值为负）
+    lookback_days: 10               # 滑动窗口（交易日）
+    score_weights:                  # 概念权重：入选次数 50 + 综合涨幅 30 + 净流入 20
+      selection_count: 50           # 近 N 日累计入选涨幅榜前十次数
+      composite_gain: 30            # 近 N 日综合涨幅(%，各上榜日涨跌幅累加)
+      net_fund_flow: 20             # 近 N 日资金净流入(亿元，流入−流出)
+      no_hit: 0                     # 个股概念均未命中窗口概念池时的分数
 
   # 主升浪战法：仅加速段 + 震荡剔除（不要求整理/启动）
   main_wave:
@@ -190,6 +186,17 @@ gates:
       max_change_pct: 8.0           # 盘前模式允许的最大涨幅(%)
     during_market:
       max_change_pct: 8.0           # 盘中模式允许的最大涨幅(%)
+      intraday:                       # 盘中买入分时过滤（仅 during_market）
+        enabled: true
+        require_above_avg: true       # 现价须在分时均价上方
+        avg_margin_pct: 0.0           # 高于均价的幅度(%)
+        lookback_minutes: 15          # 分时回看分钟数
+        max_recent_drop_pct: 0.35     # 近 N 分钟累计跌幅上限(%)
+        max_down_bars_ratio: 0.55     # 近 N 分钟下跌 K 线占比上限
+        require_fund_flow_improve: true # 后半段分时资金强于前半段
+        max_drop_from_high_pct: 2.5   # 距日内高点最大回撤(%)
+        min_day_change_pct: -1.5      # 当日涨幅下限(%)
+        hard_net_outflow_wan: 8000    # 当日净流出硬上限(万元)
 
   # 卖出：止损 + 神奇2点30 最终确认
   sell:

@@ -151,15 +151,17 @@ def check_buy_gates(stock: dict, ctx: ScoreContext) -> GateReport:
 def format_position_control(payload: dict | None) -> str:
     """推送用仓位上限表述（不含赚钱效应档位）。"""
     limits = position_limits(ScoreContext.from_payload(payload)) if payload else None
+    held = active_holding_count()
     if limits:
         per = per_stock_pct_at_full(limits, STRATEGY_NAME)
         per_s = f"{per:.1f}".rstrip("0").rstrip(".")
         return (
             f"总仓位上限{limits['total_pct']:.0f}%，"
             f"最多持仓{limits['max_stocks']}只，"
-            f"满配单票约{per_s}%"
+            f"满配单票约{per_s}%，"
+            f"当前持仓{held}只"
         )
-    return "总仓位上限50%，最多持仓3只，满配单票约16.7%"
+    return f"总仓位上限50%，最多持仓3只，满配单票约16.7%，当前持仓{held}只"
 
 
 def position_limits(ctx: ScoreContext) -> dict:

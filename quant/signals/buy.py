@@ -10,6 +10,7 @@ from quant.scoring.engine import ScoringEngine
 from quant.signals.models import TradeSignal
 from quant.store.state import get_holdings
 from quant.scoring.tech_indicators import quote_last_price, quote_open_price
+from quant.strategy.intraday import intraday_allows_buy
 from quant.strategy.main_wave import detect_buy_setup
 from quant.strategy.trend import trend_allows_buy
 
@@ -62,6 +63,13 @@ def generate_buy_signals(ctx: ScoreContext, *, mode: str) -> list[TradeSignal]:
         if chg >= float(buy_cfg.get("max_change_pct", 8.0)):
             continue
 
+        if mode == "during_market":
+            ok_intra, intra_note = intraday_allows_buy(stock, buy_cfg)
+            if not ok_intra:
+                continue
+        else:
+            intra_note = ""
+
         qty = calc_buy_quantity({**stock, "战法": STRATEGY_NAME}, ctx, price)
         if qty < 100:
             continue
@@ -74,7 +82,8 @@ def generate_buy_signals(ctx: ScoreContext, *, mode: str) -> list[TradeSignal]:
                 price=price,
                 quantity=qty,
                 strategy=STRATEGY_NAME,
-                reason=f"[{kind}]评分{score.total:.1f}；{reason}",
+                reason=f"[{kind}]评分{score.total:.1f}；{reason}"
+                + (f"；{intra_note}" if mode == "during_market" else ""),
                 signal_kind=kind,
             )
         )

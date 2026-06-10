@@ -258,7 +258,7 @@ def detect_buy_setup(
         ma5 = m.get("ma5")
         if ma5 and last >= ma5:
             avg = quote_avg_price(stock) or 0.0
-            if avg <= 0 or last >= avg:
+            if avg <= 0 or last > avg:
                 from quant.constants import BUY_KIND_ASCENT
 
                 return True, BUY_KIND_ASCENT, "主升波段上升途中"
@@ -270,7 +270,9 @@ def detect_buy_setup(
         if zone_low <= last <= zone_high or (ma20 <= last <= ma10 * 1.01):
             chg = quote_change_pct(stock)
             open_p = quote_open_price(stock, fallback=last) or last
-            if last >= open_p or (chg is not None and chg >= -1.5):
+            avg = quote_avg_price(stock)
+            above_avg = avg is None or avg <= 0 or last > avg
+            if above_avg and (last >= open_p or (chg is not None and chg >= -1.0)):
                 from quant.constants import BUY_KIND_PULLBACK
 
                 return True, BUY_KIND_PULLBACK, "主升波段回调至均线区企稳"

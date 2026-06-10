@@ -6,7 +6,13 @@ from typing import Any
 
 from quant.config import load_gates_config
 from quant.gates.rules import check_global_gates, format_position_control
-from quant.narrative.history_context import format_concept_rotation, format_yesterday_trades
+from quant.narrative.holdings_context import format_holdings_summary
+from quant.narrative.history_context import (
+    format_concept_rotation,
+    format_today_pnl_summary,
+    format_today_trades,
+    format_yesterday_trades,
+)
 from quant.scoring.context import (
     ScoreContext,
     index_change,
@@ -66,6 +72,7 @@ def build_engine_brief(
     *,
     mode: str = "",
     watchlist_scores: list[Any] | None = None,
+    watchlist_pool: list[dict] | None = None,
     watchlist_added: list[dict] | None = None,
 ) -> str:
     """组装写作参考块（供 LLM 引用，勿原样复制标签进飞书正文）。"""
@@ -97,6 +104,10 @@ def build_engine_brief(
     else:
         lines.append(gates.push_summary(payload))
 
+    lines.append("")
+    lines.append("当前持仓（正文须与此一致；有持仓禁止写「空仓」「无持仓」）：")
+    lines.append(format_holdings_summary(payload))
+
     rotation = format_concept_rotation()
     if rotation and "暂无" not in rotation[:20]:
         lines.append("")
@@ -110,18 +121,56 @@ def build_engine_brief(
             lines.append(f"上一交易日成交：{trades}")
         lines.append("三确认：盘前不计数，买卖确认自09:37盘中首次调度起算。")
 
-    if mode == "post_market_evening" and watchlist_scores is not None:
-        score_lines = _format_watchlist_scores(watchlist_scores)
-        if score_lines:
-            lines.append("")
-            lines.append("晚间候选池评分：")
-            lines.extend(score_lines)
-        if watchlist_added is not None:
+    if mode == "post_market_evening":
+        trades = format_today_trades()
+        lines.append("")
+        lines.append("今日操作（成交记录，操作复盘须与此一致）：")
+        lines.append(trades)
+
+        pnl = format_today_pnl_summary(payload)
+        lines.append("")
+        lines.append("当日盈亏参考（盈亏总结须与此一致，勿夸大）：")
+        lines.append(pnl)
+
+        if watchlist_scores is not None:
+            score_lines = _format_watchlist_scores(watchlist_scores)
+            if score_lines:
+                lines.append("")
+                lines.append("晚间候选池评分：")
+                lines.extend(score_lines)
+
+        if watchlist_pool is not None:
+            added_codes = {
+                str(r.get("股票代码", "")).strip()
+                for r in (watchlist_added or [])
+            }
+            pre_existing = [
+                r
+                for r in watchlist_pool
+                if str(r.get("股票代码", "")).strip() not in added_codes
+            ]
             retain = watchlist_retain_days()
-            if watchlist_added:
-                names = "、".join(f"{r.get('股票名称')}({r.get('股票代码')})" for r in watchlist_added)
-                lines.append(f"本轮自选池（滚动保留{retain}交易日）：{names}")
+            lines.append("")
+            lines.append(
+                f"自选股表现范围（共{len(pre_existing)}只，不含本轮新入选；"
+                f"滚动保留{retain}交易日）："
+            )
+            if pre_existing:
+                for r in pre_existing:
+                    last = r.get("最后入选日期") or "—"
+                    score = r.get("评分", "—")
+                    lines.append(
+                        f"· {_stock_name(r) or r.get('股票代码')}({r.get('股票代码')}) "
+                        f"评分{score} 末次入选{last}"
+                    )
             else:
-                lines.append(f"本轮自选池为空（滚动保留{retain}交易日）")
+                lines.append("· 暂无（均为本轮新入选或自选池为空）")
+            if watchlist_added:
+                names = "、".join(
+                    f"{r.get('股票名称')}({r.get('股票代码')})" for r in watchlist_added
+                )
+                lines.append(
+                    f"本轮新入选（{len(watchlist_added)}只，勿写入「自选股表现」）：{names}"
+                )
 
     return "\n".join(lines)

@@ -145,7 +145,12 @@ def _finalize_quant_payload(obj: Any) -> Any:
         cloned = copy.deepcopy(obj)
     except Exception:
         cloned = obj
-    return _round_floats_for_api(_normalize_quant_datetimes(cloned))
+    out = _round_floats_for_api(_normalize_quant_datetimes(cloned))
+    if isinstance(out, dict):
+        from quant.store.state import merge_payload_holdings
+
+        out = merge_payload_holdings(out)
+    return out
 
 
 def _merge_concept_boards(jzf: list | None, jzj: list | None, jdf: list | None, jzjlc: list | None, *, limit: int = 10) -> dict[str, Any]:
@@ -205,18 +210,28 @@ async def _enrich_stock_list(
 ) -> list:
     try:
         rows = await fetch_stocks(settings)
+    except Exception:
+        _log_api_error("_enrich_stock_list fetch")
+        return []
+    if not rows:
+        return []
+    try:
         return await enrich_stock_rows(settings, rows, include_pre_snapshot=include_pre_snapshot)
     except Exception:
-        _log_api_error("_enrich_stock_list")
-        return []
+        _log_api_error("_enrich_stock_list enrich")
+        return rows
 
 
 async def _async_optional_rows(_settings: SettingsDep) -> list:
-    return await run_in_threadpool(lambda: _load_stock_rows_from_quant_file(QUANT_OPTIONAL_FILENAME))
+    from quant.store.state import get_optional
+
+    return await run_in_threadpool(get_optional)
 
 
 async def _async_holding_rows(_settings: SettingsDep) -> list:
-    return await run_in_threadpool(lambda: _load_stock_rows_from_quant_file(QUANT_HOLDING_FILENAME))
+    from quant.store.state import get_holdings
+
+    return await run_in_threadpool(get_holdings)
 
 
 async def _enrich_optional_and_holding(

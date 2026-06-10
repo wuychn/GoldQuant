@@ -41,7 +41,9 @@ from quant.signals.pipeline import generate_confirmed_signals
 from quant.store.snapshot import save_derived, save_raw, save_review
 from quant.store.state import (
     append_lesson,
+    get_holdings,
     get_optional,
+    merge_payload_holdings,
     save_optional,
     write_news_summary,
 )
@@ -57,7 +59,7 @@ _MODE_LABELS = {
 
 
 def _prepare_payload(raw: dict) -> dict:
-    return unwrap_payload(raw)
+    return merge_payload_holdings(unwrap_payload(raw))
 
 
 def _build_operation_section(
@@ -125,7 +127,7 @@ def _watchlist_add_reason(score, candidate_row: dict) -> str:
     return "；".join(parts)
 
 
-def _update_watchlist_evening(ctx: ScoreContext) -> tuple[list[dict], str]:
+def _update_watchlist_evening(ctx: ScoreContext) -> tuple[list[dict], list[dict], str, list]:
     """晚间复盘：达标写入自选；未达标但末次入选≤N 个交易日仍保留，超期移出。"""
     scope = "post_market_evening"
     retain = watchlist_retain_days()
@@ -176,31 +178,35 @@ def _update_watchlist_evening(ctx: ScoreContext) -> tuple[list[dict], str]:
     )
 
     threshold = engine.config.get("watchlist_threshold", 65)
-    section_lines = ["九、自选更新", ""]
+    section_lines = ["七、自选更新", ""]
     section_lines.append(
         f"【自选池】共 {len(merged)} 只（当晚达标≥{threshold}；"
         f"未达标保留 {retain} 个交易日，超期移出）"
     )
     if merged:
-        for r in merged[:20]:
+        for r in merged:
             last = r.get("最后入选日期") or "—"
             section_lines.append(
                 f"· {r['股票名称']}（{r['股票代码']}）评分{r['评分']} 末次入选{last} [{r['战法']}]"
             )
-        if len(merged) > 20:
-            section_lines.append(f"· …其余 {len(merged) - 20} 只见 optional.jsonl")
     else:
         section_lines.append("自选池为空；候选评分摘要：")
         section_lines.extend(_score_summary_lines(scores) or ["· 无候选数据"])
     if added:
         section_lines.append("")
         section_lines.append(f"【本轮新入选】{len(added)} 只")
+        for r in added:
+            section_lines.append(
+                f"· {r['股票名称']}（{r['股票代码']}）评分{r['评分']}"
+            )
     if removed:
         section_lines.append("")
-        codes = ", ".join(str(r.get("股票代码", "")) for r in removed[:12])
-        section_lines.append(f"【移出自选】{len(removed)} 只（超 {retain} 个交易日未再入选）：{codes}"
-                             + ("…" if len(removed) > 12 else ""))
-    return merged, "\n".join(section_lines), scores
+        section_lines.append(f"【移出自选】{len(removed)} 只（超 {retain} 个交易日未再入选）：")
+        for r in removed:
+            section_lines.append(
+                f"· {r.get('股票名称', '')}（{r.get('股票代码', '')}）"
+            )
+    return merged, added, "\n".join(section_lines), scores
 
 
 def process_news(raw: dict, timestamp: str) -> str:
@@ -263,7 +269,7 @@ def process_during_market(raw: dict) -> str:
 
     engine = ScoringEngine()
     log_progress(scope, "持仓评分")
-    holding_scores = engine.score_many(ctx, payload.get("持仓股") or get_optional())
+    holding_scores = engine.score_many(ctx, payload.get("持仓股") or get_holdings())
     save_derived("scores_holding.json", [s.to_dict() for s in holding_scores])
     save_derived(
         "signals.json",
@@ -313,18 +319,19 @@ def process_lunch_review(raw: dict) -> str:
 def process_evening_review(raw: dict) -> str:
     scope = "post_market_evening"
     payload = _prepare_payload(raw)
-    log_progress(scope, "更新主线题材快照 main_themes.json")
+    log_progress(scope, "更新概念板块快照 main_themes.json")
     update_main_theme_state(payload)
     ctx = ScoreContext.from_payload(payload, mode="post_market_evening")
 
     log_progress(scope, "自选池更新与评分")
-    added, optional_section, scores = _update_watchlist_evening(ctx)
+    merged, added, optional_section, scores = _update_watchlist_evening(ctx)
     log_progress(scope, "生成引擎摘要")
     brief = build_engine_brief(
         ctx,
         payload,
         mode="post_market_evening",
         watchlist_scores=scores,
+        watchlist_pool=merged,
         watchlist_added=added,
     )
     log_progress(scope, "LLM 晚间复盘文案")

@@ -68,7 +68,7 @@ class ConceptThemeScorer:
         raw_score, hit_detail = score_concept_resonance(concepts, ctx.payload, update=False)
         src = _concept_source(stock)
         available = hit_detail.get("available", True)
-        if not main and not hit_detail.get("概念净分"):
+        if not main and not hit_detail.get("概念权重分"):
             available = bool(hit_detail.get("available", False))
         return DimensionResult(
             self.name,

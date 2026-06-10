@@ -80,13 +80,35 @@ def _parse_jsonl(text: str) -> list[dict]:
     return rows
 
 
+def _apply_stock_key_aliases(row: dict) -> dict:
+    """兼容 holding/optional JSONL 常见字段别名。"""
+    out = dict(row)
+    if not str(out.get("股票代码", "")).strip():
+        for alt in ("代码", "code", "symbol", "证券代码"):
+            v = str(out.get(alt) or "").strip()
+            if v:
+                out["股票代码"] = v
+                break
+    if not str(out.get("股票名称", "")).strip():
+        for alt in ("名称", "name", "证券名称"):
+            v = str(out.get(alt) or "").strip()
+            if v:
+                out["股票名称"] = v
+                break
+    if out.get("持仓股数") in (None, "", 0) and out.get("股数") not in (None, ""):
+        out["持仓股数"] = out.get("股数")
+    return out
+
+
 def _normalize_rows(rows: list[dict] | None) -> list[dict]:
     out: list[dict] = []
     for item in rows or []:
-        code = str(item.get("股票代码", "")).strip()
+        if not isinstance(item, dict):
+            continue
+        row = _apply_stock_key_aliases(item)
+        code = str(row.get("股票代码", "")).strip()
         if not code:
             continue
-        row = dict(item)
         row["股票代码"] = code
         out.append(row)
     return out
@@ -109,6 +131,46 @@ def get_optional() -> list[dict]:
 def get_holdings() -> list[dict]:
     ensure_layout()
     return read_jsonl(state_file("holding.jsonl"))
+
+
+def resolve_payload_holdings(payload: dict | None = None) -> list[dict]:
+    """持仓列表：优先 payload「持仓股」，为空则读 state/holding.jsonl。"""
+    if payload:
+        rows = payload.get("持仓股")
+        if isinstance(rows, list) and rows:
+            return _normalize_rows([r for r in rows if isinstance(r, dict)])
+    return get_holdings()
+
+
+def merge_payload_holdings(payload: dict) -> dict:
+    """保证 payload「持仓股」与 state/holding.jsonl 一致，避免推送误判空仓。"""
+    state_rows = get_holdings()
+    raw = payload.get("持仓股")
+    payload_rows = raw if isinstance(raw, list) else []
+
+    if not state_rows and not payload_rows:
+        return payload
+
+    by_code: dict[str, dict] = {}
+    for row in payload_rows:
+        if not isinstance(row, dict):
+            continue
+        norm = _apply_stock_key_aliases(row)
+        code = str(norm.get("股票代码", "")).strip()
+        if code:
+            by_code[code] = norm
+
+    for row in state_rows:
+        code = str(row.get("股票代码", "")).strip()
+        if code and code not in by_code:
+            by_code[code] = row
+
+    if not by_code:
+        return payload
+
+    merged = dict(payload)
+    merged["持仓股"] = list(by_code.values())
+    return merged
 
 
 def save_optional(rows: list[dict], *, delta: dict | None = None) -> None:

@@ -1,4 +1,4 @@
-"""跨日归档摘要：仅提供昨日复盘等叙述参考，不含主线/龙头判定（由 engine_brief 负责）。"""
+"""跨日归档摘要：仅提供昨日复盘等叙述参考，不含概念板块判定（由 engine_brief 负责）。"""
 
 from __future__ import annotations
 
@@ -78,20 +78,20 @@ def _load_evening_raw(date_str: str) -> dict | None:
 
 
 def format_main_theme_context() -> str:
-    """从 main_themes.json 输出确认主线（涨幅/资金各 1 条）。"""
+    """从 main_themes.json 输出强势概念（涨幅/资金各 1 条）。"""
     cfg = _theme_cfg()
-    lookback = int(cfg.get("lookback_days", 5))
+    lookback = int(cfg.get("lookback_days", 10))
     state = _load_state()
     last_update = str(state.get("last_update_date") or "")
     gain_main, fund_main = resolve_main_theme_leaders(state, lookback=lookback)
     confirmed = sorted(resolve_main_themes({}, update=False))
 
     lines = [
-        f"规则：近{lookback}日滑动窗口，累计涨幅最大 + 累计资金流入各 1 条主线；"
+        f"规则：近{lookback}日滑动窗口，累计涨幅最大 + 累计资金流入各 1 条强势概念；"
         f"状态最后更新 {last_update or '无'}。",
-        f"涨幅主线: {gain_main or '暂无'}",
-        f"资金主线: {fund_main or '暂无'}",
-        f"确认主线（{len(confirmed)}）: " + ("、".join(confirmed) if confirmed else "暂无"),
+        f"涨幅靠前概念: {gain_main or '暂无'}",
+        f"资金流入概念: {fund_main or '暂无'}",
+        f"强势概念（{len(confirmed)}）: " + ("、".join(confirmed) if confirmed else "暂无"),
     ]
 
     today_dual = state.get("today_dual") or []
@@ -104,7 +104,7 @@ def format_main_theme_context() -> str:
 def format_concept_rotation(*, lookback: int | None = None) -> str:
     """近 N 个 evening 归档的概念榜时间线 + 轮动摘要。"""
     cfg = _theme_cfg()
-    n = lookback or int(cfg.get("lookback_days", 5))
+    n = lookback or int(cfg.get("lookback_days", 10))
     snapshots: list[tuple[str, set[str], set[str]]] = []
     d = datetime.now(_SH_TZ).date() - timedelta(days=1)
 
@@ -152,6 +152,116 @@ def format_concept_rotation(*, lookback: int | None = None) -> str:
         if drop_gain:
             lines.append("最近一日退出涨幅前榜: " + "、".join(drop_gain[:6]))
 
+    return "\n".join(lines)
+
+
+def _load_today_trades(*, date_str: str | None = None) -> tuple[str, list[dict]]:
+    from quant.store.snapshot import daily_trades_path
+
+    ds = date_str or datetime.now(_SH_TZ).date().isoformat()
+    path = daily_trades_path("executed.json", ds)
+    if not path.is_file():
+        return ds, []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ds, []
+    if not isinstance(data, list):
+        return ds, []
+    rows = [r for r in data if isinstance(r, dict)]
+    return ds, rows
+
+
+def format_today_trades(*, date_str: str | None = None) -> str:
+    """当日成交摘要，供晚间操作复盘引用。"""
+    ds, rows = _load_today_trades(date_str=date_str)
+    if not rows:
+        return f"{ds} 今日无买卖成交。"
+
+    parts: list[str] = []
+    for r in rows:
+        action = str(r.get("方向") or "").strip()
+        code = r.get("股票代码") or ""
+        name = r.get("股票名称") or ""
+        qty = r.get("股数") or 0
+        price = r.get("成交价")
+        pnl = r.get("已实现盈亏")
+        reason = str(r.get("理由") or "")[:40]
+        sell_type = str(r.get("卖出类型") or "").strip()
+        extra = f" [{sell_type}]" if sell_type else ""
+        pnl_s = ""
+        if pnl is not None and str(pnl).strip() != "":
+            try:
+                pnl_s = f" 盈亏{float(pnl):+.2f}元"
+            except (TypeError, ValueError):
+                pass
+        price_s = f" @{price}" if price is not None else ""
+        parts.append(
+            f"{action} {name}({code}) {int(qty or 0) // 100}手{price_s}{pnl_s}{extra} {reason}".strip()
+        )
+    return f"{ds} 成交（共{len(parts)}笔）：" + "；".join(parts)
+
+
+def format_today_pnl_summary(payload: dict | None = None, *, date_str: str | None = None) -> str:
+    """当日盈亏参考：已实现 + 持仓浮动估算。"""
+    from quant.narrative.holdings_context import holdings_for_pnl
+    from quant.scoring.tech_indicators import quote_last_price, stock_daily_change_pct
+    from quant.store.state import get_account, sum_today_realized_pnl
+
+    ds = date_str or datetime.now(_SH_TZ).date().isoformat()
+    _, rows = _load_today_trades(date_str=ds)
+    realized = sum_today_realized_pnl(ds)
+    acc = get_account()
+
+    lines = [f"当日已实现盈亏（成交汇总）：{realized:+.2f}元"]
+    if rows:
+        for r in rows:
+            pnl = r.get("已实现盈亏")
+            if pnl is None:
+                continue
+            try:
+                pnl_f = float(pnl)
+            except (TypeError, ValueError):
+                continue
+            name = r.get("股票名称") or ""
+            code = r.get("股票代码") or ""
+            action = r.get("方向") or ""
+            lines.append(f"· {action} {name}({code}) 已实现{pnl_f:+.2f}元")
+    else:
+        lines.append("· 今日无成交，已实现盈亏为 0")
+
+    holdings = holdings_for_pnl(payload)
+    float_lines: list[str] = []
+    total_float = 0.0
+    for h in holdings:
+        if not isinstance(h, dict):
+            continue
+        qty = int(h.get("持仓股数", 0) or 0)
+        if qty <= 0:
+            continue
+        price = quote_last_price(h)
+        chg = stock_daily_change_pct(h)
+        if price is None or chg is None:
+            continue
+        est = qty * price * chg / 100.0
+        total_float += est
+        name = h.get("股票名称") or h.get("股票代码") or ""
+        code = h.get("股票代码") or ""
+        float_lines.append(f"· {name}({code}) 当日浮动估算{est:+.2f}元（{chg:+.2f}%）")
+
+    if float_lines:
+        lines.append(f"持仓当日浮动估算合计：{total_float:+.2f}元")
+        lines.extend(float_lines)
+    elif not holdings:
+        from quant.store.state import get_holdings
+
+        if get_holdings():
+            lines.append("· 持仓浮动：行情 payload 缺盘口，请见「当前持仓」节")
+        else:
+            lines.append("当前无持仓，无浮动盈亏。")
+
+    total_assets = float(acc.get("总资产", 0) or 0)
+    lines.append(f"账户总资产：{total_assets:.2f}元")
     return "\n".join(lines)
 
 
@@ -210,7 +320,7 @@ def build_cross_day_context(mode: str) -> str:
         excerpt = _read_review_excerpt("evening.md", prev_ds, max_chars=2000 if mode == "pre_market" else 1400)
         if excerpt:
             sections.append(
-                f"昨日复盘摘录（{prev_ds}，勿抄标题、勿据此重判主线/龙头）：\n{excerpt}"
+                f"昨日复盘摘录（{prev_ds}，勿抄标题、勿据此重判概念板块）：\n{excerpt}"
             )
 
     if mode == "post_market_lunch":

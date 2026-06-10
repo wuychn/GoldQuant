@@ -44,6 +44,13 @@ _RE_INTERNAL_PHRASES: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"二、主线复盘"), "一、大盘概况"),
     (re.compile(r"二、主线与概念"), "一、大盘概况"),
     (re.compile(r"二、主线变化"), "一、大盘概况"),
+    (re.compile(r"主线龙头"), "主升波段"),
+    (re.compile(r"确认主线"), "概念板块"),
+    (re.compile(r"涨幅主线"), "涨幅靠前概念"),
+    (re.compile(r"资金主线"), "资金流入概念"),
+    (re.compile(r"主线题材"), "概念板块"),
+    (re.compile(r"当前主线"), "概念板块"),
+    (re.compile(r"主线复盘"), "大盘概况"),
 ]
 _RE_BLANK_LINES = re.compile(r"\n{3,}")
 
@@ -52,10 +59,26 @@ def sanitize_feishu_body(text: str) -> str:
     if not text or not text.strip():
         return text
     out = text
+    _TERM_REPLACEMENTS = {
+        "市场环境": "赚钱效应",
+        "市场档位": "赚钱效应",
+        "市场状态": "赚钱效应",
+        "交易环境": "仓位控制",
+        "主线龙头": "主升波段",
+        "确认主线": "概念板块",
+        "涨幅主线": "涨幅靠前概念",
+        "资金主线": "资金流入概念",
+        "主线复盘": "大盘概况",
+        "主线与概念": "概念板块",
+        "主线变化": "概念板块",
+    }
     for term in DEPRECATED_PUSH_TERMS:
         if term == "可参与交易":
             continue
-        out = out.replace(term, "赚钱效应" if term in ("市场环境", "市场档位", "市场状态") else "仓位控制")
+        repl = _TERM_REPLACEMENTS.get(term, "仓位控制")
+        out = out.replace(term, repl)
+    out = re.sub(r"(?<![\u4e00-\u9fff])主线(?![\u4e00-\u9fff])", "趋势", out)
+    out = re.sub(r"(?<![\u4e00-\u9fff])龙头(?![\u4e00-\u9fff])", "标的", out)
     for p in _STRIP_PREFIXES:
         out = out.replace(p, "")
     for pat, repl in _RE_INTERNAL_PHRASES:
