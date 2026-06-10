@@ -18,8 +18,8 @@ from quant.data_fetch import fetch_mode, fixture_path_for_mode, unwrap_payload
 from quant.progress_log import configure_progress_logging, log_progress, log_progress_done
 from quant.constants import STRATEGY_NAME
 from quant.execution.executor import ExecutedTrade, execute_signals
-from quant.gates.rules import check_global_gates
 from quant.narrative.engine_brief import build_engine_brief
+from quant.narrative.ops_context import build_no_trade_note
 from quant.narrative.llm import call_llm
 from quant.narrative.prompts import (
     build_user_msg,
@@ -52,7 +52,7 @@ from quant.store.watchlist import merge_watchlist_evening, watchlist_retain_days
 _MODE_LABELS = {
     "news": "新闻聚焦",
     "pre_market": "盘前分析",
-    "during_market": "盘中实时",
+    "during_market": "智能盯盘",
     "post_market_lunch": "午间复盘",
     "post_market_evening": "晚间复盘",
 }
@@ -71,7 +71,7 @@ def _build_operation_section(
     lines = [section]
     if not executed:
         detail = no_trade_detail.strip()
-        lines.append(f"本轮无操作信号。{detail}" if detail else "本轮无操作信号。")
+        lines.append(detail if detail else "继续观望，暂不加减仓。")
         return "\n".join(lines)
     for e in executed:
         s = e.signal
@@ -85,17 +85,6 @@ def _build_operation_section(
             f"理由：{s.reason}{pnl}"
         )
     return "\n".join(lines)
-
-
-def _no_trade_reason(mode: str, ctx: ScoreContext, buy_n: int, sell_n: int) -> str:
-    """无成交说明：纯规则引擎事实，不经 LLM。"""
-    gates = check_global_gates(ctx).push_summary(ctx.payload)
-    if buy_n == 0 and sell_n == 0:
-        return f"原因：暂无买卖信号；{gates}。"
-    return (
-        f"原因：信号未成交（买入{buy_n}条/卖出{sell_n}条，"
-        f"条件尚未满足）；{gates}。"
-    )
 
 
 def _score_summary_lines(scores: list) -> list[str]:
@@ -241,7 +230,13 @@ def process_pre_market(raw: dict) -> str:
         build_user_msg(payload, mode="pre_market", engine_brief=brief),
         max_tokens=8000,
     )
-    no_trade = "" if executed else _no_trade_reason("pre_market", ctx, len(raw_buy), 0)
+    no_trade = (
+        ""
+        if executed
+        else build_no_trade_note(
+            ctx, mode="pre_market", raw_buy=raw_buy, raw_sell=[], audit=audit
+        )
+    )
     ops = _build_operation_section(executed, section="四、操作", no_trade_detail=no_trade)
     save_derived(
         "signals.json",
@@ -290,8 +285,16 @@ def process_during_market(raw: dict) -> str:
         ),
         max_tokens=7000,
     )
-    no_trade = "" if executed else _no_trade_reason(
-        "during_market", ctx, len(raw_buy), len(raw_sell)
+    no_trade = (
+        ""
+        if executed
+        else build_no_trade_note(
+            ctx,
+            mode="during_market",
+            raw_buy=raw_buy,
+            raw_sell=raw_sell,
+            audit=audit,
+        )
     )
     ops = _build_operation_section(executed, section="四、操作", no_trade_detail=no_trade)
     log_progress_done(scope, "盘中分析完成", detail=f"成交 {len(executed)} 笔")

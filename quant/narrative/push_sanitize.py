@@ -53,6 +53,16 @@ _RE_INTERNAL_PHRASES: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"主线复盘"), "大盘概况"),
 ]
 _RE_BLANK_LINES = re.compile(r"\n{3,}")
+_RE_INLINE_OPS_LINE = re.compile(r"(?m)^操作[：:].+\n?")
+
+
+def _strip_inline_ops_lines(text: str) -> str:
+    """正文误带的「操作：…」行仅保留在「四、操作」段。"""
+    marker = "四、操作"
+    idx = text.find(marker)
+    if idx == -1:
+        return _RE_INLINE_OPS_LINE.sub("", text)
+    return _RE_INLINE_OPS_LINE.sub("", text[:idx]) + text[idx:]
 
 
 def sanitize_feishu_body(text: str) -> str:
@@ -83,4 +93,6 @@ def sanitize_feishu_body(text: str) -> str:
         out = out.replace(p, "")
     for pat, repl in _RE_INTERNAL_PHRASES:
         out = pat.sub(repl, out)
+    out = _strip_inline_ops_lines(out)
+    out = re.sub(r"(?m)^本轮无操作信号[。.]?.*\n?", "", out)
     return _RE_BLANK_LINES.sub("\n\n", out).strip()
