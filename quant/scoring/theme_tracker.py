@@ -1,7 +1,8 @@
-"""主线题材：滑动窗口概念榜快照 + 概念权重分 + 个股 concept_theme 打分。
+"""概念板块跟踪：滑动窗口四榜快照 + 概念权重分 + 个股 concept_theme 打分。
 
-概念权重（近 N 个交易日）：入选涨幅榜次数 50%、综合涨幅 30%、资金净流入 20%。
-日快照与状态写入仅在 ``post_market_evening``；盘中/午间/盘前只读。
+评分概念池 = 过去 (lookback−1) 个交易日文件中的涨幅/资金榜概念 ∪ 当日 payload 涨幅/资金榜概念。
+概念权重 = 近 lookback 个交易日（含当日）的上榜次数、综合涨幅、净流入，按配置权重合成 0–100。
+日快照写入 concept_tracker.json 仅在 ``post_market_evening``；盘中/午间/盘前只读文件并叠加当日 payload。
 """
 
 from __future__ import annotations
@@ -17,18 +18,12 @@ from quant.config import load_gates_config
 from quant.store.paths import state_file
 
 _SH_TZ = ZoneInfo("Asia/Shanghai")
-_STATE_NAME = "main_themes.json"
-MAIN_THEME_UPDATE_MODE = "post_market_evening"
+_STATE_NAME = "concept_tracker.json"
 
 
-def should_update_main_theme(mode: str = "") -> bool:
-    """是否允许写入 ``main_themes.json``（仅晚间复盘）。"""
-    return mode == MAIN_THEME_UPDATE_MODE
-
-
-def _theme_cfg() -> dict[str, Any]:
+def _concept_tracker_cfg() -> dict[str, Any]:
     gates = load_gates_config()
-    return gates.get("main_theme") or {}
+    return gates.get("concept_tracker") or {}
 
 
 def _board_rows(payload: dict, key: str, limit: int) -> list[dict]:
@@ -74,9 +69,30 @@ def _trading_days_window(n: int, *, end: date | None = None) -> list[str]:
     return sorted(out)
 
 
+def _past_board_trading_days(n: int) -> list[str]:
+    """today 之前的最近 n 个交易日（升序）。"""
+    out: list[str] = []
+    d = _today_date() - timedelta(days=1)
+    guard = 0
+    while len(out) < n and guard < n * 4 + 30:
+        guard += 1
+        if is_real_workday_cn(d):
+            out.append(d.isoformat())
+        d -= timedelta(days=1)
+    return sorted(out)
+
+
 def _lookback_trading_days(cfg: dict[str, Any] | None = None) -> int:
-    c = cfg or _theme_cfg()
+    c = cfg or _concept_tracker_cfg()
     return max(1, int(c.get("lookback_days", 10)))
+
+
+def _past_board_days(cfg: dict[str, Any] | None = None) -> int:
+    """评分池：文件侧覆盖的过去交易日数（默认 lookback−1，与「当日 payload」合计约 lookback 日）。"""
+    c = cfg or _concept_tracker_cfg()
+    if c.get("past_board_days") is not None:
+        return max(1, int(c["past_board_days"]))
+    return max(1, _lookback_trading_days(c) - 1)
 
 
 def _trim_daily(state: dict[str, Any], lookback_trading: int) -> None:
@@ -209,55 +225,157 @@ def _concept_net_from_row(row: dict[str, Any]) -> float:
     return _row_net(row)
 
 
+def _board_concept_names_from_snap(snap: dict) -> set[str]:
+    """单日快照中涨幅榜 + 资金流入榜的概念名。"""
+    boards = _daily_snap(snap)
+    names: set[str] = set()
+    for row in boards["gain"]:
+        n = str(row.get("行业", "")).strip()
+        if n:
+            names.add(n)
+    for row in boards["fund"]:
+        n = str(row.get("行业", "")).strip()
+        if n:
+            names.add(n)
+    return names
+
+
+def _snap_from_payload(payload: dict, limit: int) -> dict[str, list[dict[str, Any]]]:
+    return {
+        "gain": _snapshot_gain_rows(payload, limit),
+        "loss": _snapshot_loss_rows(payload, limit),
+        "fund": _snapshot_fund_rows(payload, limit),
+        "fund_out": _snapshot_fund_out_rows(payload, limit),
+    }
+
+
+def _payload_has_boards(payload: dict | None, limit: int) -> bool:
+    if not payload:
+        return False
+    return bool(_board_rows(payload, "涨幅榜", limit) or _board_rows(payload, "资金流入榜", limit))
+
+
+def _resolve_day_snap(
+    day: str,
+    daily: dict[str, Any],
+    payload: dict | None,
+    limit: int,
+) -> dict | None:
+    """单日四榜快照：当日优先 payload（有榜时），否则读文件。"""
+    today_str = _today()
+    if day == today_str:
+        if _payload_has_boards(payload, limit):
+            return _snap_from_payload(payload or {}, limit)
+        raw = daily.get(day)
+        return raw if isinstance(raw, dict) else None
+    raw = daily.get(day)
+    return raw if isinstance(raw, dict) else None
+
+
+def _today_gain_fund_concepts(
+    payload: dict,
+    daily: dict[str, Any],
+    *,
+    limit: int,
+) -> tuple[set[str], set[str]]:
+    """当日涨幅榜 / 资金榜概念：优先 payload，无榜时回退文件当日快照。"""
+    if _payload_has_boards(payload, limit):
+        return snapshot_boards(payload, limit=limit)
+    today_snap = daily.get(_today())
+    if isinstance(today_snap, dict):
+        boards = _daily_snap(today_snap)
+        gain: set[str] = set()
+        fund: set[str] = set()
+        for row in boards["gain"]:
+            n = str(row.get("行业", "")).strip()
+            if n:
+                gain.add(n)
+        for row in boards["fund"]:
+            n = str(row.get("行业", "")).strip()
+            if n:
+                fund.add(n)
+        return gain, fund
+    return set(), set()
+
+
+def _today_board_concepts(
+    payload: dict,
+    daily: dict[str, Any],
+    *,
+    limit: int,
+) -> set[str]:
+    """当日涨幅/资金榜概念：优先 payload，无榜时回退文件当日快照（晚间复盘已写入后）。"""
+    gain, fund = _today_gain_fund_concepts(payload, daily, limit=limit)
+    return gain | fund
+
+
+def _accumulate_day_metrics(
+    snap: dict,
+    *,
+    selection_count: dict[str, int],
+    composite_gain: dict[str, float],
+    net_fund: dict[str, float],
+) -> None:
+    boards = _daily_snap(snap)
+    daily_net: dict[str, float] = {}
+    daily_gain_done: set[str] = set()
+
+    for row in boards["gain"]:
+        name = str(row.get("行业", "")).strip()
+        if not name:
+            continue
+        selection_count[name] += 1
+        composite_gain[name] += _row_gain_chg(row)
+        daily_gain_done.add(name)
+        daily_net[name] = _concept_net_from_row(row)
+
+    for key in ("fund", "fund_out"):
+        for row in boards[key]:
+            name = str(row.get("行业", "")).strip()
+            if not name:
+                continue
+            if name not in daily_gain_done:
+                chg = _row_gain_chg(row)
+                if chg != 0.0 or row.get("行业-涨跌幅") is not None:
+                    composite_gain[name] += chg
+                    daily_gain_done.add(name)
+            if name in daily_net:
+                continue
+            daily_net[name] = _concept_net_from_row(row)
+
+    for name, net in daily_net.items():
+        net_fund[name] += net
+
+
 def collect_concept_window_metrics(
     state: dict[str, Any] | None = None,
+    payload: dict | None = None,
     *,
     lookback: int | None = None,
 ) -> dict[str, dict[str, float]]:
-    """近 N 个交易日概念原始指标：入选次数、综合涨幅(%)、资金净流入(亿元)。"""
-    cfg = _theme_cfg()
+    """近 N 个交易日概念原始指标：入选次数、综合涨幅(%)、资金净流入(亿元)；当日优先读 payload。"""
+    cfg = _concept_tracker_cfg()
     window = lookback if lookback is not None else _lookback_trading_days(cfg)
     st = state if state is not None else _load_state()
     window_dates = set(_trading_days_window(window))
     daily: dict[str, Any] = st.get("daily") or {}
+    today_str = _today()
+    limit = int(cfg.get("board_limit", 10))
 
     selection_count: dict[str, int] = defaultdict(int)
     composite_gain: dict[str, float] = defaultdict(float)
     net_fund: dict[str, float] = defaultdict(float)
 
     for d in sorted(window_dates):
-        snap = daily.get(d)
-        if not isinstance(snap, dict):
+        snap = _resolve_day_snap(d, daily, payload, limit)
+        if snap is None:
             continue
-        boards = _daily_snap(snap)
-        daily_net: dict[str, float] = {}
-        daily_gain_done: set[str] = set()
-
-        for row in boards["gain"]:
-            name = str(row.get("行业", "")).strip()
-            if not name:
-                continue
-            selection_count[name] += 1
-            composite_gain[name] += _row_gain_chg(row)
-            daily_gain_done.add(name)
-            daily_net[name] = _concept_net_from_row(row)
-
-        for key in ("fund", "fund_out"):
-            for row in boards[key]:
-                name = str(row.get("行业", "")).strip()
-                if not name:
-                    continue
-                if name not in daily_gain_done:
-                    chg = _row_gain_chg(row)
-                    if chg != 0.0 or row.get("行业-涨跌幅") is not None:
-                        composite_gain[name] += chg
-                        daily_gain_done.add(name)
-                if name in daily_net:
-                    continue
-                daily_net[name] = _concept_net_from_row(row)
-
-        for name, net in daily_net.items():
-            net_fund[name] += net
+        _accumulate_day_metrics(
+            snap,
+            selection_count=selection_count,
+            composite_gain=composite_gain,
+            net_fund=net_fund,
+        )
 
     universe = set(selection_count) | set(composite_gain) | set(net_fund)
     return {
@@ -268,6 +386,27 @@ def collect_concept_window_metrics(
         }
         for name in universe
     }
+
+
+def build_scoring_concept_pool(
+    payload: dict,
+    state: dict[str, Any] | None = None,
+) -> set[str]:
+    """评分概念池：过去 past_board_days 文件榜 ∪ 当日 payload 涨幅/资金榜。"""
+    cfg = _concept_tracker_cfg()
+    st = state if state is not None else _load_state()
+    past_n = _past_board_days(cfg)
+    limit = int(cfg.get("board_limit", 10))
+    daily: dict[str, Any] = st.get("daily") or {}
+
+    names: set[str] = set()
+    for d in _past_board_trading_days(past_n):
+        snap = daily.get(d)
+        if isinstance(snap, dict):
+            names.update(_board_concept_names_from_snap(snap))
+
+    names.update(_today_board_concepts(payload, daily, limit=limit))
+    return names
 
 
 def _normalize_metric(values: dict[str, float]) -> dict[str, float]:
@@ -281,34 +420,33 @@ def _normalize_metric(values: dict[str, float]) -> dict[str, float]:
     return {k: 100.0 * (v - mn) / span for k, v in values.items()}
 
 
-def build_concept_net_scores(
-    state: dict[str, Any] | None = None,
-    *,
-    lookback: int | None = None,
-) -> dict[str, float]:
-    """近 N 个交易日概念权重分（0–100）：入选次数 50%、综合涨幅 30%、净流入 20%。"""
-    cfg = _theme_cfg()
-    window = lookback if lookback is not None else _lookback_trading_days(cfg)
-    w_cfg = cfg.get("score_weights") or {}
+def _weight_cfg(cfg: dict[str, Any] | None = None) -> tuple[float, float, float, float]:
+    c = cfg or _concept_tracker_cfg()
+    w_cfg = c.get("score_weights") or {}
     w_count = float(w_cfg.get("selection_count", 50))
     w_gain = float(w_cfg.get("composite_gain", 30))
     w_fund = float(w_cfg.get("net_fund_flow", 20))
     weight_sum = w_count + w_gain + w_fund
     if weight_sum <= 0:
         weight_sum = 100.0
+    return w_count, w_gain, w_fund, weight_sum
 
-    metrics = collect_concept_window_metrics(state, lookback=window)
+
+def _scores_from_metrics(
+    metrics: dict[str, dict[str, float]],
+    *,
+    cfg: dict[str, Any] | None = None,
+) -> dict[str, float]:
+    """由概念原始指标计算 0–100 权重分。"""
     if not metrics:
         return {}
-
+    w_count, w_gain, w_fund, weight_sum = _weight_cfg(cfg)
     count_vals = {k: v["入选次数"] for k, v in metrics.items()}
     gain_vals = {k: v["综合涨幅"] for k, v in metrics.items()}
     fund_vals = {k: v["资金净流入"] for k, v in metrics.items()}
-
     norm_count = _normalize_metric(count_vals)
     norm_gain = _normalize_metric(gain_vals)
     norm_fund = _normalize_metric(fund_vals)
-
     scores: dict[str, float] = {}
     for name in metrics:
         scores[name] = (
@@ -319,9 +457,45 @@ def build_concept_net_scores(
     return scores
 
 
-def resolve_main_theme_leaders(state: dict[str, Any], *, lookback: int | None = None) -> tuple[str | None, str | None]:
-    """滑动窗口内：综合涨幅最大、资金净流入最大概念（各 1 条）。"""
-    metrics = collect_concept_window_metrics(state, lookback=lookback)
+def build_scoring_concept_scores(
+    payload: dict,
+    state: dict[str, Any] | None = None,
+) -> dict[str, float]:
+    """统一评分：池内概念按近 lookback 日指标（含当日 payload）加权。"""
+    cfg = _concept_tracker_cfg()
+    st = state if state is not None else _load_state()
+    pool = build_scoring_concept_pool(payload, st)
+    if not pool:
+        return {}
+
+    lookback = _lookback_trading_days(cfg)
+    all_metrics = collect_concept_window_metrics(st, payload, lookback=lookback)
+    empty = {"入选次数": 0.0, "综合涨幅": 0.0, "资金净流入": 0.0}
+    pool_metrics = {name: all_metrics.get(name, empty) for name in pool}
+    return _scores_from_metrics(pool_metrics, cfg=cfg)
+
+
+def build_concept_net_scores(
+    state: dict[str, Any] | None = None,
+    payload: dict | None = None,
+    *,
+    lookback: int | None = None,
+) -> dict[str, float]:
+    """近 N 日全量概念权重（调试/摘要）；评分请用 build_scoring_concept_scores。"""
+    cfg = _concept_tracker_cfg()
+    window = lookback if lookback is not None else _lookback_trading_days(cfg)
+    metrics = collect_concept_window_metrics(state, payload, lookback=window)
+    return _scores_from_metrics(metrics, cfg=cfg)
+
+
+def resolve_window_leading_concepts(
+    state: dict[str, Any],
+    payload: dict | None = None,
+    *,
+    lookback: int | None = None,
+) -> tuple[str | None, str | None]:
+    """滑动窗口内：综合涨幅最大、资金净流入最大概念（各 1 条，供调试/摘要）。"""
+    metrics = collect_concept_window_metrics(state, payload, lookback=lookback)
     if not metrics:
         return None, None
     gain_totals = {k: v["综合涨幅"] for k, v in metrics.items()}
@@ -329,9 +503,9 @@ def resolve_main_theme_leaders(state: dict[str, Any], *, lookback: int | None = 
     return _max_by_total(gain_totals), _max_by_total(fund_totals)
 
 
-def update_main_theme_state(payload: dict) -> dict[str, Any]:
+def update_concept_tracker_state(payload: dict) -> dict[str, Any]:
     """按日写入概念四榜快照，保留滑动窗口。"""
-    cfg = _theme_cfg()
+    cfg = _concept_tracker_cfg()
     limit = int(cfg.get("board_limit", 10))
     lookback = _lookback_trading_days(cfg)
     today = _today()
@@ -339,12 +513,7 @@ def update_main_theme_state(payload: dict) -> dict[str, Any]:
     daily: dict[str, Any] = state.setdefault("daily", {})
 
     if daily.get(today) is None:
-        daily[today] = {
-            "gain": _snapshot_gain_rows(payload, limit),
-            "loss": _snapshot_loss_rows(payload, limit),
-            "fund": _snapshot_fund_rows(payload, limit),
-            "fund_out": _snapshot_fund_out_rows(payload, limit),
-        }
+        daily[today] = _snap_from_payload(payload, limit)
 
     _trim_daily(state, lookback)
     gain, fund = snapshot_boards(payload, limit=limit)
@@ -352,62 +521,47 @@ def update_main_theme_state(payload: dict) -> dict[str, Any]:
     state["today_gain"] = sorted(gain)
     state["today_fund"] = sorted(fund)
     state["today_dual"] = sorted(gain & fund)
-    gain_main, fund_main = resolve_main_theme_leaders(state, lookback=lookback)
-    state["gain_main"] = gain_main
-    state["fund_main"] = fund_main
+    leading_gain, leading_fund = resolve_window_leading_concepts(state, payload, lookback=lookback)
+    state["leading_gain_concept"] = leading_gain
+    state["leading_fund_concept"] = leading_fund
     _save_state(state)
     return state
-
-
-def resolve_main_themes(payload: dict, *, update: bool = False) -> set[str]:
-    """确认主线：近 N 交易日综合涨幅最大 + 资金净流入最多，最多 2 条。"""
-    cfg = _theme_cfg()
-    lookback = _lookback_trading_days(cfg)
-    state = update_main_theme_state(payload) if update else _load_state()
-    gain_main, fund_main = resolve_main_theme_leaders(state, lookback=lookback)
-    out: set[str] = set()
-    if gain_main:
-        out.add(gain_main)
-    if fund_main:
-        out.add(fund_main)
-    return out
-
-
-def max_concept_net_score(stock_concepts: set[str], payload: dict | None = None) -> float:
-    """个股概念集合在窗口权重分中的最高值（无匹配为 0）。"""
-    del payload
-    if not stock_concepts:
-        return 0.0
-    nets = build_concept_net_scores()
-    matched = [nets[c] for c in stock_concepts if c in nets]
-    return max(matched) if matched else 0.0
-
-
-def concept_resonance_weights(payload: dict, *, update: bool = False) -> dict[str, float]:
-    """兼容旧引用：返回滑动窗口概念权重分。"""
-    del payload, update
-    return build_concept_net_scores()
 
 
 def score_concept_resonance(
     stock_concepts: set[str],
     payload: dict,
     *,
+    mode: str = "",
     update: bool = False,
 ) -> tuple[float, dict[str, Any]]:
-    """个股 concept_theme：取命中概念中权重分最高者（0–100）；无命中为 0 分。"""
-    del payload, update
-    cfg = _theme_cfg()
+    """个股 concept_theme：取命中评分池概念中权重分最高者（0–100）；无命中为 0 分。"""
+    del mode, update
+    cfg = _concept_tracker_cfg()
     w_cfg = cfg.get("score_weights") or {}
     no_hit = float(w_cfg.get("no_hit", 0))
 
-    nets = build_concept_net_scores()
+    state = _load_state()
+    daily: dict[str, Any] = state.get("daily") or {}
+    limit = int(cfg.get("board_limit", 10))
+    pool = build_scoring_concept_pool(payload, state)
+    nets = build_scoring_concept_scores(payload, state)
     if not nets:
         return no_hit, {"available": False}
 
+    gain, fund = _today_gain_fund_concepts(payload, daily, limit=limit)
+    past_dates = _past_board_trading_days(_past_board_days(cfg))
+
     matched = {c: nets[c] for c in stock_concepts if c in nets}
     if not matched:
-        return no_hit, {"命中概念": [], "概念权重分": {}, "available": True}
+        return no_hit, {
+            "命中概念": [],
+            "概念权重分": {},
+            "available": True,
+            "评分概念池": sorted(pool),
+            "当日榜概念": sorted(gain | fund),
+            "文件榜覆盖日": past_dates,
+        }
 
     peak = max(matched.values())
     return max(0.0, min(100.0, peak)), {
@@ -415,35 +569,44 @@ def score_concept_resonance(
         "命中概念": sorted(matched.keys()),
         "概念权重分": {k: round(v, 2) for k, v in sorted(matched.items(), key=lambda x: -x[1])},
         "最高概念分": round(peak, 2),
+        "评分概念池": sorted(pool),
+        "当日榜概念": sorted(gain | fund),
+        "文件榜覆盖日": past_dates,
     }
 
 
-def theme_detail(payload: dict, *, update: bool = False) -> dict[str, Any]:
-    """供评分维度输出的调试信息（默认不写入主线状态）。"""
-    cfg = _theme_cfg()
+def theme_detail(payload: dict, *, mode: str = "", update: bool = False) -> dict[str, Any]:
+    """供评分维度输出的调试信息。"""
+    del mode, update
+    cfg = _concept_tracker_cfg()
     limit = int(cfg.get("board_limit", 10))
     lookback = _lookback_trading_days(cfg)
-    gain, fund = snapshot_boards(payload, limit=limit)
-    main = resolve_main_themes(payload, update=update)
     state = _load_state()
-    gain_main, fund_main = resolve_main_theme_leaders(state, lookback=lookback)
-    metrics = collect_concept_window_metrics(state, lookback=lookback)
-    nets = build_concept_net_scores(state, lookback=lookback)
+    daily: dict[str, Any] = state.get("daily") or {}
+    gain, fund = _today_gain_fund_concepts(payload, daily, limit=limit)
+    pool = build_scoring_concept_pool(payload, state)
+    leading_gain, leading_fund = resolve_window_leading_concepts(state, payload, lookback=lookback)
+    metrics = collect_concept_window_metrics(state, payload, lookback=lookback)
+    nets = build_scoring_concept_scores(payload, state)
     top = sorted(nets.items(), key=lambda x: -x[1])[:8]
     return {
         "当日涨幅概念": sorted(gain),
         "当日资金概念": sorted(fund),
-        "涨幅主线": gain_main,
-        "资金主线": fund_main,
-        "确认主线": sorted(main),
+        "窗口涨幅领先": leading_gain,
+        "窗口资金领先": leading_fund,
+        "评分概念池": sorted(pool),
+        "文件榜覆盖日": _past_board_trading_days(_past_board_days(cfg)),
         "概念权重分": {k: round(v, 2) for k, v in nets.items()},
         "概念窗口指标": {
-            k: {
-                "入选次数": int(v["入选次数"]),
-                "综合涨幅": round(v["综合涨幅"], 2),
-                "资金净流入": round(v["资金净流入"], 2),
+            name: {
+                "入选次数": int(metrics[name]["入选次数"]),
+                "综合涨幅": round(metrics[name]["综合涨幅"], 2),
+                "资金净流入": round(metrics[name]["资金净流入"], 2),
             }
-            for k, v in sorted(metrics.items(), key=lambda x: -nets.get(x[0], 0))[:12]
+            for name in sorted(
+                (n for n in pool if n in metrics),
+                key=lambda n: -nets.get(n, 0),
+            )[:12]
         },
         "权重分靠前": top,
     }

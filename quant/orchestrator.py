@@ -30,7 +30,7 @@ from quant.narrative.prompts import (
     prompt_pre_market,
 )
 from quant.pool.builder import build_candidates
-from quant.scoring.theme_tracker import update_main_theme_state
+from quant.scoring.theme_tracker import update_concept_tracker_state
 from quant.pool.pkyd_util import stock_pkyd_tags
 from quant.narrative.push_sanitize import sanitize_feishu_body
 from quant.push.feishu import get_token, send_msg
@@ -319,8 +319,8 @@ def process_lunch_review(raw: dict) -> str:
 def process_evening_review(raw: dict) -> str:
     scope = "post_market_evening"
     payload = _prepare_payload(raw)
-    log_progress(scope, "更新概念板块快照 main_themes.json")
-    update_main_theme_state(payload)
+    log_progress(scope, "更新概念板块快照 concept_tracker.json")
+    update_concept_tracker_state(payload)
     ctx = ScoreContext.from_payload(payload, mode="post_market_evening")
 
     log_progress(scope, "自选池更新与评分")

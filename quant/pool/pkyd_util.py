@@ -1,4 +1,4 @@
-"""盘口异动：标签索引、概念共振候选、与人气/涨停交叉打标。"""
+"""盘口异动：标签索引、与人气/涨停交叉打标。"""
 
 from __future__ import annotations
 
@@ -10,8 +10,6 @@ from app.utils.common_util import (
     is_allowed_symbol_pool_code,
     row_allowed_symbol_pool, normalize_a_share_code,
 )
-from quant.config import load_gates_config
-from quant.scoring.theme_tracker import resolve_main_themes, snapshot_boards
 
 _PKYD_TAG_KEYS = ("盘口异动标签", "异动类型", "原因")
 
@@ -142,22 +140,6 @@ def enrich_zt_stats_with_pkyd(zt_stats: dict | None, tag_map: dict[str, list[str
         if isinstance(pool, list):
             out[key] = enrich_list_with_pkyd_tags(pool, tag_map)
     return out
-
-
-def hot_concept_targets(payload: dict) -> set[str]:
-    """近期确认主线 ∪ 当日涨幅榜前十 ∪ 资金流入榜前十。"""
-    cfg = load_gates_config().get("main_theme") or {}
-    limit = int(cfg.get("board_limit", 10))
-    gain, fund = snapshot_boards(payload, limit=limit)
-    main = resolve_main_themes(payload)
-    return main | gain | fund
-
-
-def pkyd_row_matches_hot_concepts(row: dict, payload: dict) -> bool:
-    """兼容旧引用；逻辑见 ``quant.pool.concept_filter``。"""
-    from quant.pool.concept_filter import matches_main_theme_concepts
-
-    return matches_main_theme_concepts(row, payload)
 
 
 def stock_pkyd_tags(stock: dict) -> list[str]:

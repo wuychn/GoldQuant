@@ -7,13 +7,7 @@ import re
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from quant.scoring.theme_tracker import (
-    _load_state,
-    _theme_cfg,
-    resolve_main_theme_leaders,
-    resolve_main_themes,
-    snapshot_boards,
-)
+from quant.scoring.theme_tracker import _concept_tracker_cfg, snapshot_boards
 from quant.store.paths import daily_raw, daily_review
 
 _SH_TZ = ZoneInfo("Asia/Shanghai")
@@ -77,33 +71,9 @@ def _load_evening_raw(date_str: str) -> dict | None:
     return _read_json(daily_raw("evening.json", date_str))
 
 
-def format_main_theme_context() -> str:
-    """从 main_themes.json 输出强势概念（涨幅/资金各 1 条）。"""
-    cfg = _theme_cfg()
-    lookback = int(cfg.get("lookback_days", 10))
-    state = _load_state()
-    last_update = str(state.get("last_update_date") or "")
-    gain_main, fund_main = resolve_main_theme_leaders(state, lookback=lookback)
-    confirmed = sorted(resolve_main_themes({}, update=False))
-
-    lines = [
-        f"规则：近{lookback}日滑动窗口，累计涨幅最大 + 累计资金流入各 1 条强势概念；"
-        f"状态最后更新 {last_update or '无'}。",
-        f"涨幅靠前概念: {gain_main or '暂无'}",
-        f"资金流入概念: {fund_main or '暂无'}",
-        f"强势概念（{len(confirmed)}）: " + ("、".join(confirmed) if confirmed else "暂无"),
-    ]
-
-    today_dual = state.get("today_dual") or []
-    if today_dual:
-        lines.append("最近归档日涨幅+资金双榜: " + "、".join(today_dual))
-
-    return "\n".join(lines)
-
-
 def format_concept_rotation(*, lookback: int | None = None) -> str:
     """近 N 个 evening 归档的概念榜时间线 + 轮动摘要。"""
-    cfg = _theme_cfg()
+    cfg = _concept_tracker_cfg()
     n = lookback or int(cfg.get("lookback_days", 10))
     snapshots: list[tuple[str, set[str], set[str]]] = []
     d = datetime.now(_SH_TZ).date() - timedelta(days=1)

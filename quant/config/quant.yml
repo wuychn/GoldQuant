@@ -137,10 +137,11 @@ gates:
       min_interval_minutes: 30
       max_interval_minutes: 240
 
-  # 主线题材：滑动窗口四榜快照 + concept_theme 概念权重；仅晚间复盘写入状态
-  main_theme:
+  # 概念板块：滑动窗口四榜快照 + concept_theme 概念权重；仅晚间复盘写入状态
+  concept_tracker:
     board_limit: 10                 # 每日快照：涨/跌/流入/流出榜各取前 N
-    lookback_days: 10               # 滑动窗口（交易日）
+    lookback_days: 10               # 指标计算窗口（交易日，含当日 payload）
+    # past_board_days 默认 lookback_days-1：评分池 = 文件过去 N 日榜 + 当日榜
     score_weights:                  # 概念权重：入选次数 50 + 综合涨幅 30 + 净流入 20
       selection_count: 50           # 近 N 日累计入选涨幅榜前十次数
       composite_gain: 30            # 近 N 日综合涨幅(%，各上榜日涨跌幅累加)

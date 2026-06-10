@@ -1,4 +1,4 @@
-"""概念主线共振维度。"""
+"""概念权重共振维度。"""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from quant.pool.candidate_config import PAYLOAD_KEY_POPULARITY
 from quant.scoring.context import ScoreContext
 from quant.scoring.dimensions.base import clamp
 from quant.scoring.models import DimensionResult
-from quant.scoring.theme_tracker import resolve_main_themes, score_concept_resonance, theme_detail
+from quant.scoring.theme_tracker import score_concept_resonance, theme_detail
 
 CONCEPT_SOURCE_WENCAI = "问财"
 CONCEPT_SOURCE_HOT = "人气榜"
@@ -53,23 +53,16 @@ def resolve_stock_concepts(stock: dict, payload: dict) -> dict:
     return stock
 
 
-# 兼容旧引用
-attach_concepts_from_hot = resolve_stock_concepts
-
-
 class ConceptThemeScorer:
     name = "concept_theme"
 
     def score(self, ctx: ScoreContext, stock: dict) -> DimensionResult:
         stock = resolve_stock_concepts(stock, ctx.payload)
         concepts = _stock_concepts(stock)
-        detail = theme_detail(ctx.payload, update=False)
-        main = resolve_main_themes(ctx.payload, update=False)
-        raw_score, hit_detail = score_concept_resonance(concepts, ctx.payload, update=False)
+        detail = theme_detail(ctx.payload, mode=ctx.mode)
+        raw_score, hit_detail = score_concept_resonance(concepts, ctx.payload, mode=ctx.mode)
         src = _concept_source(stock)
-        available = hit_detail.get("available", True)
-        if not main and not hit_detail.get("概念权重分"):
-            available = bool(hit_detail.get("available", False))
+        available = bool(hit_detail.get("available", True))
         return DimensionResult(
             self.name,
             clamp(raw_score),
