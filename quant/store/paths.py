@@ -65,6 +65,11 @@ def daily_review(name: str, d: str | None = None) -> Path:
     return daily_dir(d) / "review" / name
 
 
+def daily_cache(name: str, d: str | None = None) -> Path:
+    """当日可复用缓存：daily/{date}/cache/{name}（如问财所属概念）。"""
+    return daily_dir(d) / "cache" / name
+
+
 def state_file(name: str) -> Path:
     """热状态：optional.jsonl、holding.jsonl、account.json 等。"""
     return QUANT_HOME / "state" / name

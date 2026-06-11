@@ -113,6 +113,9 @@ class Settings(BaseSettings):
     QUANT_SCHED_POST_MARKET_LUNCH_TIME: str = "11:50"
     #: 晚间复盘（`post_market_evening`）；工作日当晚 + 假日前一夜（详见 orchestrator）。
     QUANT_SCHED_POST_MARKET_EVENING_TIME: str = "20:10"
+    #: 每日预取自选/持仓问财所属概念（减轻盘中 enrich 耗时）。
+    QUANT_SCHED_PREFETCH_CONCEPTS_ENABLED: bool = True
+    QUANT_SCHED_PREFETCH_CONCEPTS_TIME: str = "05:00"
     #: 错过触发窗口后的仍可执行宽限（秒）。
     QUANT_SCHED_MISFIRE_GRACE_SEC: int = Field(default=600, ge=60, le=86400)
 

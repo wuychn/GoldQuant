@@ -129,6 +129,19 @@ def _job_post_market_evening(_settings: Settings) -> None:
     _invoke_quant_cli("post_market_evening")
 
 
+def _job_prefetch_stock_concepts(_settings: Settings) -> None:
+    if not _settings.QUANT_SCHED_PREFETCH_CONCEPTS_ENABLED:
+        return
+    import asyncio
+
+    from app.services.stock_concept_cache import prefetch_optional_holding_concepts
+
+    try:
+        asyncio.run(prefetch_optional_holding_concepts())
+    except Exception:
+        logger.exception("[quant-scheduler] 预取个股概念失败")
+
+
 def build_quant_scheduler(settings: Settings) -> BackgroundScheduler | None:
     """按 `Settings` 构建并注册任务；调用方需在 lifespan 内 `start()` / `shutdown()`。"""
     if not settings.QUANT_SCHEDULER_ENABLED:
@@ -197,10 +210,24 @@ def build_quant_scheduler(settings: Settings) -> BackgroundScheduler | None:
         **defaults,
     )
 
+    if settings.QUANT_SCHED_PREFETCH_CONCEPTS_ENABLED:
+        ch, cm = _parse_hh_mm(settings.QUANT_SCHED_PREFETCH_CONCEPTS_TIME)
+        sched.add_job(
+            _job_prefetch_stock_concepts,
+            CronTrigger(timezone=tz, hour=ch, minute=cm),
+            args=[settings],
+            id="quant_prefetch_stock_concepts",
+            **defaults,
+        )
+
     n_during = len(during_times)
+    prefetch_note = ""
+    if settings.QUANT_SCHED_PREFETCH_CONCEPTS_ENABLED:
+        ch, cm = _parse_hh_mm(settings.QUANT_SCHED_PREFETCH_CONCEPTS_TIME)
+        prefetch_note = f", prefetch_concepts=%02d:%02d" % (ch, cm)
     logger.info(
         "[quant-scheduler] 已注册: news(hours=%s @ :%02d), pre=%02d:%02d, during×%d, "
-        "lunch=%02d:%02d, evening=%02d:%02d, tz=%s",
+        "lunch=%02d:%02d, evening=%02d:%02d%s, tz=%s",
         hour_spec,
         settings.QUANT_SCHED_NEWS_MINUTE,
         ph,
@@ -210,6 +237,7 @@ def build_quant_scheduler(settings: Settings) -> BackgroundScheduler | None:
         lm,
         eh,
         em,
+        prefetch_note,
         settings.QUANT_SCHED_TIMEZONE,
     )
     return sched

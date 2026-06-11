@@ -137,8 +137,9 @@ async def attach_stock_concepts_from_wencai(
     row: dict[str, Any],
     *,
     cache: dict[str, list[str] | None] | None = None,
+    file_cache=None,
 ) -> dict[str, Any]:
-    """始终先问财；仅问财失败或空时回退行内已有概念。"""
+    """优先日缓存文件，缺失再问财（同日同代码仅调一次）；失败或空时回退行内已有概念。"""
     item = dict(row)
     symbol = str(item.get("股票代码", "")).strip()
     if not symbol:
@@ -150,6 +151,7 @@ async def attach_stock_concepts_from_wencai(
         symbol,
         stock_name if isinstance(stock_name, str) else None,
         cache=cache,
+        file_cache=file_cache,
     )
     if concepts:
         item["所属概念"] = concepts
@@ -164,16 +166,22 @@ async def attach_concepts_to_rows(
     rows: list[dict],
     *,
     cache: dict[str, list[str] | None] | None = None,
+    file_cache=None,
     progress_scope: str | None = None,
     progress_label: str = "问财",
 ) -> list[dict]:
+    from app.services.stock_concept_cache import get_daily_concept_cache
+
     store = cache if cache is not None else _concept_cache
+    day_cache = file_cache if file_cache is not None else get_daily_concept_cache()
     out: list[dict] = []
     total = len(rows)
     for i, row in enumerate(rows):
         if not isinstance(row, dict):
             continue
-        out.append(await attach_stock_concepts_from_wencai(row, cache=store))
+        out.append(
+            await attach_stock_concepts_from_wencai(row, cache=store, file_cache=day_cache)
+        )
         if progress_scope and total and (i == 0 or i + 1 == total or (i + 1) % 5 == 0):
             code = str(row.get("股票代码", "")).strip()
             log_progress_count(progress_scope, progress_label, i + 1, total, detail=code)
@@ -185,22 +193,43 @@ async def fetch_stock_concepts_wcxg(
     name: str | None = None,
     *,
     cache: dict[str, list[str] | None] | None = None,
+    file_cache=None,
 ) -> list[str] | None:
+    from app.services.stock_concept_cache import get_daily_concept_cache
+
     key = str(symbol).strip()
+    if not key:
+        return None
     store = cache if cache is not None else _concept_cache
     if key in store:
         return store[key]
-    question = key
-    if name:
-        question = f"{question} {str(name).strip()}"
-    try:
-        concepts = await wcxg(question)
-        result = concepts if concepts else None
-    except Exception:
-        _log_error(f"问财所属概念 symbol={symbol!r}")
-        result = None
-    store[key] = result
-    return result
+
+    day_cache = file_cache if file_cache is not None else get_daily_concept_cache()
+    hit, cached = day_cache.lookup(key)
+    if hit:
+        store[key] = cached
+        return cached
+
+    async with day_cache.async_lock_for(key):
+        if key in store:
+            return store[key]
+        hit, cached = day_cache.lookup(key)
+        if hit:
+            store[key] = cached
+            return cached
+
+        question = key
+        if name:
+            question = f"{question} {str(name).strip()}"
+        try:
+            concepts = await wcxg(question)
+            result = concepts if concepts else None
+        except Exception:
+            _log_error(f"问财所属概念 symbol={symbol!r}")
+            result = None
+        day_cache.put(key, name=name, concepts=result)
+        store[key] = result
+        return result
 
 
 async def _ggzjl(symbol: str) -> dict | None:
@@ -229,6 +258,7 @@ async def enrich_stock_row(
     *,
     include_pre_snapshot: bool = False,
     concept_cache: dict[str, list[str] | None] | None = None,
+    concept_file_cache=None,
     skip_wencai: bool = False,
 ) -> dict[str, Any]:
     item = dict(row)
@@ -237,7 +267,11 @@ async def enrich_stock_row(
         return item
 
     if not skip_wencai:
-        item = await attach_stock_concepts_from_wencai(item, cache=concept_cache)
+        item = await attach_stock_concepts_from_wencai(
+            item,
+            cache=concept_cache,
+            file_cache=concept_file_cache,
+        )
 
     jbxx_ = _sync_call_or_none("股票基本信息", lambda: jbxx(symbol))
     if isinstance(jbxx_, dict):
@@ -273,10 +307,14 @@ async def enrich_stock_rows(
     include_pre_snapshot: bool = False,
     skip_wencai: bool = False,
     concept_cache: dict[str, list[str] | None] | None = None,
+    concept_file_cache=None,
     progress_scope: str | None = None,
     progress_label: str = "enrich",
 ) -> list[dict]:
+    from app.services.stock_concept_cache import get_daily_concept_cache
+
     cache = concept_cache if concept_cache is not None else _concept_cache
+    day_cache = concept_file_cache if concept_file_cache is not None else get_daily_concept_cache()
     out: list[dict] = []
     total = len(rows)
     for i, row in enumerate(rows):
@@ -288,6 +326,7 @@ async def enrich_stock_rows(
                 row,
                 include_pre_snapshot=include_pre_snapshot,
                 concept_cache=cache,
+                concept_file_cache=day_cache,
                 skip_wencai=skip_wencai,
             )
         )
