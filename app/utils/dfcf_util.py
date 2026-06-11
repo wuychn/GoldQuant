@@ -31,47 +31,6 @@ def pk(symbol):
     return list_to_dict(result)
 
 
-def lshq(symbol):
-    """
-    历史行情
-    :param symbol:
-    :return:
-    """
-    # 使用东方财富
-    return dataframe_to_records(
-        ak.stock_zh_a_hist(symbol=str(symbol), start_date=get_n_workdays_ago(), end_date=today()))
-    # 可以使用使用新浪
-    # ak.stock_zh_a_daily()
-
-
-def lhbrq(symbol):
-    """
-    龙虎榜日期
-    :return:
-    """
-    return dataframe_to_records(ak.stock_lhb_stock_detail_date_em(symbol=str(symbol)))
-
-
-def lhbxq(symbol, date, type_):
-    """
-    龙虎榜详情
-    :param symbol:
-    :param date:
-    :param type_:
-    :return:
-    """
-    return dataframe_to_records(ak.stock_lhb_stock_detail_em(symbol=str(symbol), date=date, flag=type_))
-
-
-def xw(symbol):
-    """
-    个股新闻
-    :param symbol:
-    :return:
-    """
-    return dataframe_to_records(ak.stock_news_em(symbol=str(symbol)))
-
-
 def ztgc_with_date(trade_date):
     records = dataframe_to_records(ak.stock_zt_pool_previous_em(date=trade_date))
     for item in records:
@@ -157,49 +116,8 @@ def hist(symbol, period='daily', *, start_date=None, end_date=None):
         ak.stock_zh_a_hist(symbol=str(symbol), period=period, start_date=start, end_date=end))
 
 
-async def all_stocks():
-    """
-    实时返回所有A股数据
-
-    TODO，添加缓存，缓存5天
-    :return:
-    """
-    result = []
-    sh = dataframe_to_records(ak.stock_sh_a_spot_em())
-    xz = dataframe_to_records(ak.stock_sz_a_spot_em())
-    result.append(sh)
-    result.append(xz)
-    return {i['代码']: i for i in result}
-
-
-def ggjbxx(symbol):
-    """
-    获取个股基本信息
-    :param symbol:
-    :return:
-    """
-    jbxx_ = jbxx(symbol)
-
-    # 个股买卖报价（买卖盘口）
-    pk_ = pk(symbol)
-
-    # 个股历史行情
-    lshq_ = lshq(symbol)
-
-    # 个股龙虎榜日期
-    lhbrq_ = lhbrq(symbol)
-
-    # 个股龙虎榜详情
-    lhbmr = lhbxq(symbol, today(), '买入')
-    lhbmc = lhbxq(symbol, today(), '卖出')
-
-    # 个股新闻
-    xw_ = xw(symbol)
-
-
 if __name__ == "__main__":
-    # print(json.dumps(jbxx(600519), ensure_ascii=False, indent=2))
-    print(json.dumps(all_stocks()))
+    print(json.dumps(jbxx("600519"), ensure_ascii=False, indent=2))
     # print(hqbj_dc(600519))
     # print(hqbj("002580"))
     # print(json.dumps(ztgc(), ensure_ascii=False, indent=2))

@@ -28,7 +28,7 @@ from app.utils.common_util import (
 )
 from app.utils.dataframe import dataframe_to_records
 from app.utils.dfcf_util import ztgc, ztgc_with_date
-from app.services.stock_enrich import attach_stock_concepts_from_wencai, enrich_stock_rows, fetch_stock_concepts_wcxg
+from app.services.stock_enrich import attach_stock_concepts_from_wencai, enrich_stock_rows
 from app.utils.etf52_util import zdfb_52etf
 from app.utils.ths_util import stock_fund_flow_concept, hot_stock, zdfb_ths
 from quant.pool.candidate_config import PAYLOAD_KEY_PKYD, PAYLOAD_KEY_POPULARITY, PAYLOAD_KEY_ZT
@@ -165,16 +165,6 @@ def _merge_concept_boards(jzf: list | None, jzj: list | None, jdf: list | None, 
 def _log_api_error(context: str) -> None:
     """记录上游/本地调用失败，带固定上下文便于定位，避免单点异常拖垮整次聚合。"""
     logger.exception("量化数据接口异常 [%s]", context)
-
-
-async def _fetch_stock_concepts_wcxg(
-    symbol: str,
-    name: str | None = None,
-    *,
-    cache: dict[str, list[str] | None] | None = None,
-) -> list[str] | None:
-    """问财查询个股所属概念（委托 ``app.services.stock_enrich``）。"""
-    return await fetch_stock_concepts_wcxg(symbol, name, cache=cache)
 
 
 async def zjl_(n: int) -> list | None:
@@ -423,13 +413,22 @@ async def _hot(settings: SettingsDep, *, progress_scope: str | None = "during_ma
         rows = prefilter_popularity(raw_hot if isinstance(raw_hot, list) else [])
         scope = progress_scope or "during_market"
         log_progress(scope, "人气榜问财补概念", detail=f"共 {len(rows)} 只")
+        from app.services.stock_concept_cache import get_daily_concept_cache
+
         out: list[dict[str, Any]] = []
-        cache: dict[str, list[str] | None] = {}
+        mem_cache: dict[str, list[str] | None] = {}
+        day_cache = get_daily_concept_cache()
         total = len(rows)
         for i, item in enumerate(rows):
             if not isinstance(item, dict):
                 continue
-            out.append(await attach_stock_concepts_from_wencai(item, cache=cache))
+            out.append(
+                await attach_stock_concepts_from_wencai(
+                    item,
+                    cache=mem_cache,
+                    file_cache=day_cache,
+                )
+            )
             if total and (i == 0 or i + 1 == total or (i + 1) % 5 == 0):
                 code = str(item.get("股票代码", "")).strip()
                 log_progress_count(scope, "问财", i + 1, total, detail=code)

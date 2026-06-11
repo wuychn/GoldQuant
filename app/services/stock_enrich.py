@@ -7,7 +7,7 @@ from typing import Any
 
 from app.core.config import Settings
 from app.utils.common_util import get_n_workdays_ago, list_to_dict_v2
-from app.utils.dfcf_util import hist, jbxx, pk
+from app.utils.dfcf_util import hist, pk
 from app.utils.quant_archive import (
     daily_hist_fetch_start_date,
     load_computed_metrics_zh,
@@ -273,7 +273,9 @@ async def enrich_stock_row(
             file_cache=concept_file_cache,
         )
 
-    jbxx_ = _sync_call_or_none("股票基本信息", lambda: jbxx(symbol))
+    from app.services.stock_jbxx_cache import fetch_jbxx_cached
+
+    jbxx_ = fetch_jbxx_cached(symbol)
     if isinstance(jbxx_, dict):
         for k in ("总股本", "流通股", "总市值", "流通市值", "上市时间"):
             if k in jbxx_:

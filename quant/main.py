@@ -45,9 +45,11 @@ def main():
         import asyncio
 
         from app.services.stock_concept_cache import prefetch_optional_holding_concepts
+        from app.services.stock_jbxx_cache import prefetch_optional_holding_jbxx
 
-        n = asyncio.run(prefetch_optional_holding_concepts())
-        print(f"预取问财概念完成，新拉取 {n} 只")
+        n_concepts = asyncio.run(prefetch_optional_holding_concepts())
+        n_jbxx = prefetch_optional_holding_jbxx()
+        print(f"预取完成：问财概念新拉取 {n_concepts} 只，基本信息新拉取 {n_jbxx} 只")
         return
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     run_mode(mode, timestamp)

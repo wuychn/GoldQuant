@@ -8,6 +8,7 @@
   daily/     按交易日归档（raw/derived/trades/review）
   config/    用户 quant.yml、ml_calibration.yml
   memory/    新闻摘要、经验教训
+  cache/     跨日短缓存（如个股基本信息）
   archive/   跨日汇总（预留）
 """
 
@@ -30,6 +31,7 @@ def ensure_layout() -> None:
         "daily",
         "archive",
         "memory",
+        "cache",
     ):
         (QUANT_HOME / sub).mkdir(parents=True, exist_ok=True)
 
@@ -68,6 +70,11 @@ def daily_review(name: str, d: str | None = None) -> Path:
 def daily_cache(name: str, d: str | None = None) -> Path:
     """当日可复用缓存：daily/{date}/cache/{name}（如问财所属概念）。"""
     return daily_dir(d) / "cache" / name
+
+
+def quant_cache_file(name: str) -> Path:
+    """跨日短缓存：~/.quant/cache/{name}。"""
+    return QUANT_HOME / "cache" / name
 
 
 def state_file(name: str) -> Path:

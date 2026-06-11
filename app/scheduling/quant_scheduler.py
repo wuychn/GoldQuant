@@ -135,11 +135,13 @@ def _job_prefetch_stock_concepts(_settings: Settings) -> None:
     import asyncio
 
     from app.services.stock_concept_cache import prefetch_optional_holding_concepts
+    from app.services.stock_jbxx_cache import prefetch_optional_holding_jbxx
 
     try:
         asyncio.run(prefetch_optional_holding_concepts())
+        prefetch_optional_holding_jbxx()
     except Exception:
-        logger.exception("[quant-scheduler] 预取个股概念失败")
+        logger.exception("[quant-scheduler] 预取个股静态数据失败")
 
 
 def build_quant_scheduler(settings: Settings) -> BackgroundScheduler | None:
