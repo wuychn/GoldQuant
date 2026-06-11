@@ -121,29 +121,43 @@ gates:
   stoploss_cooldown_days: 3         # 止损卖出后 N 日内不再买同代码
   block_same_day_rebuy_after_sell: true  # 当日卖出过的代码当日不再买入
 
-  # 三确认：同 code+方向+signal_kind 连续 N 次信号才 execute
+  # 持续确认：条件须连续保持 persistence_minutes + min_consecutive_runs 轮调度
   confirmation:
-    required_count: 3
-    skip_count_modes:             # 这些模式只生成原始信号，不计入三确认
-      - pre_market                  # 首次计数从 09:37 盘中开始
-    # 按 signal_kind 覆盖 min/max 间隔（分钟）
+    default_persistence_minutes: 15   # 买入默认持续时长（10 分钟调度：约 09:37→09:52）
+    default_min_consecutive_runs: 2   # 买入默认连续轮次
+    max_window_minutes: 180           # 自首次满足起超过此窗口仍未成交则重新计时
+    skip_count_modes:                 # 这些模式只生成原始信号，不计入持续确认
+      - pre_market                      # 盘中从 09:37 起算
     by_kind:
+      止损:
+        persistence_minutes: 0
+        min_consecutive_runs: 1
+      日内走弱:
+        persistence_minutes: 10
+        min_consecutive_runs: 2
+      # 上升途中 / 回调企稳：买入继承下方 强势/震荡/弱势，不设 by_kind 覆盖
       破5日线:
-        min_interval_minutes: 15
-        max_interval_minutes: 120
+        persistence_minutes: 20
+        min_consecutive_runs: 3
       趋势衰竭:
-        min_interval_minutes: 30
-        max_interval_minutes: 4320  # 72h，允许多日逐步确认
-    # 默认间隔（按市场状态 强势/震荡/弱势）
+        persistence_minutes: 30
+        min_consecutive_runs: 3
+        max_window_minutes: 4320       # 72h，允许多日逐步确认
+      评分走弱:
+        persistence_minutes: 20
+        min_consecutive_runs: 3
     强势:
-      min_interval_minutes: 15
-      max_interval_minutes: 120
+      persistence_minutes: 10   # 买入约 09:37→09:47（2 轮）
+      min_consecutive_runs: 2
+      max_window_minutes: 120
     震荡:
-      min_interval_minutes: 10      # 与盘中 10 分钟调度对齐
-      max_interval_minutes: 180
+      persistence_minutes: 15   # 买入约 09:37→09:52（2 轮）
+      min_consecutive_runs: 2
+      max_window_minutes: 180
     弱势:
-      min_interval_minutes: 30
-      max_interval_minutes: 240
+      persistence_minutes: 30
+      min_consecutive_runs: 3
+      max_window_minutes: 240
 
   # 概念板块：滑动窗口四榜快照 + concept_theme 概念权重；仅晚间复盘写入状态
   concept_tracker:
@@ -207,12 +221,23 @@ gates:
         min_day_change_pct: -1.5      # 当日涨幅下限(%)
         hard_net_outflow_wan: 8000    # 当日净流出硬上限(万元)
 
-  # 卖出：止损 + 神奇2点30 最终确认
+  # 卖出：止损 + 日内走弱 + 神奇2点30 最终确认
   sell:
     stop_loss_pct: -5.0             # 浮亏 ≤ 此值 → 止损（不受 14:30 限制）
+    intraday_weakness:              # 智能盯盘：冲高回落且跌破分时均价（与 buy.intraday 对称）
+      enabled: true
+      modes:
+        - during_market
+      max_drop_from_high_pct: 3.0   # 距日内最高回撤 ≥ 此值(%)
+      avg_break_margin_pct: 0.15    # 现价 < 均价×(1−margin) 视为有效跌破
+      min_minute_bars: 8            # 至少 N 根连续竞价分钟 K（过滤开盘噪声）
+      lookback_minutes: 10          # 近 N 分钟分时确认窗口
+      min_recent_drop_pct: 0.25     # 近 N 分钟累计跌幅 ≥ 此值(%)
+      min_down_bars_ratio: 0.55     # 近 N 分钟下跌 K 线占比 ≥
+      require_recent_weakness: true # 是否要求近端分时走弱（上述两项）
     late_session_after: "14:30"     # 趋势类卖出第 3 次确认须在此之后
     late_session_final_only: true     # true=第1/2次可早于此，第3次须晚于此
-    late_session_kinds:               # 适用神奇2点30 的 signal_kind
+    late_session_kinds:               # 适用神奇2点30 的 signal_kind（不含止损/日内走弱）
       - 破5日线
       - 趋势衰竭
       - 评分走弱

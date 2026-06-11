@@ -1,4 +1,4 @@
-"""信号流水线：原始信号 → 同日防翻转 → 三确认 → 可执行信号。"""
+"""信号流水线：原始信号 → 同日防翻转 → 持续确认 → 可执行信号。"""
 
 from __future__ import annotations
 
@@ -38,14 +38,14 @@ def generate_confirmed_signals(
     if mode in skip_modes:
         audit = [
             {
-                "状态": "盘前不计入三确认",
+                "状态": "盘前不计入持续确认",
                 "说明": "首次计数自09:37盘中调度起算",
                 "可执行": False,
             }
         ]
         return raw_buy, raw_sell, [], audit
 
-    exec_buy, audit_buy = apply_three_confirmations(raw_buy, ctx)
-    exec_sell, audit_sell = apply_three_confirmations(raw_sell, ctx)
+    exec_buy, audit_buy = apply_three_confirmations(raw_buy, ctx, scope_action="买入")
+    exec_sell, audit_sell = apply_three_confirmations(raw_sell, ctx, scope_action="卖出")
     audit = audit_buy + audit_sell
     return raw_buy, raw_sell, exec_sell + exec_buy, audit

@@ -138,3 +138,80 @@ def intraday_allows_buy(
             return False, f"当日净流出{abs(net):.0f}万过大"
 
     return True, "分时强势"
+
+
+def _intraday_weakness_cfg(sell_cfg: dict[str, Any] | None) -> dict[str, Any]:
+    c = sell_cfg or {}
+    weak = dict(c.get("intraday_weakness") or {})
+    weak.setdefault("enabled", True)
+    return weak
+
+
+def _session_high(stock: dict, bars: list[dict]) -> float | None:
+    pk = stock.get("盘口") if isinstance(stock.get("盘口"), dict) else {}
+    high = to_float(pk.get("最高"))
+    if high and high > 0:
+        return high
+    if not bars:
+        return None
+    return max(b["close"] for b in bars)
+
+
+def intraday_weakness_triggers_sell(
+    stock: dict,
+    sell_cfg: dict[str, Any] | None = None,
+) -> tuple[bool, str]:
+    """盘中走弱卖出：冲高回落 + 有效跌破分时均价 + 近端分时确认。
+
+    与买入 ``intraday_allows_buy`` 对称，用于持仓止盈/避险，不依赖破 5 日线。
+    """
+    cfg = _intraday_weakness_cfg(sell_cfg)
+    if not cfg.get("enabled", True):
+        return False, ""
+
+    bars = _session_minute_bars(stock)
+    min_bars = max(3, int(cfg.get("min_minute_bars", 8)))
+    if len(bars) < min_bars:
+        return False, ""
+
+    last = quote_last_price(stock)
+    if not last or last <= 0:
+        return False, ""
+
+    high = _session_high(stock, bars)
+    if not high or high <= 0:
+        return False, ""
+
+    dd_pct = (last - high) / high * 100
+    min_dd = float(cfg.get("max_drop_from_high_pct", 3.0))
+    if dd_pct > -min_dd:
+        return False, ""
+
+    avg = quote_avg_price(stock) or _vwap(bars)
+    if not avg or avg <= 0:
+        return False, ""
+
+    margin = float(cfg.get("avg_break_margin_pct", 0.15))
+    ceiling = avg * (1 - margin / 100)
+    if last >= ceiling:
+        return False, ""
+
+    if cfg.get("require_recent_weakness", True):
+        lookback = max(3, int(cfg.get("lookback_minutes", 10)))
+        recent = bars[-lookback:]
+        if len(recent) >= 3:
+            closes = [b["close"] for b in recent]
+            drop_pct = (closes[-1] - closes[0]) / closes[0] * 100
+            min_recent_drop = float(cfg.get("min_recent_drop_pct", 0.25))
+            if drop_pct > -min_recent_drop:
+                return False, ""
+
+            down_steps = sum(1 for i in range(1, len(closes)) if closes[i] < closes[i - 1])
+            min_down_ratio = float(cfg.get("min_down_bars_ratio", 0.55))
+            if down_steps / (len(closes) - 1) < min_down_ratio:
+                return False, ""
+
+    return (
+        True,
+        f"距日内高点回撤{abs(dd_pct):.2f}%，现价{last:.2f}有效低于分时均价{avg:.2f}",
+    )

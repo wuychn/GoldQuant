@@ -138,7 +138,7 @@ def build_engine_brief(
         if trades:
             lines.append("")
             lines.append(f"上一交易日成交：{trades}")
-        lines.append("三确认：盘前不计数，买卖确认自09:37盘中首次调度起算。")
+        lines.append("持续确认：盘前不计入；盘中自09:37起条件须连续保持足够时长与轮次。")
 
     if mode == "post_market_lunch":
         opt_rows = [r for r in (payload.get("自选股") or []) if isinstance(r, dict)]

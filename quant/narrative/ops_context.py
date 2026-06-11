@@ -24,6 +24,7 @@ def _simplify_reason(text: str) -> str:
     s = re.sub(r"^\[[^\]]+\]", "", s)
     s = re.sub(r"评分\d+(?:\.\d+)?[；;]?", "", s)
     s = re.sub(r"三确认完成[^；;]*[；;]?", "", s)
+    s = re.sub(r"持续确认完成[^；;]*[；;]?", "", s)
     s = s.strip("；; ")
 
     rules: list[tuple[re.Pattern[str], str]] = [
@@ -32,6 +33,7 @@ def _simplify_reason(text: str) -> str:
         (re.compile(r"近\d+分钟跌多涨少"), "分时跌多涨少，先观望"),
         (re.compile(r"分时资金未见改善"), "分时承接一般"),
         (re.compile(r"距日内高点回撤[\d.]+%过大"), "冲高回落明显，不接"),
+        (re.compile(r"距日内高点回撤[\d.]+%，现价[\d.]+有效低于分时均价[\d.]+"), "冲高回落且跌破均价"),
         (re.compile(r"当日涨幅[\d.-]+%偏弱"), "日内走势偏弱"),
         (re.compile(r"波段内未触发买点"), "趋势在但买点还没出来"),
         (re.compile(r"未满足主升趋势"), "还没走成主升形态"),
@@ -54,14 +56,16 @@ def _audit_line(row: dict) -> str | None:
     status = str(row.get("状态") or "")
     action = str(row.get("方向") or "")
     is_sell = action == "卖出"
-    if is_sell and ("等待14:30" in status or "第二次确认" in status):
-        return f"{name}：卖点已二次确认，等尾盘最终确认"
+    if is_sell and "等待14:30" in status:
+        return f"{name}：卖点条件已满足，等尾盘最终确认"
+    if is_sell and "持续确认中" in status:
+        return f"{name}：卖点条件持续确认中"
     if is_sell and "确认" in status:
-        return f"{name}：出现卖点信号，确认次数还不够"
-    if not is_sell and ("等待14:30" in status or "第二次确认" in status):
-        return f"{name}：买点已二次确认，等尾盘最终确认"
+        return f"{name}：出现卖点信号，仍在持续确认"
+    if not is_sell and "持续确认中" in status:
+        return f"{name}：买点条件持续确认中"
     if not is_sell and "确认" in status:
-        return f"{name}：出现买点信号，确认次数还不够"
+        return f"{name}：出现买点信号，仍在持续确认"
     reason = _simplify_reason(str(row.get("理由") or ""))
     return f"{name}：{reason}" if reason else None
 

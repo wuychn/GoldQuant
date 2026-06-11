@@ -135,16 +135,23 @@ def optimize_confirmation_intervals(
     *,
     base_cfg: dict,
 ) -> dict[str, Any]:
-    """按市场状态搜索三确认 min/max 间隔（分钟）。
+    """按市场状态搜索持续确认 persistence / 连续轮次。
 
-    强势市场允许更短间隔；弱势更长。用样本 label 分布作代理优化 F1。
+    强势市场允许更短持续；弱势更长。用样本 label 分布作代理优化 F1。
     """
     from quant.config import load_gates_config
 
     gates = load_gates_config()
     conf_base = gates.get("confirmation") or base_cfg.get("confirmation") or {}
     regimes = ("强势", "震荡", "弱势")
-    out: dict[str, Any] = {"required_count": int(conf_base.get("required_count", 3))}
+    out: dict[str, Any] = {
+        "default_persistence_minutes": float(
+            conf_base.get("default_persistence_minutes", 15)
+        ),
+        "default_min_consecutive_runs": int(
+            conf_base.get("default_min_consecutive_runs", 2)
+        ),
+    }
 
     y = _labels(samples)
     totals = np.array([s.total for s in samples], dtype=float)
@@ -152,20 +159,21 @@ def optimize_confirmation_intervals(
         for r in regimes:
             block = conf_base.get(r) or {}
             out[r] = {
-                "min_interval_minutes": float(block.get("min_interval_minutes", 20)),
-                "max_interval_minutes": float(block.get("max_interval_minutes", 180)),
+                "persistence_minutes": float(block.get("persistence_minutes", 15)),
+                "min_consecutive_runs": int(block.get("min_consecutive_runs", 2)),
+                "max_window_minutes": float(block.get("max_window_minutes", 180)),
             }
         return out
 
     regime_grid = {
-        "强势": [(10, 90), (15, 120), (20, 150)],
-        "震荡": [(15, 120), (20, 180), (25, 210)],
-        "弱势": [(25, 180), (30, 240), (35, 300)],
+        "强势": [(10, 2), (15, 2), (20, 3)],
+        "震荡": [(15, 2), (20, 3), (25, 3)],
+        "弱势": [(25, 3), (30, 3), (35, 4)],
     }
     for regime in regimes:
         best_f1 = -1.0
-        best_pair = (20.0, 180.0)
-        for mn, mx in regime_grid.get(regime, [(20, 180)]):
+        best_pair = (20.0, 3)
+        for persist, runs in regime_grid.get(regime, [(20, 3)]):
             wt = float(conf_base.get("watchlist_threshold", 65)) if isinstance(conf_base, dict) else 65
             pred = (totals >= wt).astype(int)
             from sklearn.metrics import f1_score
@@ -173,10 +181,13 @@ def optimize_confirmation_intervals(
             f1 = f1_score(y, pred, zero_division=0)
             if f1 > best_f1:
                 best_f1 = f1
-                best_pair = (float(mn), float(mx))
+                best_pair = (float(persist), int(runs))
         out[regime] = {
-            "min_interval_minutes": best_pair[0],
-            "max_interval_minutes": best_pair[1],
+            "persistence_minutes": best_pair[0],
+            "min_consecutive_runs": best_pair[1],
+            "max_window_minutes": float(
+                (conf_base.get(regime) or {}).get("max_window_minutes", 180)
+            ),
         }
     return out
 

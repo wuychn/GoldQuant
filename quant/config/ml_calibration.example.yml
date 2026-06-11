@@ -17,18 +17,22 @@ dimension_weights:
   concept_theme: 14.0
   popularity_rank: 11.0
 
-# 三确认间隔（按市场状态，写入 quant.yml gates.confirmation）
+# 持续确认（按市场状态，写入 quant.yml gates.confirmation）
 confirmation:
-  required_count: 3
+  default_persistence_minutes: 15
+  default_min_consecutive_runs: 2
   强势:
-    min_interval_minutes: 15
-    max_interval_minutes: 120
+    persistence_minutes: 10
+    min_consecutive_runs: 2
+    max_window_minutes: 120
   震荡:
-    min_interval_minutes: 20
-    max_interval_minutes: 180
+    persistence_minutes: 15
+    min_consecutive_runs: 2
+    max_window_minutes: 180
   弱势:
-    min_interval_minutes: 30
-    max_interval_minutes: 240
+    persistence_minutes: 30
+    min_consecutive_runs: 3
+    max_window_minutes: 240
 
 main_wave:
   min_ma_spread_pct: 0.9

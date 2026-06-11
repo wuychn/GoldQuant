@@ -71,8 +71,13 @@ def _apply_ml_gates(gates: dict, ml: dict) -> None:
         for regime in ("强势", "震荡", "弱势"):
             if regime in conf and isinstance(conf[regime], dict):
                 block.setdefault(regime, {}).update(conf[regime])
-        if "required_count" in conf:
-            block["required_count"] = conf["required_count"]
+        for key in (
+            "default_persistence_minutes",
+            "default_min_consecutive_runs",
+            "max_window_minutes",
+        ):
+            if key in conf:
+                block[key] = conf[key]
     mw = ml.get("main_wave")
     if isinstance(mw, dict):
         gates.setdefault("main_wave", {}).update(mw)

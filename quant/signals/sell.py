@@ -5,6 +5,7 @@ from __future__ import annotations
 from quant.config import load_gates_config
 from quant.constants import (
     BUY_KIND_PULLBACK,
+    SELL_KIND_INTRADAY_WEAK,
     SELL_KIND_MA5_BREAK,
     SELL_KIND_TREND_ERODE,
     STRATEGY_NAME,
@@ -14,6 +15,7 @@ from quant.scoring.engine import ScoringEngine
 from quant.signals.models import TradeSignal
 from quant.store.state import get_holdings
 from quant.scoring.tech_indicators import mas_from_stock, quote_last_price
+from quant.strategy.intraday import intraday_weakness_triggers_sell
 from quant.strategy.main_wave import detect_sell_setup
 from quant.strategy.trend import (
     PHASE_DOWN,
@@ -26,6 +28,14 @@ from quant.strategy.trend import (
 
 def _price(stock: dict) -> float | None:
     return quote_last_price(stock)
+
+
+def _intraday_weakness_applies(ctx: ScoreContext, sell_cfg: dict) -> bool:
+    weak = sell_cfg.get("intraday_weakness") or {}
+    if not weak.get("enabled", True):
+        return False
+    modes = weak.get("modes") or ["during_market"]
+    return bool(ctx.mode and ctx.mode in modes)
 
 
 def _position_buy_kind(holding: dict) -> str:
@@ -78,6 +88,12 @@ def generate_sell_signals(ctx: ScoreContext) -> list[TradeSignal]:
             sell_type = "止损"
             kind = "止损"
             reason = f"浮亏{pnl_pct:.2f}%≤{stop_loss}%"
+        elif _intraday_weakness_applies(ctx, sell_cfg):
+            ok_weak, weak_reason = intraday_weakness_triggers_sell(enriched, sell_cfg)
+            if ok_weak:
+                sell_type = "日内走弱"
+                kind = SELL_KIND_INTRADAY_WEAK
+                reason = weak_reason
         elif buy_kind == BUY_KIND_PULLBACK:
             m = mas_from_stock(enriched)
             ma20 = m.get("ma20")
