@@ -394,6 +394,25 @@ def write_news_summary(text: str) -> None:
     _write_text_atomic(memory_file("news_summary.txt"), text)
 
 
+def read_global_macro() -> dict[str, Any]:
+    path = memory_file("global_macro.json")
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def write_global_macro(data: dict[str, Any]) -> None:
+    ensure_layout()
+    _write_text_atomic(
+        memory_file("global_macro.json"),
+        json.dumps(data, ensure_ascii=False, indent=2),
+    )
+
+
 def read_lessons() -> str:
     return _read_text(memory_file("lessons.md")).strip()
 

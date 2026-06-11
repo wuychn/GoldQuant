@@ -27,6 +27,7 @@ from quant.scoring.context import (
     zt_height,
 )
 from quant.narrative.push_style import BRIEF_PREAMBLE, profit_effect_level
+from quant.scoring.global_macro import global_macro_for_scoring
 from quant.scoring.theme_tracker import theme_detail
 from quant.scoring.tech_indicators import stock_daily_change_pct
 from quant.strategy.main_wave import is_in_main_wave
@@ -119,6 +120,18 @@ def build_engine_brief(
         lines.append("")
         lines.append("近几日概念轮动：")
         lines.append(rotation)
+
+    if mode == "during_market":
+        macro = global_macro_for_scoring()
+        if macro:
+            label = {"bearish": "利空", "neutral": "中性", "bullish": "利好"}.get(
+                macro["sentiment"], macro["sentiment"]
+            )
+            reason = macro.get("reason") or "—"
+            lines.append(
+                f"全球宏观评分（规则引擎，勿与新闻摘要重复展开）：{label} "
+                f"{macro['score']:.0f}分（{reason}）"
+            )
 
     if mode == "pre_market":
         trades = format_yesterday_trades()

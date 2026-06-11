@@ -38,6 +38,7 @@ from quant.push.feishu import get_token, send_msg
 from quant.push.format import format_push_message
 from quant.scoring.context import ScoreContext
 from quant.scoring.engine import ScoringEngine
+from quant.scoring.global_macro import refresh_global_macro_from_summary
 from quant.signals.pipeline import generate_confirmed_signals
 from quant.store.snapshot import save_derived, save_raw, save_review
 from quant.store.state import (
@@ -170,9 +171,22 @@ def process_news(raw: dict, timestamp: str) -> str:
     log_progress(scope, "LLM 新闻解读", detail=f"共 {len(news_list)} 条")
     user = json.dumps({"news": news_list}, ensure_ascii=False)[:140000]
     summary = call_llm(prompt_news(), user, max_tokens=4000)
+    news_summary_text = ""
     if "综合解读" in summary:
         tail = summary.split("综合解读", 1)[-1]
-        write_news_summary(f"综合解读{tail.strip()[:800]}")
+        news_summary_text = f"综合解读{tail.strip()[:800]}"
+        write_news_summary(news_summary_text)
+    if news_summary_text:
+        log_progress(scope, "全球宏观评分")
+        macro = refresh_global_macro_from_summary(news_summary_text)
+        if macro:
+            log_progress(
+                scope,
+                "全球宏观评分完成",
+                detail=f"{macro.get('sentiment')} {macro.get('score')}",
+            )
+        else:
+            log_progress(scope, "全球宏观评分跳过", detail="LLM 未返回有效 JSON")
     log_progress_done(scope, "新闻分析完成")
     return summary
 

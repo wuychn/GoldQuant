@@ -53,7 +53,7 @@ scoring:
       weight: 9
     stock_history:          # 近30日：5%+涨幅占比、均线发散、周/月线向上
       enabled: true
-      weight: 11
+      weight: 12
       lookback_days: 30
       big_move_pct: 5.0           # 单日涨幅≥此值(%) 计为大涨日
       big_move_weight: 0.40       # 大涨占比子分权重
@@ -65,7 +65,7 @@ scoring:
       weight: 8
     market_index:           # 大盘指数涨跌
       enabled: true
-      weight: 4
+      weight: 3
     market_sentiment:       # 赚钱效应（涨跌比 + 涨停家数）
       enabled: true
       weight: 4
@@ -87,6 +87,14 @@ scoring:
     stock_news:             # 个股新闻情绪
       enabled: false
       weight: 0
+    global_macro:           # 全球宏观/地缘（news 模式 LLM 判定，仅智能盯盘参与加权）
+      enabled: true
+      weight: 2
+      modes:
+        - during_market
+      bearish_score: 5        # 利空 0～10 区间取中
+      neutral_score: 50
+      bullish_score: 95       # 利好 90～100 区间取中
 
 # -----------------------------------------------------------------------------
 # gates — 硬门禁 + 战法参数 + 三确认（不可被 LLM 修改）

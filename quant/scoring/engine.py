@@ -6,6 +6,7 @@ from quant.config import load_scoring_config
 from quant.constants import STRATEGY_NAME
 from quant.scoring.context import ScoreContext
 from quant.scoring.dimensions.concept_theme import ConceptThemeScorer
+from quant.scoring.dimensions.global_macro import GlobalMacroScorer
 from quant.scoring.dimensions.main_wave import MainWaveScorer
 from quant.scoring.dimensions.market_fund_flow import MarketFundFlowScorer
 from quant.scoring.dimensions.market_index import MarketIndexScorer
@@ -35,6 +36,7 @@ _SCORERS = {
     "minute_bars": StubScorer("minute_bars"),
     "us_overnight": StubScorer("us_overnight"),
     "stock_news": StubScorer("stock_news"),
+    "global_macro": GlobalMacroScorer(),
 }
 
 
