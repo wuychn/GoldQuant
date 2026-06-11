@@ -56,6 +56,7 @@ _RE_INTERNAL_PHRASES: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"当前主线"), "概念板块"),
     (re.compile(r"主线复盘"), "大盘概况"),
     (re.compile(r"三、持仓跟踪"), "三、持仓股表现"),
+    (re.compile(r"三、持仓监控"), "三、持仓股表现"),
     (re.compile(r"七、自选更新"), "八、自选更新"),
 ]
 _RE_BLANK_LINES = re.compile(r"\n{3,}")

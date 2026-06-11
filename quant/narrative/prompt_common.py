@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from quant.config import LLM_OUTPUT_FORMAT
-from quant.narrative.push_style import DEPRECATED_PUSH_TERMS, compose_narrative_rule
+from quant.narrative.push_style import (
+    DEPRECATED_PUSH_TERMS,
+    WATCHLIST_HOLDINGS_SEPARATION,
+    compose_narrative_rule,
+)
 from quant.store.state import get_total_assets
 
 # 盘中/盘前/午间共用成交额与字段口径
@@ -27,6 +31,7 @@ def build_persona() -> str:
         "参考信息为空时写「暂无」，勿从原始 JSON 自行推断。\n"
         "当前持仓以写作参考「当前持仓」及 JSON「持仓股」为准；"
         "有持仓时禁止写「空仓」「无持仓」「未持股」。\n"
+        "自选股见 JSON「自选股」或写作参考「自选股表现范围」，与持仓股分轨叙述，禁止混为一谈。\n"
         "正文须符合人类阅读习惯：直接写「当日涨幅」「资金流入」「概念板块」「主升波段」等，"
         "禁止「研判中的当日涨幅」「研判要点」「写作参考」「接口数据 JSON」等内部用语。\n"
         "正文禁止出现「程序结论」「程序确认」「程序认定」「规则引擎」「程序归档」"
@@ -64,6 +69,11 @@ def data_semantics_note(mode: str) -> str:
         )
         if mode == "pre_market":
             notes.append("【盘前提示】竞价前 `赚钱效应.成交额.今日累计` 可能为 0 或极小。\n")
+        if mode == "during_market":
+            notes.append(
+                "【智能盯盘专节】二、自选股表现：仅写 JSON「自选股」。"
+                "三、持仓股表现：仅写 JSON「持仓股」及写作参考「持仓股表现」，与自选股分轨。\n"
+            )
     elif mode == "post_market_evening":
         notes.append(
             "【字段口径】`大盘指数[].成交额` 为指数收盘后累计；大盘资金流主力净流入单位为「元」；"
@@ -98,6 +108,7 @@ def compose_review_prompt(
     """复盘类 prompt：角色 + 任务 + 字段口径 + 叙述规则 + 章节大纲。"""
     body = (
         build_persona()
+        + WATCHLIST_HOLDINGS_SEPARATION
         + task
         + data_semantics_note(mode)
         + compose_narrative_rule(ops_note=ops_note)

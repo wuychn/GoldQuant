@@ -183,10 +183,8 @@ def process_pre_market(raw: dict) -> str:
     payload = _prepare_payload(raw)
     ctx = ScoreContext.from_payload(payload, mode="pre_market")
 
-    log_progress(scope, "生成买卖信号")
+    log_progress(scope, "生成买卖信号（盘前不计三确认，仅落盘）")
     raw_buy, raw_sell, executable, audit = generate_confirmed_signals(ctx, mode="pre_market")
-    log_progress(scope, "执行模拟成交", detail=f"可执行 {len(executable)} 条")
-    executed = execute_signals(executable)
     brief = build_engine_brief(ctx, payload, mode="pre_market")
 
     log_progress(scope, "LLM 盘前文案")
@@ -195,14 +193,6 @@ def process_pre_market(raw: dict) -> str:
         build_user_msg(payload, mode="pre_market", engine_brief=brief),
         max_tokens=8000,
     )
-    no_trade = (
-        ""
-        if executed
-        else build_no_trade_note(
-            ctx, mode="pre_market", raw_buy=raw_buy, raw_sell=[], audit=audit
-        )
-    )
-    ops = _build_operation_section(executed, section="四、操作", no_trade_detail=no_trade)
     save_derived(
         "signals.json",
         {
@@ -212,8 +202,8 @@ def process_pre_market(raw: dict) -> str:
             "confirmation_audit": audit,
         },
     )
-    log_progress_done(scope, "开盘啦分析完成", detail=f"成交 {len(executed)} 笔")
-    return narrative.rstrip() + "\n\n" + ops
+    log_progress_done(scope, "开盘啦分析完成", detail=f"可执行 {len(executable)} 条")
+    return narrative.rstrip()
 
 
 def process_during_market(raw: dict) -> str:

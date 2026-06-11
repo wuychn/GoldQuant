@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 import re
 from typing import Any
 
@@ -44,29 +45,106 @@ def _simplify_reason(text: str) -> str:
     return s[:80] if s else ""
 
 
-def _audit_examples(audit: list[dict], *, limit: int = 2) -> list[str]:
-    out: list[str] = []
+def _audit_line(row: dict) -> str | None:
+    if row.get("可执行"):
+        return None
+    name = str(row.get("股票名称") or row.get("股票代码") or "").strip()
+    if not name:
+        return None
+    status = str(row.get("状态") or "")
+    action = str(row.get("方向") or "")
+    is_sell = action == "卖出"
+    if is_sell and ("等待14:30" in status or "第二次确认" in status):
+        return f"{name}：卖点已二次确认，等尾盘最终确认"
+    if is_sell and "确认" in status:
+        return f"{name}：出现卖点信号，确认次数还不够"
+    if not is_sell and ("等待14:30" in status or "第二次确认" in status):
+        return f"{name}：买点已二次确认，等尾盘最终确认"
+    if not is_sell and "确认" in status:
+        return f"{name}：出现买点信号，确认次数还不够"
+    reason = _simplify_reason(str(row.get("理由") or ""))
+    return f"{name}：{reason}" if reason else None
+
+
+def _audit_examples_by_side(
+    audit: list[dict],
+    *,
+    limit: int = 2,
+) -> tuple[list[str], list[str]]:
+    """三确认审计：买入归自选、卖出归持仓，各自随机抽样。"""
+    buy_pool: list[str] = []
+    sell_pool: list[str] = []
     for row in audit:
-        if row.get("可执行"):
+        line = _audit_line(row)
+        if not line:
             continue
-        name = str(row.get("股票名称") or row.get("股票代码") or "").strip()
-        if not name:
-            continue
-        status = str(row.get("状态") or "")
-        if "等待14:30" in status or "第二次确认" in status:
-            out.append(f"{name}：买点已二次确认，等尾盘最终确认")
-        elif "确认" in status:
-            out.append(f"{name}：出现买卖信号，确认次数还不够")
+        if str(row.get("方向") or "") == "卖出":
+            sell_pool.append(line)
         else:
-            reason = _simplify_reason(str(row.get("理由") or ""))
-            if reason:
-                out.append(f"{name}：{reason}")
-        if len(out) >= limit:
-            break
-    return out
+            buy_pool.append(line)
+    return (
+        _sample_lines(buy_pool, limit=limit),
+        _sample_lines(sell_pool, limit=limit),
+    )
+
+
+def _skip_reason_for_watchlist_stock(
+    stock: dict,
+    ctx: ScoreContext,
+    *,
+    mode: str,
+    engine: ScoringEngine,
+    threshold: float,
+    mw_cfg: dict[str, Any],
+    buy_cfg: dict[str, Any],
+) -> str | None:
+    """单只自选股未满足买入条件的原因；已全部通过则返回 None。"""
+    code = str(stock.get("股票代码", "")).strip()
+    name = str(stock.get("股票名称", "")).strip() or code
+    if not code:
+        return None
+
+    gate = check_buy_gates(stock, ctx)
+    if not gate.passed:
+        fail = next((r for r in gate.results if not r.passed), None)
+        label = (fail.reason if fail and fail.reason else "暂不符合买入条件").strip()
+        if fail and fail.name == "止损冷却":
+            label = "刚止损不久，冷却期内不接"
+        elif fail and fail.name == "当日卖出冷却":
+            label = "今日已卖过，不再回补"
+        return f"{name}：{label}"
+
+    ok_trend, trend_note = trend_allows_buy(stock, mw_cfg)
+    if not ok_trend:
+        note = _simplify_reason(trend_note) or "趋势还没走顺"
+        return f"{name}：{note}"
+
+    score = engine.score_stock(ctx, stock)
+    if score.total < threshold:
+        return f"{name}：强度还不够，再观察"
+
+    ok, _kind, setup_reason = detect_buy_setup(stock, ctx, mw_cfg)
+    if not ok:
+        note = _simplify_reason(setup_reason) or "买点未出"
+        return f"{name}：{note}"
+
+    if mode == "during_market":
+        ok_intra, intra_note = intraday_allows_buy(stock, buy_cfg)
+        if not ok_intra:
+            note = _simplify_reason(intra_note) or "分时偏弱，先不接"
+            return f"{name}：{note}"
+
+    return None
+
+
+def _sample_lines(candidates: list[str], *, limit: int) -> list[str]:
+    if len(candidates) <= limit:
+        return candidates
+    return random.sample(candidates, limit)
 
 
 def _watchlist_skip_examples(ctx: ScoreContext, *, mode: str, limit: int = 2) -> list[str]:
+    """仅从自选股（未持仓）抽样未满足买点的说明。"""
     mw_cfg = load_gates_config().get("main_wave") or {}
     buy_cfg = (load_gates_config().get("buy") or {}).get(
         "during_market" if mode == "during_market" else "pre_market"
@@ -74,69 +152,41 @@ def _watchlist_skip_examples(ctx: ScoreContext, *, mode: str, limit: int = 2) ->
     engine = ScoringEngine()
     threshold = float(engine.config.get("buy_threshold", 72))
     held = {str(h.get("股票代码", "")).strip() for h in get_holdings()}
-    examples: list[str] = []
 
+    candidates: list[str] = []
     for stock in ctx.payload.get("自选股") or []:
         if not isinstance(stock, dict):
             continue
         code = str(stock.get("股票代码", "")).strip()
-        name = str(stock.get("股票名称", "")).strip() or code
         if not code or code in held:
             continue
+        line = _skip_reason_for_watchlist_stock(
+            stock,
+            ctx,
+            mode=mode,
+            engine=engine,
+            threshold=threshold,
+            mw_cfg=mw_cfg,
+            buy_cfg=buy_cfg,
+        )
+        if line:
+            candidates.append(line)
 
-        gate = check_buy_gates(stock, ctx)
-        if not gate.passed:
-            fail = next((r for r in gate.results if not r.passed), None)
-            label = (fail.reason if fail and fail.reason else "暂不符合买入条件").strip()
-            if fail and fail.name == "止损冷却":
-                label = "刚止损不久，冷却期内不接"
-            elif fail and fail.name == "当日卖出冷却":
-                label = "今日已卖过，不再回补"
-            examples.append(f"{name}：{label}")
-            if len(examples) >= limit:
-                return examples
-            continue
+    return _sample_lines(candidates, limit=limit)
 
-        ok_trend, trend_note = trend_allows_buy(stock, mw_cfg)
-        if not ok_trend:
-            note = _simplify_reason(trend_note) or "趋势还没走顺"
-            examples.append(f"{name}：{note}")
-            if len(examples) >= limit:
-                return examples
-            continue
 
-        score = engine.score_stock(ctx, stock)
-        if score.total < threshold:
-            examples.append(f"{name}：强度还不够，再观察")
-            if len(examples) >= limit:
-                return examples
-            continue
-
-        ok, _kind, setup_reason = detect_buy_setup(stock, ctx, mw_cfg)
-        if not ok:
-            note = _simplify_reason(setup_reason) or "买点未出"
-            examples.append(f"{name}：{note}")
-            if len(examples) >= limit:
-                return examples
-            continue
-
-        if mode == "during_market":
-            ok_intra, intra_note = intraday_allows_buy(stock, buy_cfg)
-            if not ok_intra:
-                note = _simplify_reason(intra_note) or "分时偏弱，先不接"
-                examples.append(f"{name}：{note}")
-                if len(examples) >= limit:
-                    return examples
-
-    if len(examples) < limit:
-        for h in get_holdings():
-            name = str(h.get("股票名称", "")).strip() or str(h.get("股票代码", "")).strip()
-            if name:
-                examples.append(f"{name}：持股走势尚可，未触发止盈止损")
-            if len(examples) >= limit:
-                break
-
-    return examples[:limit]
+def _format_side_parts(
+    *,
+    watchlist_lines: list[str],
+    holding_lines: list[str],
+) -> str:
+    """自选 / 持仓分轨拼接，互不混用。"""
+    parts: list[str] = []
+    if watchlist_lines:
+        parts.append("自选：" + "；".join(watchlist_lines))
+    if holding_lines:
+        parts.append("持仓：" + "；".join(holding_lines))
+    return "。".join(parts)
 
 
 def build_no_trade_note(
@@ -147,20 +197,21 @@ def build_no_trade_note(
     raw_sell: list[TradeSignal],
     audit: list[dict] | None = None,
 ) -> str:
-    """口语化无成交说明：有信号说确认进度，无信号举一至两个个股原因；不含仓位上限。"""
+    """口语化无成交说明：买入侧只谈自选，卖出侧只谈持仓，分轨表述。"""
     audit = audit or []
 
     if raw_buy or raw_sell:
-        examples = _audit_examples(audit, limit=2)
-        if examples:
-            return "暂下手，" + "；".join(examples) + "。"
+        buy_ex, sell_ex = _audit_examples_by_side(audit, limit=2)
+        body = _format_side_parts(watchlist_lines=buy_ex, holding_lines=sell_ex)
+        if body:
+            return "暂下手，" + body + "。"
         return "有标的在盯，但确认条件未齐，暂不加减仓。"
 
-    examples = _watchlist_skip_examples(ctx, mode=mode, limit=2)
+    watch_ex = _watchlist_skip_examples(ctx, mode=mode, limit=2)
     if mode == "pre_market":
-        if examples:
-            return "盘前暂不下单。" + "；".join(examples) + "。"
+        if watch_ex:
+            return "盘前暂不下单。自选：" + "；".join(watch_ex) + "。"
         return "盘前暂不下单，等开盘后再看分时与买点。"
-    if examples:
-        return "继续观望。" + "；".join(examples) + "。"
-    return "继续观望，自选与持仓暂无明显买卖点。"
+    if watch_ex:
+        return "继续观望。自选：" + "；".join(watch_ex) + "。"
+    return "继续观望，自选里暂无合适买点。"
