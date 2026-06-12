@@ -28,6 +28,7 @@ from app.utils.common_util import (
 )
 from app.utils.dataframe import dataframe_to_records
 from app.utils.dfcf_util import ztgc, ztgc_with_date
+from app.utils.error_log import log_caught_error
 from app.services.stock_enrich import attach_stock_concepts_from_wencai, enrich_stock_rows
 from app.utils.etf52_util import zdfb_52etf
 from app.utils.ths_util import stock_fund_flow_concept, hot_stock, zdfb_ths
@@ -61,8 +62,8 @@ _SH_TZ = ZoneInfo("Asia/Shanghai")
 def _sync_call_or_none(context: str, fn: Callable[[], object]) -> object | None:
     try:
         return fn()
-    except Exception:
-        _log_api_error(context)
+    except Exception as e:
+        _log_api_error(context, e)
         return None
 
 
@@ -162,9 +163,9 @@ def _merge_concept_boards(jzf: list | None, jzj: list | None, jdf: list | None, 
     }
 
 
-def _log_api_error(context: str) -> None:
-    """记录上游/本地调用失败，带固定上下文便于定位，避免单点异常拖垮整次聚合。"""
-    logger.exception("量化数据接口异常 [%s]", context)
+def _log_api_error(context: str, exc: Exception | None = None) -> None:
+    """记录上游/本地调用失败（精简单行，红色）。"""
+    log_caught_error(logger, f"量化数据接口 [{context}]", exc)
 
 
 async def zjl_(n: int) -> list | None:

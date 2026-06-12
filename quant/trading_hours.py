@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-from zoneinfo import ZoneInfo
 
+from quant.timeutil import CN_TZ, cn_now, ensure_cn_tz
 from quant.config import trading_time_checks_enabled
-
-_CN_TZ = ZoneInfo("Asia/Shanghai")
 _AM_START = (9, 30)
 _AM_END = (11, 30)
 _PM_START = (13, 0)
@@ -26,11 +24,7 @@ def parse_hhmm(text: str, default: tuple[int, int] = _LATE_SESSION_DEFAULT) -> t
 
 
 def is_at_or_after_hhmm(cutoff: tuple[int, int], now: datetime | None = None) -> bool:
-    now = now or cn_local_now()
-    if now.tzinfo is None:
-        now = now.replace(tzinfo=_CN_TZ)
-    else:
-        now = now.astimezone(_CN_TZ)
+    now = ensure_cn_tz(now or cn_now())
     hm = (now.hour, now.minute)
     return _hm_ge(hm, cutoff)
 
@@ -66,7 +60,7 @@ def sell_kinds_requiring_late_final() -> set[str]:
 
 
 def cn_local_now() -> datetime:
-    return datetime.now(_CN_TZ)
+    return cn_now()
 
 
 def _hm_le(a: tuple[int, int], b: tuple[int, int]) -> bool:
@@ -80,11 +74,7 @@ def _hm_ge(a: tuple[int, int], b: tuple[int, int]) -> bool:
 def is_a_share_continuous_auction_window(now: datetime | None = None) -> bool:
     if not trading_time_checks_enabled():
         return True
-    now = now or cn_local_now()
-    if now.tzinfo is None:
-        now = now.replace(tzinfo=_CN_TZ)
-    else:
-        now = now.astimezone(_CN_TZ)
+    now = ensure_cn_tz(now or cn_now())
     hm = (now.hour, now.minute)
     in_window = (_hm_ge(hm, _AM_START) and _hm_le(hm, _AM_END)) or (
         _hm_ge(hm, _PM_START) and _hm_le(hm, _PM_END)

@@ -31,8 +31,8 @@ def main() -> None:
     parser.add_argument(
         "--min-samples",
         type=int,
-        default=20,
-        help="最少样本条数，不足则只提示不优化",
+        default=100,
+        help="最少样本条数，不足则只提示不优化且禁止 apply",
     )
     parser.add_argument(
         "--apply",
@@ -58,12 +58,17 @@ def main() -> None:
             print("建议三确认间隔:", result.confirmation)
         if result.metrics:
             print("指标:", result.metrics)
+        if result.walk_forward:
+            print("walk-forward:", result.walk_forward)
         for note in result.notes:
             print("提示:", note)
 
         if args.dry_run:
             return
         if args.apply:
+            if result.apply_blocked:
+                print("apply 被阻断：样本不足或 walk-forward 未通过。")
+                raise SystemExit(1)
             path = write_calibration(result, apply=True)
             clear_scoring_cache()
             print(f"已写入 {path}，重启 quant 进程后生效。")

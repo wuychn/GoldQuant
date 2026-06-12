@@ -16,6 +16,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from quant.store.paths import quant_cache_file
+from app.utils.error_log import log_caught_error
 
 logger = logging.getLogger(__name__)
 
@@ -153,8 +154,8 @@ def fetch_jbxx_cached(symbol: str, *, file_cache: StockJbxxCache | None = None) 
 
             raw = jbxx(key)
             data = raw if isinstance(raw, dict) and raw else None
-        except Exception:
-            logger.exception("stock_jbxx_cache 拉取基本信息 symbol=%r", key)
+        except Exception as e:
+            log_caught_error(logger, f"stock_jbxx_cache 拉取基本信息 symbol={key!r}", e)
             return None
         if data:
             store.put(key, data)

@@ -16,6 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from quant.timeutil import cn_now
 from quant.store.paths import daily_derived, daily_raw, daily_review, daily_trades, ensure_layout, today_str
 
 
@@ -63,7 +64,7 @@ def save_raw(mode: str, payload: dict, *, now: datetime | None = None) -> Path:
     if not filename:
         filename = f"{mode}.json"
     if mode == "during_market":
-        ts = (now or datetime.now()).strftime("%H%M")
+        ts = (now or cn_now()).strftime("%H%M")
         filename = f"during_{ts}.json"
     path = daily_raw(filename, d)
     _write_json(path, payload)

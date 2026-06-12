@@ -16,9 +16,8 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
-_SH_TZ = ZoneInfo("Asia/Shanghai")
+from quant.timeutil import cn_now
 QUANT_HOME = Path.home() / ".quant"
 
 
@@ -38,7 +37,7 @@ def ensure_layout() -> None:
 
 def today_str(now: datetime | None = None) -> str:
     """北京时间日期字符串 YYYY-MM-DD。"""
-    dt = now or datetime.now(_SH_TZ)
+    dt = now or cn_now()
     return dt.strftime("%Y-%m-%d")
 
 

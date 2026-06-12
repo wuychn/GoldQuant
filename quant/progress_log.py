@@ -6,6 +6,8 @@ import logging
 import sys
 from datetime import datetime
 
+from app.utils.error_log import color_red, quiet_third_party_loggers
+
 _CONFIGURED = False
 _logger = logging.getLogger("quant.progress")
 
@@ -19,6 +21,7 @@ class _FlushingStreamHandler(logging.StreamHandler):
 def configure_progress_logging() -> None:
     """配置 progress logger（幂等）。"""
     global _CONFIGURED
+    quiet_third_party_loggers()
     if _CONFIGURED:
         return
     handler = _FlushingStreamHandler(sys.stdout)
@@ -51,3 +54,13 @@ def log_progress_count(scope: str, message: str, current: int, total: int, *, de
 
 def log_progress_done(scope: str, message: str = "完成", *, detail: str = "") -> None:
     log_progress(scope, message, detail=detail)
+
+
+def log_progress_error(scope: str, message: str, *, detail: str = "") -> None:
+    """红色错误进度行（不含堆栈）。"""
+    configure_progress_logging()
+    ts = datetime.now().strftime("%H:%M:%S")
+    line = f"[{ts}] [{scope}] ERROR {message}"
+    if detail:
+        line = f"{line} — {detail}"
+    _logger.error(color_red(line))

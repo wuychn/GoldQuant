@@ -17,7 +17,6 @@ ML 校准（独立命令）::
 
 import os
 import sys
-from datetime import datetime
 
 for k in list(os.environ.keys()):
     if "proxy" in k.lower():
@@ -29,6 +28,7 @@ if _ROOT not in sys.path:
 
 from quant.orchestrator import run_mode
 from quant.progress_log import configure_progress_logging
+from quant.timeutil import cn_datetime_str
 
 
 def main():
@@ -51,7 +51,7 @@ def main():
         n_jbxx = prefetch_optional_holding_jbxx()
         print(f"预取完成：问财概念新拉取 {n_concepts} 只，基本信息新拉取 {n_jbxx} 只")
         return
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    timestamp = cn_datetime_str()
     run_mode(mode, timestamp)
 
 

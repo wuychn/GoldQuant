@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from app.core.config import Settings
+from app.utils.error_log import log_caught_error
 from app.utils.common_util import get_n_workdays_ago, get_val, today
 
 logger = logging.getLogger(__name__)
@@ -427,5 +428,5 @@ def archive_market_sync(phase: Phase, payload: dict[str, Any], settings: Setting
         _atomic_write_text(snap_path, json.dumps(body, ensure_ascii=False, indent=2) + "\n")
         _merge_all_bars_from_payload(base, payload)
         recompute_all_computed(base)
-    except Exception:
-        logger.exception("量化归档失败 phase=%s", phase)
+    except Exception as e:
+        log_caught_error(logger, f"量化归档 phase={phase}", e)

@@ -22,7 +22,7 @@ scoring:
   # 晚间候选池（初筛在 quant/pool/sources.py，问财+enrich 在 quant/pool/pipeline.py）
   candidate:
     popularity_limit: 30        # 人气榜初筛：取前 N
-    zt_min_boards: 2            # 涨停池初筛：连板数 ≥
+    zt_min_boards: 3            # 涨停池初筛：连板数 ≥（晚间复盘仅纳入 3 板及以上）
     pkyd_dual_tag_limit: 20     # 盘口异动：加速过滤后取前 N（按近一月涨幅）
     pkyd_prefilter_pool: 60     # 盘口异动：enrich 前双标签池上限
     pkyd_labels:                # 东财盘口异动类型
@@ -104,6 +104,14 @@ gates:
   # 模拟成交时段校验（executor.py）
   trading:
     time_validation_enabled: false  # true=仅连续竞价时段允许成交
+    simulation:
+      commission_rate: 0.0001     # 佣金万一（买卖双向）
+      min_commission: 5.0         # 单笔最低佣金（元）
+      stamp_tax_rate: 0.0005      # 卖出印花税 0.05%
+      transfer_fee_rate: 0.00001  # 沪市过户费 0.001%（仅 6 开头）
+      slippage_pct: 0.001         # 滑点 0.1%
+      main_limit_pct: 9.9         # 主板涨跌停阈值（%）
+      gem_limit_pct: 19.9         # 创业板/科创板涨跌停阈值（%）
 
   # 可交易标的池
   symbol_pool:
@@ -179,6 +187,8 @@ gates:
     choppy_path_ratio: 3.5          # 路径/净涨幅 超过此值视为上蹿下跳
     choppy_flip_rate: 0.42          # 涨跌反转频率上限
     choppy_min_net_pct: 5.0         # 回看期内净涨幅低于此视为无趋势
+    choppy_recent_days: 20          # 突破豁免：近 N 日净涨幅
+    choppy_recent_min_net_pct: 3.0  # 突破豁免：近 N 日净涨幅下限（%）
     trend_ma20_floor: 0.985         # 趋势有效：现价不低于 MA20×此值
     trend_peak_spread_days: 15      # 近 N 日峰值发散（回调期 spread 可收窄）
     pullback_spread_ratio: 0.55     # 回调期允许的发散度下限 = min_spread×此值

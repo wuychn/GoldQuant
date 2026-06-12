@@ -7,7 +7,8 @@ import re
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from quant.store.paths import _SH_TZ, daily_raw
+from quant.store.paths import daily_raw
+from quant.timeutil import cn_today
 
 _TURNOVER_YI_RE = re.compile(r"([\d.]+)")
 
@@ -52,7 +53,7 @@ def load_completed_day_turnovers(*, count: int) -> list[float]:
     if count <= 0:
         return []
     found: list[tuple[str, float]] = []
-    d = datetime.now(_SH_TZ).date() - timedelta(days=1)
+    d = cn_today() - timedelta(days=1)
     for _ in range(45):
         if len(found) >= count:
             break

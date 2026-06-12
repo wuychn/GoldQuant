@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +25,9 @@ from quant.ml.optimizers import (
     optimize_weights_lightgbm,
     optimize_weights_linear,
 )
+from quant.ml.validation import walk_forward_validate
 from quant.store.paths import config_file, ensure_layout
+from quant.timeutil import cn_datetime_str
 
 
 @dataclass
@@ -41,6 +42,8 @@ class CalibrationResult:
     confirmation: dict[str, Any] = field(default_factory=dict)
     metrics: dict[str, Any] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
+    apply_blocked: bool = False
+    walk_forward: dict[str, Any] = field(default_factory=dict)
 
     def to_yaml_dict(self) -> dict:
         out: dict[str, Any] = {
@@ -56,6 +59,9 @@ class CalibrationResult:
             out["dimension_weights"] = self.dimension_weights
         if self.confirmation:
             out["confirmation"] = self.confirmation
+        if self.walk_forward:
+            out["walk_forward"] = self.walk_forward
+        out["apply_blocked"] = self.apply_blocked
         return out
 
 
@@ -86,7 +92,7 @@ def _base_weights(cfg: dict) -> dict[str, float]:
     }
 
 
-def calibrate(method: str = "grid", *, min_samples: int = 20) -> CalibrationResult:
+def calibrate(method: str = "grid", *, min_samples: int = 100) -> CalibrationResult:
     """执行离线校准。
 
     Parameters
@@ -98,7 +104,7 @@ def calibrate(method: str = "grid", *, min_samples: int = 20) -> CalibrationResu
     cfg = load_scoring_config()
     gates_cfg = load_gates_config()
     samples = load_score_samples(min_samples=min_samples)
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = cn_datetime_str()
     result = CalibrationResult(method=method, sample_count=len(samples), generated_at=now)
 
     if len(samples) < min_samples:
@@ -106,6 +112,7 @@ def calibrate(method: str = "grid", *, min_samples: int = 20) -> CalibrationResu
             f"历史样本仅 {len(samples)} 条，少于 {min_samples}，建议多运行若干交易日后再校准。"
         )
         result.thresholds = _base_thresholds(cfg)
+        result.apply_blocked = True
         return result
 
     base_th = _base_thresholds(cfg)
@@ -155,6 +162,15 @@ def calibrate(method: str = "grid", *, min_samples: int = 20) -> CalibrationResu
         raise ValueError(f"未知校准方法: {method}，可选 grid|linear|lightgbm|bayesian")
 
     result.confirmation = optimize_confirmation_intervals(samples, base_cfg=gates_cfg)
+
+    wf = walk_forward_validate(samples, base_thresholds=result.thresholds or base_th)
+    result.walk_forward = wf
+    result.metrics = {**result.metrics, "walk_forward": wf}
+    if not wf.get("passed"):
+        result.apply_blocked = True
+        reason = wf.get("reason") or "walk-forward 未通过"
+        result.notes.append(f"禁止 apply：{reason}")
+
     return result
 
 

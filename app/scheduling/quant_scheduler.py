@@ -19,6 +19,7 @@ from apscheduler.triggers.cron import CronTrigger
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.utils.common_util import is_real_workday_cn
+from app.utils.error_log import log_caught_error, color_red
 
 if TYPE_CHECKING:
     from app.core.config import Settings
@@ -84,18 +85,16 @@ def _invoke_quant_cli(mode: str) -> None:
             encoding="utf-8",
             errors="replace",
         )
-    except Exception:
-        logger.exception("[quant-scheduler] 子进程启动失败 mode=%s", mode)
+    except Exception as e:
+        log_caught_error(logger, f"[quant-scheduler] 子进程启动失败 mode={mode}", e)
         return
     if proc.returncode != 0:
-        tail_out = (proc.stdout or "")[-2000:]
-        tail_err = (proc.stderr or "")[-2000:]
+        err_tail = (proc.stderr or proc.stdout or "").strip().splitlines()
+        snippet = " | ".join(line.strip() for line in err_tail[-3:] if line.strip()) or "(无输出)"
         logger.error(
-            "[quant-scheduler] 退出码 %s mode=%s\nstdout<<<\n%s\n>>> stderr<<<\n%s\n>>>",
-            proc.returncode,
-            mode,
-            tail_out,
-            tail_err,
+            color_red(
+                f"[子进程异常退出] mode={mode} 退出码={proc.returncode} — {snippet}"
+            )
         )
     else:
         logger.info("[quant-scheduler] 完成 mode=%s", mode)
@@ -140,14 +139,14 @@ def _job_prefetch_stock_concepts(_settings: Settings) -> None:
     try:
         asyncio.run(prefetch_optional_holding_concepts())
         prefetch_optional_holding_jbxx()
-    except Exception:
-        logger.exception("[quant-scheduler] 预取个股静态数据失败")
+    except Exception as e:
+        log_caught_error(logger, "[quant-scheduler] 预取个股静态数据", e)
 
 
 def build_quant_scheduler(settings: Settings) -> BackgroundScheduler | None:
     """按 `Settings` 构建并注册任务；调用方需在 lifespan 内 `start()` / `shutdown()`。"""
     if not settings.QUANT_SCHEDULER_ENABLED:
-        logger.info("[quant-scheduler] 已通过配置禁用 (QUANT_SCHEDULER_ENABLED=false)")
+        logger.debug("[quant-scheduler] 已通过配置禁用 (QUANT_SCHEDULER_ENABLED=false)")
         return None
     try:
         tz = ZoneInfo(settings.QUANT_SCHED_TIMEZONE)
@@ -227,7 +226,7 @@ def build_quant_scheduler(settings: Settings) -> BackgroundScheduler | None:
     if settings.QUANT_SCHED_PREFETCH_CONCEPTS_ENABLED:
         ch, cm = _parse_hh_mm(settings.QUANT_SCHED_PREFETCH_CONCEPTS_TIME)
         prefetch_note = f", prefetch_concepts=%02d:%02d" % (ch, cm)
-    logger.info(
+    logger.debug(
         "[quant-scheduler] 已注册: news(hours=%s @ :%02d), pre=%02d:%02d, during×%d, "
         "lunch=%02d:%02d, evening=%02d:%02d%s, tz=%s",
         hour_spec,

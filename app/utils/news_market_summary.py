@@ -9,6 +9,7 @@ from pathlib import Path
 import httpx
 
 from app.core.config import Settings
+from app.utils.error_log import log_caught_error, color_red
 
 logger = logging.getLogger(__name__)
 
@@ -57,8 +58,8 @@ def _llm_minimax_summary(api_key: str, base_url: str, model: str, news_json: str
                 if c.get("type") == "text":
                     return str(c.get("text") or "").strip()
             return None
-    except Exception:
-        logger.exception("新闻影响摘要 LLM 调用失败")
+    except Exception as e:
+        log_caught_error(logger, "新闻影响摘要 LLM 调用", e)
         return None
 
 
@@ -89,5 +90,5 @@ def refresh_news_market_summary_sync(settings: Settings, news_items: list) -> No
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         path.write_text(out, encoding="utf-8")
-    except OSError:
-        logger.exception("写入新闻影响摘要失败 path=%s", path)
+    except OSError as e:
+        log_caught_error(logger, f"写入新闻影响摘要 path={path}", e)

@@ -16,6 +16,8 @@ import json
 import os
 import tempfile
 from datetime import date, datetime
+
+from quant.timeutil import cn_date_str, cn_datetime_str, cn_now, cn_today
 from pathlib import Path
 from typing import Any
 
@@ -180,7 +182,7 @@ def save_optional(rows: list[dict], *, delta: dict | None = None) -> None:
     if delta:
         hist = state_file("optional_history.jsonl")
         with open(hist, "a", encoding="utf-8") as f:
-            f.write(json.dumps({"时间": datetime.now().isoformat(), **delta}, ensure_ascii=False) + "\n")
+            f.write(json.dumps({"时间": cn_now().isoformat(), **delta}, ensure_ascii=False) + "\n")
 
 
 def save_holdings(rows: list[dict]) -> None:
@@ -197,7 +199,7 @@ def append_stoploss(code: str, name: str, reason: str) -> None:
     row = {
         "股票代码": code,
         "股票名称": name,
-        "时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "时间": cn_datetime_str(),
         "原因": reason[:120],
     }
     with open(state_file("stoploss.jsonl"), "a", encoding="utf-8") as f:
@@ -205,7 +207,7 @@ def append_stoploss(code: str, name: str, reason: str) -> None:
 
 
 def stoploss_cooldown_codes(days: int = 3) -> set[str]:
-    cutoff = datetime.now().date().toordinal() - days + 1
+    cutoff = cn_today().toordinal() - days + 1
     codes: set[str] = set()
     for row in read_stoploss():
         code = str(row.get("股票代码", "")).strip()
@@ -223,7 +225,7 @@ def codes_sold_today(date_str: str | None = None) -> set[str]:
     """当日已卖出代码（防同日反复买卖）。"""
     from quant.store.snapshot import daily_trades_path
 
-    date_str = date_str or datetime.now().strftime("%Y-%m-%d")
+    date_str = date_str or cn_date_str()
     path = daily_trades_path("executed.json", date_str)
     if not path.is_file():
         return set()
@@ -244,7 +246,7 @@ def codes_sold_today(date_str: str | None = None) -> set[str]:
 
 
 def holding_codes_bought_today(holdings: list[dict] | None = None, today: date | None = None) -> set[str]:
-    today = today or datetime.now().date()
+    today = today or cn_today()
     rows = holdings if holdings is not None else get_holdings()
     locked: set[str] = set()
     for h in rows:
@@ -368,7 +370,7 @@ def append_trade(date_str: str, record: dict) -> None:
 def sum_today_realized_pnl(date_str: str | None = None) -> float:
     from quant.store.snapshot import daily_trades_path
 
-    date_str = date_str or datetime.now().strftime("%Y-%m-%d")
+    date_str = date_str or cn_date_str()
     path = daily_trades_path("executed.json", date_str)
     if not path.is_file():
         return 0.0
@@ -421,5 +423,5 @@ def append_lesson(text: str) -> None:
     ensure_layout()
     path = memory_file("lessons.md")
     old = _read_text(path).rstrip()
-    block = f"\n\n## {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n{text.strip()}\n"
+    block = f"\n\n## {cn_now().strftime('%Y-%m-%d %H:%M')}\n\n{text.strip()}\n"
     _write_text_atomic(path, (old + block).lstrip())

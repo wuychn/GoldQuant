@@ -11,15 +11,14 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass
 from datetime import datetime
-from zoneinfo import ZoneInfo
 
+from quant.timeutil import CN_TZ, cn_now, ensure_cn_tz
 from quant.config import load_gates_config
 from quant.scoring.context import ScoreContext, infer_regime
 from quant.signals.models import TradeSignal
 from quant.store.paths import state_file
 from quant.trading_hours import is_late_session_for_trend_sell, sell_kinds_requiring_late_final
 
-_SH_TZ = ZoneInfo("Asia/Shanghai")
 _PENDING_FILE = "signal_pending.json"
 
 
@@ -39,15 +38,15 @@ class PendingSignal:
 
 
 def _now() -> datetime:
-    return datetime.now(_SH_TZ)
+    return cn_now()
 
 
 def _parse_ts(s: str) -> datetime | None:
     try:
         dt = datetime.fromisoformat(s)
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=_SH_TZ)
-        return dt.astimezone(_SH_TZ)
+            dt = dt.replace(tzinfo=CN_TZ)
+        return ensure_cn_tz(dt)
     except ValueError:
         return None
 

@@ -21,6 +21,10 @@ def _price(stock: dict) -> float | None:
 
 def generate_buy_signals(ctx: ScoreContext, *, mode: str) -> list[TradeSignal]:
     """产生买入原始信号（未经三确认，勿直接 execute）。"""
+    dq = ctx.payload.get("_data_quality") or {}
+    if mode == "during_market" and dq.get("block_intraday_buy"):
+        return []
+
     mw_cfg = load_gates_config().get("main_wave") or {}
     buy_cfg = (load_gates_config().get("buy") or {}).get("during_market" if mode == "during_market" else "pre_market") or {}
     engine = ScoringEngine()

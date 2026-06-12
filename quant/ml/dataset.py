@@ -127,7 +127,7 @@ def _next_date_payload(dates: list[str], date_str: str) -> dict | None:
     return None
 
 
-def load_score_samples(*, min_samples: int = 20) -> list[ScoreSample]:
+def load_score_samples(*, min_samples: int = 100) -> list[ScoreSample]:
     """扫描全部 daily 目录，返回可用于校准的样本列表。
 
     min_samples 仅用于 calibrate() 判断是否足够；此处始终返回已收集的全部样本。

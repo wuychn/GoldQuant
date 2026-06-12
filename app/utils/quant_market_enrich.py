@@ -8,6 +8,7 @@ from typing import Any
 import akshare as ak
 
 from app.utils.dataframe import dataframe_to_records
+from app.utils.error_log import log_caught_error
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,6 @@ def pre_auction_minute_zh(context: str, symbol: str) -> list[dict[str, Any]] | N
         if df is None or df.empty:
             return []
         return dataframe_to_records(df)
-    except Exception:
-        logger.exception("集合竞价分钟失败 [%s] symbol=%s", context, symbol)
+    except Exception as e:
+        log_caught_error(logger, f"集合竞价分钟 [{context}] symbol={symbol}", e)
         return None

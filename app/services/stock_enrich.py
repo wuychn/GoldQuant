@@ -15,6 +15,7 @@ from app.utils.quant_archive import (
 )
 from app.utils.quant_market_enrich import pre_auction_minute_zh
 from app.utils.ths_util import ggzjl, wcxg
+from app.utils.error_log import log_caught_error
 from quant.progress_log import log_progress_count
 
 logger = logging.getLogger(__name__)
@@ -25,15 +26,15 @@ CONCEPT_SOURCE_WENCAI = "问财"
 CONCEPT_SOURCE_FALLBACK = "来源自带"
 
 
-def _log_error(context: str) -> None:
-    logger.exception("stock_enrich [%s]", context)
+def _log_error(context: str, exc: Exception | None = None) -> None:
+    log_caught_error(logger, f"stock_enrich [{context}]", exc)
 
 
 def _sync_call_or_none(context: str, fn) -> object | None:
     try:
         return fn()
-    except Exception:
-        _log_error(context)
+    except Exception as e:
+        _log_error(context, e)
         return None
 
 

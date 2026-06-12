@@ -82,11 +82,16 @@ def is_spread_accelerating(closes: list[float], cfg: dict[str, Any]) -> bool:
 
 
 def is_trend_choppy(stock: dict, cfg: dict[str, Any]) -> bool:
-    """几个月上蹿下跳：路径远大于净涨幅，或涨跌频繁反转。"""
+    """几个月上蹿下跳：路径远大于净涨幅，或涨跌频繁反转。
+
+    长期横盘后刚突破：若均线多头且近 N 日净涨幅达标，不因 60 日低 net 误杀。
+    """
     lookback = int(cfg.get("choppy_lookback_days", 60))
     max_path_ratio = float(cfg.get("choppy_path_ratio", 3.5))
     max_flip_rate = float(cfg.get("choppy_flip_rate", 0.42))
     min_net_pct = float(cfg.get("choppy_min_net_pct", 5.0))
+    recent_days = int(cfg.get("choppy_recent_days", 20))
+    recent_min_net = float(cfg.get("choppy_recent_min_net_pct", 3.0))
 
     changes = hist_daily_changes(stock.get("历史行情") or [])
     closes = hist_closes(stock.get("历史行情") or [])
@@ -99,7 +104,18 @@ def is_trend_choppy(stock: dict, cfg: dict[str, Any]) -> bool:
     if start <= 0:
         return False
     net = (end - start) / start * 100
+
+    low_net_choppy = False
     if net < min_net_pct:
+        m = _mas(stock)
+        recent_net = 0.0
+        if len(closes) >= recent_days and closes[-recent_days] > 0:
+            recent_net = (closes[-1] - closes[-recent_days]) / closes[-recent_days] * 100
+        if ma_bull_stack(m) and recent_net >= recent_min_net:
+            low_net_choppy = False
+        else:
+            low_net_choppy = True
+    if low_net_choppy:
         return True
 
     path = sum(abs(c) for c in window)

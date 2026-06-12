@@ -15,7 +15,9 @@ from app.utils.common_util import is_real_workday_cn
 from app.core.config import get_settings
 
 from quant.data_fetch import fetch_mode, fixture_path_for_mode, unwrap_payload
-from quant.progress_log import configure_progress_logging, log_progress, log_progress_done
+from quant.data_quality import assess_payload_quality
+from quant.progress_log import configure_progress_logging, log_progress, log_progress_done, log_progress_error
+from quant.timeutil import cn_today
 from quant.constants import STRATEGY_NAME
 from quant.execution.executor import ExecutedTrade, execute_signals
 from quant.narrative.engine_brief import build_engine_brief
@@ -60,8 +62,12 @@ _MODE_LABELS = {
 }
 
 
-def _prepare_payload(raw: dict) -> dict:
-    return merge_payload_holdings(unwrap_payload(raw))
+def _prepare_payload(raw: dict, *, mode: str = "") -> dict:
+    payload = merge_payload_holdings(unwrap_payload(raw))
+    if mode:
+        report = assess_payload_quality(payload, mode=mode)
+        payload["_data_quality"] = report.to_dict()
+    return payload
 
 
 def _build_operation_section(
@@ -77,11 +83,20 @@ def _build_operation_section(
         return "\n".join(lines)
     for e in executed:
         s = e.signal
+        px = e.fill_price if e.fill_price > 0 else s.price
+        fee_parts = []
+        if e.commission:
+            fee_parts.append(f"佣{e.commission:.2f}")
+        if e.stamp_tax:
+            fee_parts.append(f"税{e.stamp_tax:.2f}")
+        if e.transfer_fee:
+            fee_parts.append(f"过户{e.transfer_fee:.2f}")
+        fee_note = f"，{'/'.join(fee_parts)}" if fee_parts else ""
         pnl = f"，盈亏：{e.pnl:+.2f}元" if e.pnl else ""
         lines.append(
             f"· {s.action}{s.name}（{s.code}），"
             f"时间：{e.timestamp}，"
-            f"价格：{s.price:.2f}，"
+            f"成交价：{px:.2f}{fee_note}，"
             f"数量：{s.quantity // 100}手，"
             f"战法：{s.strategy}，"
             f"理由：{s.reason}{pnl}"
@@ -194,7 +209,7 @@ def process_news(raw: dict, timestamp: str) -> str:
 def process_pre_market(raw: dict) -> str:
     scope = "pre_market"
     log_progress(scope, "开始开盘啦分析")
-    payload = _prepare_payload(raw)
+    payload = _prepare_payload(raw, mode=scope)
     ctx = ScoreContext.from_payload(payload, mode="pre_market")
 
     log_progress(scope, "生成买卖信号（盘前不计三确认，仅落盘）")
@@ -223,13 +238,21 @@ def process_pre_market(raw: dict) -> str:
 def process_during_market(raw: dict) -> str:
     scope = "during_market"
     log_progress(scope, "开始盘中分析")
-    payload = _prepare_payload(raw)
+    payload = _prepare_payload(raw, mode=scope)
+    dq = payload.get("_data_quality") or {}
+    if dq.get("issues"):
+        log_progress(scope, "数据质量告警", detail="；".join(dq["issues"][:5]))
+    save_derived("data_quality.json", dq)
+
     ctx = ScoreContext.from_payload(payload, mode="during_market")
 
     log_progress(scope, "生成买卖信号")
     raw_buy, raw_sell, executable, audit = generate_confirmed_signals(ctx, mode="during_market")
+    if dq.get("block_execute"):
+        log_progress(scope, "数据质量阻断成交", detail="仅生成信号与文案")
+        executable = []
     log_progress(scope, "执行模拟成交", detail=f"可执行 {len(executable)} 条")
-    executed = execute_signals(executable)
+    executed = execute_signals(executable, payload=payload) if executable else []
 
     engine = ScoringEngine()
     log_progress(scope, "持仓评分")
@@ -273,7 +296,7 @@ def process_during_market(raw: dict) -> str:
 def process_lunch_review(raw: dict) -> str:
     scope = "post_market_lunch"
     log_progress(scope, "开始午间复盘")
-    payload = _prepare_payload(raw)
+    payload = _prepare_payload(raw, mode=scope)
     ctx = ScoreContext.from_payload(payload, mode="post_market_lunch")
 
     brief = build_engine_brief(ctx, payload, mode="post_market_lunch")
@@ -290,7 +313,7 @@ def process_lunch_review(raw: dict) -> str:
 
 def process_evening_review(raw: dict) -> str:
     scope = "post_market_evening"
-    payload = _prepare_payload(raw)
+    payload = _prepare_payload(raw, mode=scope)
     log_progress(scope, "更新概念板块快照 concept_tracker.json")
     update_concept_tracker_state(payload)
     ctx = ScoreContext.from_payload(payload, mode="post_market_evening")
@@ -326,7 +349,7 @@ def pipeline_allowed_for_mode(mode: str, *, on: date | None = None) -> bool:
     """
     if mode == "news":
         return True
-    d = on if on is not None else datetime.now().date()
+    d = on if on is not None else cn_today()
     if mode == "post_market_evening":
         return is_real_workday_cn(d) or is_real_workday_cn(d + timedelta(days=1))
     return is_real_workday_cn(d)
@@ -351,11 +374,13 @@ def run_mode(mode: str, timestamp: str) -> None:
         else:
             log_progress(mode, "HTTP API 拉取成功")
     except Exception as e:
-        log_progress(mode, "数据拉取失败", detail=str(e))
+        from app.utils.error_log import format_error_detail
+
+        log_progress_error(mode, "数据拉取失败", detail=format_error_detail("fetch_mode", e))
         sys.exit(1)
 
     log_progress(mode, "保存原始快照")
-    payload = _prepare_payload(raw)
+    payload = _prepare_payload(raw, mode=mode)
     save_raw(mode, payload)
 
     try:
@@ -374,7 +399,9 @@ def run_mode(mode: str, timestamp: str) -> None:
             log_progress(mode, f"未知模式: {mode}")
             sys.exit(1)
     except Exception as e:
-        log_progress(mode, "分析失败", detail=str(e))
+        from app.utils.error_log import format_error_detail
+
+        log_progress_error(mode, "分析失败", detail=format_error_detail("process", e))
         body = f"服务异常，请稍后重试。({e})"
 
     log_progress(mode, "保存复盘文案")
@@ -391,7 +418,9 @@ def run_mode(mode: str, timestamp: str) -> None:
             )
             append_lesson(lesson.strip())
         except Exception as e:
-            log_progress(mode, "经验提炼失败", detail=str(e))
+            from app.utils.error_log import format_error_detail
+
+            log_progress_error(mode, "经验提炼失败", detail=format_error_detail("lesson", e))
 
     try:
         log_progress(mode, "飞书推送")
@@ -399,7 +428,9 @@ def run_mode(mode: str, timestamp: str) -> None:
         send_msg(message, token)
         log_progress_done(mode, "飞书推送成功")
     except Exception as e:
-        log_progress(mode, "飞书推送失败", detail=str(e))
+        from app.utils.error_log import format_error_detail
+
+        log_progress_error(mode, "飞书推送失败", detail=format_error_detail("feishu", e))
 
     log_progress_done(mode, f"{label} 全流程结束")
     print("\n" + "=" * 60)

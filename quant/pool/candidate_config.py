@@ -27,7 +27,7 @@ def popularity_limit(cfg: dict | None = None) -> int:
 
 def zt_min_boards(cfg: dict | None = None) -> int:
     c = cfg or load_candidate_config()
-    return int(c.get("zt_min_boards", 2))
+    return int(c.get("zt_min_boards", 3))
 
 
 def pkyd_prefilter_pool(cfg: dict | None = None) -> int:
