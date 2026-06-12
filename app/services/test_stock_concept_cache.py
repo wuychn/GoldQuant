@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
+
 from app.services.stock_concept_cache import DailyConceptCache
 
 
@@ -23,6 +25,17 @@ class DailyConceptCacheTests(unittest.TestCase):
             hit2, concepts2 = cache2.lookup("000001")
             self.assertTrue(hit2)
             self.assertEqual(concepts2, ["银行", "金融科技"])
+
+    def test_fetched_at_format(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "stock_concepts.json"
+            cache = DailyConceptCache("2026-06-11", path=path)
+            cache.put("000001", name="平安银行", concepts=["银行"])
+            raw = path.read_text(encoding="utf-8")
+            fetched_at = cache.lookup("000001")
+            self.assertTrue(fetched_at[0])
+            ts = json.loads(raw)["stocks"]["000001"]["fetched_at"]
+            self.assertRegex(ts, r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
 
     def test_negative_cache(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

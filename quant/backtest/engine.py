@@ -40,9 +40,11 @@ def _load_during_payloads(day_dir: Path) -> list[dict]:
             obj = json.loads(fp.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             continue
-        data = obj.get("data") if isinstance(obj, dict) else obj
-        if isinstance(data, dict):
-            out.append(data)
+        if not isinstance(obj, dict):
+            continue
+        inner = obj.get("data")
+        data = inner if isinstance(inner, dict) else obj
+        out.append(data)
     return out
 
 

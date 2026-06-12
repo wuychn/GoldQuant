@@ -17,7 +17,7 @@ from typing import Any
 import yaml
 
 from quant.config import load_gates_config, load_scoring_config, reload_config_cache
-from quant.ml.dataset import load_score_samples
+from quant.ml.dataset import ScoreSample, load_score_samples
 from quant.ml.optimizers import (
     optimize_bayesian,
     optimize_confirmation_intervals,
@@ -28,6 +28,28 @@ from quant.ml.optimizers import (
 from quant.ml.validation import walk_forward_validate
 from quant.store.paths import config_file, ensure_layout
 from quant.timeutil import cn_datetime_str
+
+# auto 模式下：样本数达到该值时用 lightgbm，否则用 linear（仍须 >= min_optimize_samples 才校准）
+DEFAULT_LIGHTGBM_MIN_SAMPLES = 300
+MIN_OPTIMIZE_SAMPLES = 10
+
+
+def resolve_calibration_method(
+    method: str,
+    sample_count: int,
+    *,
+    lightgbm_min_samples: int = DEFAULT_LIGHTGBM_MIN_SAMPLES,
+) -> tuple[str, list[str]]:
+    """auto → 按样本量在 linear / lightgbm 间选择；其余方法原样返回。"""
+    if method != "auto":
+        return method, []
+    if sample_count >= lightgbm_min_samples:
+        return "lightgbm", [
+            f"auto 选择 lightgbm：样本 {sample_count} >= {lightgbm_min_samples}"
+        ]
+    return "linear", [
+        f"auto 选择 linear：样本 {sample_count} < {lightgbm_min_samples}"
+    ]
 
 
 @dataclass
@@ -92,13 +114,55 @@ def _base_weights(cfg: dict) -> dict[str, float]:
     }
 
 
-def calibrate(method: str = "grid", *, min_samples: int = 100) -> CalibrationResult:
+def _calibrate_weights_and_thresholds(
+    samples: list[ScoreSample],
+    *,
+    weight_method: str,
+    dim_keys: list[str],
+    base_w: dict[str, float],
+    base_th: dict[str, float],
+) -> tuple[dict[str, float], dict[str, float], dict[str, Any], list[str]]:
+    """linear / lightgbm：先优化维度权重，再 grid 搜阈值。"""
+    notes: list[str] = []
+    if weight_method == "linear":
+        wopt = optimize_weights_linear(samples, dim_keys=dim_keys, base_weights=base_w)
+        metrics: dict[str, Any] = {
+            "coef": wopt.get("coef"),
+            "intercept": wopt.get("intercept"),
+        }
+    elif weight_method == "lightgbm":
+        wopt = optimize_weights_lightgbm(samples, dim_keys=dim_keys, base_weights=base_w)
+        metrics = {"importance": wopt.get("importance")}
+    else:
+        raise ValueError(f"不支持的权重方法: {weight_method}")
+
+    weights = wopt.get("weights") or base_w
+    if wopt.get("note"):
+        notes.append(str(wopt["note"]))
+
+    gopt = optimize_thresholds_grid(samples, base=base_th)
+    thresholds = {
+        "watchlist_threshold": gopt["watchlist_threshold"],
+        "buy_threshold": gopt["buy_threshold"],
+        "sell_threshold": gopt["sell_threshold"],
+    }
+    return weights, thresholds, metrics, notes
+
+
+def calibrate(
+    method: str = "grid",
+    *,
+    min_samples: int = 100,
+    lightgbm_min_samples: int = DEFAULT_LIGHTGBM_MIN_SAMPLES,
+) -> CalibrationResult:
     """执行离线校准。
 
     Parameters
     ----------
-    method : grid | linear | lightgbm | bayesian
-    min_samples : 样本少于该值时不优化，仅返回提示与当前阈值
+    method : grid | linear | lightgbm | bayesian | auto
+        auto 时样本 < lightgbm_min_samples 用 linear，否则用 lightgbm（均含阈值 grid）
+    min_samples : 样本少于该值时仍输出建议值，但禁止 apply
+    lightgbm_min_samples : auto 模式下启用 lightgbm 的样本下限
     """
     ensure_layout()
     cfg = load_scoring_config()
@@ -106,20 +170,40 @@ def calibrate(method: str = "grid", *, min_samples: int = 100) -> CalibrationRes
     samples = load_score_samples(min_samples=min_samples)
     now = cn_datetime_str()
     result = CalibrationResult(method=method, sample_count=len(samples), generated_at=now)
+    samples_insufficient_for_apply = len(samples) < min_samples
 
-    if len(samples) < min_samples:
+    if len(samples) < MIN_OPTIMIZE_SAMPLES:
         result.notes.append(
-            f"历史样本仅 {len(samples)} 条，少于 {min_samples}，建议多运行若干交易日后再校准。"
+            f"历史样本仅 {len(samples)} 条，少于 {MIN_OPTIMIZE_SAMPLES}，无法优化，保留当前配置。"
         )
         result.thresholds = _base_thresholds(cfg)
+        if method in ("auto", "linear", "lightgbm"):
+            result.dimension_weights = _base_weights(cfg)
         result.apply_blocked = True
         return result
+
+    if samples_insufficient_for_apply:
+        result.notes.append(
+            f"历史样本 {len(samples)} 条，少于 apply 门槛 {min_samples}；"
+            "以下为参考建议值，禁止写入 quant.yml。"
+        )
+        result.apply_blocked = True
+
+    resolved, auto_notes = resolve_calibration_method(
+        method,
+        len(samples),
+        lightgbm_min_samples=lightgbm_min_samples,
+    )
+    result.notes.extend(auto_notes)
+    if method == "auto":
+        result.method = resolved
+        result.metrics["method_requested"] = "auto"
 
     base_th = _base_thresholds(cfg)
     dim_keys = _dim_keys(cfg)
     base_w = _base_weights(cfg)
 
-    if method == "grid":
+    if resolved == "grid":
         opt = optimize_thresholds_grid(samples, base=base_th)
         result.thresholds = {
             "watchlist_threshold": opt["watchlist_threshold"],
@@ -127,30 +211,19 @@ def calibrate(method: str = "grid", *, min_samples: int = 100) -> CalibrationRes
             "sell_threshold": opt["sell_threshold"],
         }
         result.metrics = {k: opt[k] for k in ("f1", "precision", "recall", "score") if k in opt}
-    elif method == "linear":
-        wopt = optimize_weights_linear(samples, dim_keys=dim_keys, base_weights=base_w)
-        result.dimension_weights = wopt.get("weights") or base_w
-        result.metrics = {"coef": wopt.get("coef"), "intercept": wopt.get("intercept")}
-        if wopt.get("note"):
-            result.notes.append(str(wopt["note"]))
-        gopt = optimize_thresholds_grid(samples, base=base_th)
-        result.thresholds = {
-            "watchlist_threshold": gopt["watchlist_threshold"],
-            "buy_threshold": gopt["buy_threshold"],
-            "sell_threshold": gopt["sell_threshold"],
-        }
-    elif method == "lightgbm":
-        wopt = optimize_weights_lightgbm(samples, dim_keys=dim_keys, base_weights=base_w)
-        result.dimension_weights = wopt.get("weights") or base_w
-        if wopt.get("note"):
-            result.notes.append(str(wopt["note"]))
-        gopt = optimize_thresholds_grid(samples, base=base_th)
-        result.thresholds = {
-            "watchlist_threshold": gopt["watchlist_threshold"],
-            "buy_threshold": gopt["buy_threshold"],
-            "sell_threshold": gopt["sell_threshold"],
-        }
-    elif method == "bayesian":
+    elif resolved in ("linear", "lightgbm"):
+        weights, thresholds, metrics, notes = _calibrate_weights_and_thresholds(
+            samples,
+            weight_method=resolved,
+            dim_keys=dim_keys,
+            base_w=base_w,
+            base_th=base_th,
+        )
+        result.dimension_weights = weights
+        result.thresholds = thresholds
+        result.metrics = {**result.metrics, **metrics}
+        result.notes.extend(notes)
+    elif resolved == "bayesian":
         opt = optimize_bayesian(samples, base=base_th)
         result.thresholds = {
             "watchlist_threshold": opt["watchlist_threshold"],
@@ -159,7 +232,9 @@ def calibrate(method: str = "grid", *, min_samples: int = 100) -> CalibrationRes
         }
         result.metrics = {k: opt.get(k) for k in ("f1", "method_detail")}
     else:
-        raise ValueError(f"未知校准方法: {method}，可选 grid|linear|lightgbm|bayesian")
+        raise ValueError(
+            f"未知校准方法: {method}，可选 grid|linear|lightgbm|bayesian|auto"
+        )
 
     result.confirmation = optimize_confirmation_intervals(samples, base_cfg=gates_cfg)
 
@@ -170,6 +245,8 @@ def calibrate(method: str = "grid", *, min_samples: int = 100) -> CalibrationRes
         result.apply_blocked = True
         reason = wf.get("reason") or "walk-forward 未通过"
         result.notes.append(f"禁止 apply：{reason}")
+    elif samples_insufficient_for_apply:
+        result.apply_blocked = True
 
     return result
 

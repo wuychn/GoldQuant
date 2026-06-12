@@ -24,15 +24,21 @@ def main() -> None:
     )
     parser.add_argument(
         "--method",
-        choices=["grid", "linear", "lightgbm", "bayesian"],
-        default="grid",
-        help="grid=网格阈值; linear=Ridge权重; lightgbm=特征重要性; bayesian=差分进化阈值",
+        choices=["grid", "linear", "lightgbm", "bayesian", "auto"],
+        default="auto",
+        help="auto=按样本选 linear/lightgbm; grid=仅阈值; linear/lightgbm=权重+阈值; bayesian=连续阈值",
     )
     parser.add_argument(
         "--min-samples",
         type=int,
         default=100,
         help="最少样本条数，不足则只提示不优化且禁止 apply",
+    )
+    parser.add_argument(
+        "--lightgbm-min-samples",
+        type=int,
+        default=300,
+        help="auto 模式下启用 lightgbm 的样本下限（默认 300）",
     )
     parser.add_argument(
         "--apply",
@@ -47,7 +53,11 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "calibrate":
-        result = calibrate(args.method, min_samples=args.min_samples)
+        result = calibrate(
+            args.method,
+            min_samples=args.min_samples,
+            lightgbm_min_samples=args.lightgbm_min_samples,
+        )
         print(f"方法: {result.method}")
         print(f"样本数: {result.sample_count}")
         if result.thresholds:

@@ -11,16 +11,14 @@ import logging
 import os
 import tempfile
 import threading
-from datetime import datetime
 from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from quant.store.paths import daily_cache, today_str
+from quant.timeutil import cn_datetime_str
 
 logger = logging.getLogger(__name__)
 
-_SH_TZ = ZoneInfo("Asia/Shanghai")
 _CACHE_FILENAME = "stock_concepts.json"
 
 _store_lock = threading.Lock()
@@ -114,7 +112,7 @@ class DailyConceptCache:
                 "股票名称": str(name or "").strip(),
                 "所属概念": concepts,
                 "概念来源": source,
-                "fetched_at": datetime.now(_SH_TZ).isoformat(),
+                "fetched_at": cn_datetime_str(),
             }
             _write_json_atomic(self._path, data)
             self._data = data

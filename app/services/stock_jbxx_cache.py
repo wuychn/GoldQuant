@@ -13,14 +13,13 @@ import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from quant.store.paths import quant_cache_file
+from quant.timeutil import cn_datetime_str, cn_now, parse_cn_datetime_str
 from app.utils.error_log import log_caught_error
 
 logger = logging.getLogger(__name__)
 
-_SH_TZ = ZoneInfo("Asia/Shanghai")
 _CACHE_FILENAME = "stock_jbxx.json"
 _TTL_DAYS = 7
 
@@ -44,13 +43,7 @@ def _write_json_atomic(path: Path, obj: Any) -> None:
 
 
 def _parse_ts(s: str) -> datetime | None:
-    try:
-        dt = datetime.fromisoformat(s)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=_SH_TZ)
-        return dt.astimezone(_SH_TZ)
-    except ValueError:
-        return None
+    return parse_cn_datetime_str(s)
 
 
 class StockJbxxCache:
@@ -87,7 +80,7 @@ class StockJbxxCache:
         dt = _parse_ts(fetched_at)
         if dt is None:
             return False
-        return datetime.now(_SH_TZ) - dt < self._ttl
+        return cn_now() - dt < self._ttl
 
     def lookup(self, code: str) -> tuple[bool, dict[str, Any] | None]:
         """返回 (是否命中有效缓存, 基本信息 dict)。"""
@@ -113,7 +106,7 @@ class StockJbxxCache:
             body = self._load()
             body["stocks"][key] = {
                 "data": data,
-                "fetched_at": datetime.now(_SH_TZ).isoformat(),
+                "fetched_at": cn_datetime_str(),
             }
             _write_json_atomic(self._path, body)
             self._data = body

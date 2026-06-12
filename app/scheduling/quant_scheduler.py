@@ -143,6 +143,18 @@ def _job_prefetch_stock_concepts(_settings: Settings) -> None:
         log_caught_error(logger, "[quant-scheduler] 预取个股静态数据", e)
 
 
+def _job_weekly_backtest(settings: Settings) -> None:
+    from quant.jobs.weekly_reports import run_weekly_backtest
+
+    run_weekly_backtest(settings)
+
+
+def _job_weekly_ml(settings: Settings) -> None:
+    from quant.jobs.weekly_reports import run_weekly_ml
+
+    run_weekly_ml(settings)
+
+
 def build_quant_scheduler(settings: Settings) -> BackgroundScheduler | None:
     """按 `Settings` 构建并注册任务；调用方需在 lifespan 内 `start()` / `shutdown()`。"""
     if not settings.QUANT_SCHEDULER_ENABLED:
@@ -221,14 +233,41 @@ def build_quant_scheduler(settings: Settings) -> BackgroundScheduler | None:
             **defaults,
         )
 
+    if settings.QUANT_SCHED_WEEKLY_BACKTEST_ENABLED:
+        bh, bm = _parse_hh_mm(settings.QUANT_SCHED_WEEKLY_BACKTEST_TIME)
+        sched.add_job(
+            _job_weekly_backtest,
+            CronTrigger(timezone=tz, day_of_week="sat", hour=bh, minute=bm),
+            args=[settings],
+            id="quant_weekly_backtest",
+            **defaults,
+        )
+
+    if settings.QUANT_SCHED_WEEKLY_ML_ENABLED:
+        mh, mm = _parse_hh_mm(settings.QUANT_SCHED_WEEKLY_ML_TIME)
+        sched.add_job(
+            _job_weekly_ml,
+            CronTrigger(timezone=tz, day_of_week="sun", hour=mh, minute=mm),
+            args=[settings],
+            id="quant_weekly_ml",
+            **defaults,
+        )
+
     n_during = len(during_times)
     prefetch_note = ""
     if settings.QUANT_SCHED_PREFETCH_CONCEPTS_ENABLED:
         ch, cm = _parse_hh_mm(settings.QUANT_SCHED_PREFETCH_CONCEPTS_TIME)
         prefetch_note = f", prefetch_concepts=%02d:%02d" % (ch, cm)
+    weekly_note = ""
+    if settings.QUANT_SCHED_WEEKLY_BACKTEST_ENABLED:
+        bh, bm = _parse_hh_mm(settings.QUANT_SCHED_WEEKLY_BACKTEST_TIME)
+        weekly_note += f", backtest=Sat {bh:02d}:{bm:02d}"
+    if settings.QUANT_SCHED_WEEKLY_ML_ENABLED:
+        mh, mm = _parse_hh_mm(settings.QUANT_SCHED_WEEKLY_ML_TIME)
+        weekly_note += f", ml=Sun {mh:02d}:{mm:02d}"
     logger.debug(
         "[quant-scheduler] 已注册: news(hours=%s @ :%02d), pre=%02d:%02d, during×%d, "
-        "lunch=%02d:%02d, evening=%02d:%02d%s, tz=%s",
+        "lunch=%02d:%02d, evening=%02d:%02d%s%s, tz=%s",
         hour_spec,
         settings.QUANT_SCHED_NEWS_MINUTE,
         ph,
@@ -239,6 +278,7 @@ def build_quant_scheduler(settings: Settings) -> BackgroundScheduler | None:
         eh,
         em,
         prefetch_note,
+        weekly_note,
         settings.QUANT_SCHED_TIMEZONE,
     )
     return sched

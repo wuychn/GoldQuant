@@ -4,13 +4,11 @@ from __future__ import annotations
 
 import tempfile
 import unittest
-from datetime import datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 from app.services.stock_jbxx_cache import StockJbxxCache
-
-_TZ = ZoneInfo("Asia/Shanghai")
+from quant.timeutil import cn_datetime_str, cn_now
 
 
 class StockJbxxCacheTests(unittest.TestCase):
@@ -33,7 +31,7 @@ class StockJbxxCacheTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "stock_jbxx.json"
             cache = StockJbxxCache(path=path, ttl_days=7)
-            stale = (datetime.now(_TZ) - timedelta(days=8)).isoformat()
+            stale = cn_datetime_str(cn_now() - timedelta(days=8))
             cache._data = {
                 "stocks": {
                     "600519": {

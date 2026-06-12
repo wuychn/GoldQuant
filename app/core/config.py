@@ -118,6 +118,18 @@ class Settings(BaseSettings):
     QUANT_SCHED_PREFETCH_CONCEPTS_TIME: str = "05:00"
     #: 错过触发窗口后的仍可执行宽限（秒）。
     QUANT_SCHED_MISFIRE_GRACE_SEC: int = Field(default=600, ge=60, le=86400)
+    #: 每周六定时回测并推送飞书（须配置 FEISHU_*）。
+    QUANT_SCHED_WEEKLY_BACKTEST_ENABLED: bool = True
+    QUANT_SCHED_WEEKLY_BACKTEST_TIME: str = "08:00"
+    QUANT_SCHED_WEEKLY_BACKTEST_LOOKBACK_WEEKS: int = Field(default=12, ge=1, le=104)
+    QUANT_SCHED_WEEKLY_BACKTEST_INITIAL_CASH: float = Field(default=100_000.0, gt=0)
+    #: 每周日定时 ML 校准并推送飞书；默认不自动 apply，仅报告建议值。
+    QUANT_SCHED_WEEKLY_ML_ENABLED: bool = True
+    QUANT_SCHED_WEEKLY_ML_TIME: str = "08:00"
+    QUANT_SCHED_WEEKLY_ML_METHOD: str = "auto"
+    QUANT_SCHED_WEEKLY_ML_MIN_SAMPLES: int = Field(default=100, ge=20, le=10_000)
+    QUANT_SCHED_WEEKLY_ML_LIGHTGBM_MIN_SAMPLES: int = Field(default=300, ge=50, le=10_000)
+    QUANT_SCHED_WEEKLY_ML_APPLY: bool = False
 
     # CORS：逗号分隔的源列表，或单独一个 `*` 表示全部（此时不可与凭证共用）
     CORS_ORIGINS: str = "*"
