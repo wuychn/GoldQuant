@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Literal
 
 from app.core.config import Settings
 from app.utils.common_util import get_n_workdays_ago, list_to_dict_v2
@@ -16,7 +17,7 @@ from app.utils.quant_archive import (
 from app.utils.quant_market_enrich import pre_auction_minute_zh
 from app.utils.ths_util import ggzjl, wcxg
 from app.utils.error_log import log_caught_error
-from quant.progress_log import log_progress_count
+from quant.progress_log import log_progress, log_progress_count
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,23 @@ _concept_cache: dict[str, list[str] | None] = {}
 
 CONCEPT_SOURCE_WENCAI = "问财"
 CONCEPT_SOURCE_FALLBACK = "来源自带"
+
+ConceptFetchSource = Literal["memory", "file", "api"]
+
+
+@dataclass(frozen=True)
+class ConceptFetchResult:
+    concepts: list[str] | None
+    source: ConceptFetchSource | None = None
+
+
+def concept_fetch_progress_label(source: ConceptFetchSource | None) -> str:
+    """进度日志用：区分缓存命中与问财接口。"""
+    if source in ("memory", "file"):
+        return "概念·缓存"
+    if source == "api":
+        return "概念·问财"
+    return "概念"
 
 
 def _log_error(context: str, exc: Exception | None = None) -> None:
@@ -139,28 +157,29 @@ async def attach_stock_concepts_from_wencai(
     *,
     cache: dict[str, list[str] | None] | None = None,
     file_cache=None,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], ConceptFetchSource | None]:
     """优先日缓存文件，缺失再问财（同日同代码仅调一次）；失败或空时回退行内已有概念。"""
     item = dict(row)
     symbol = str(item.get("股票代码", "")).strip()
     if not symbol:
-        return item
+        return item, None
 
     fallback = _parse_existing_concepts(item)
     stock_name = item.get("股票名称")
-    concepts = await fetch_stock_concepts_wcxg(
+    fetched = await fetch_stock_concepts_wcxg(
         symbol,
         stock_name if isinstance(stock_name, str) else None,
         cache=cache,
         file_cache=file_cache,
     )
-    if concepts:
-        item["所属概念"] = concepts
+    if fetched.concepts:
+        item["所属概念"] = fetched.concepts
         item["概念来源"] = CONCEPT_SOURCE_WENCAI
     elif fallback:
         item["所属概念"] = fallback
         item["概念来源"] = _infer_fallback_concept_source(item)
-    return item
+        return item, None
+    return item, fetched.source
 
 
 async def attach_concepts_to_rows(
@@ -169,7 +188,6 @@ async def attach_concepts_to_rows(
     cache: dict[str, list[str] | None] | None = None,
     file_cache=None,
     progress_scope: str | None = None,
-    progress_label: str = "问财",
 ) -> list[dict]:
     from app.services.stock_concept_cache import get_daily_concept_cache
 
@@ -177,15 +195,34 @@ async def attach_concepts_to_rows(
     day_cache = file_cache if file_cache is not None else get_daily_concept_cache()
     out: list[dict] = []
     total = len(rows)
+    cache_hits = 0
+    api_calls = 0
     for i, row in enumerate(rows):
         if not isinstance(row, dict):
             continue
-        out.append(
-            await attach_stock_concepts_from_wencai(row, cache=store, file_cache=day_cache)
+        item, source = await attach_stock_concepts_from_wencai(
+            row, cache=store, file_cache=day_cache
         )
+        out.append(item)
+        if source in ("memory", "file"):
+            cache_hits += 1
+        elif source == "api":
+            api_calls += 1
         if progress_scope and total and (i == 0 or i + 1 == total or (i + 1) % 5 == 0):
             code = str(row.get("股票代码", "")).strip()
-            log_progress_count(progress_scope, progress_label, i + 1, total, detail=code)
+            log_progress_count(
+                progress_scope,
+                concept_fetch_progress_label(source),
+                i + 1,
+                total,
+                detail=code,
+            )
+    if progress_scope and total:
+        log_progress(
+            progress_scope,
+            "补概念汇总",
+            detail=f"共 {total} 只，缓存 {cache_hits}，问财 {api_calls}",
+        )
     return out
 
 
@@ -195,29 +232,29 @@ async def fetch_stock_concepts_wcxg(
     *,
     cache: dict[str, list[str] | None] | None = None,
     file_cache=None,
-) -> list[str] | None:
+) -> ConceptFetchResult:
     from app.services.stock_concept_cache import get_daily_concept_cache
 
     key = str(symbol).strip()
     if not key:
-        return None
+        return ConceptFetchResult(None, None)
     store = cache if cache is not None else _concept_cache
     if key in store:
-        return store[key]
+        return ConceptFetchResult(store[key], "memory")
 
     day_cache = file_cache if file_cache is not None else get_daily_concept_cache()
     hit, cached = day_cache.lookup(key)
     if hit:
         store[key] = cached
-        return cached
+        return ConceptFetchResult(cached, "file")
 
     async with day_cache.async_lock_for(key):
         if key in store:
-            return store[key]
+            return ConceptFetchResult(store[key], "memory")
         hit, cached = day_cache.lookup(key)
         if hit:
             store[key] = cached
-            return cached
+            return ConceptFetchResult(cached, "file")
 
         question = key
         if name:
@@ -230,7 +267,7 @@ async def fetch_stock_concepts_wcxg(
             result = None
         day_cache.put(key, name=name, concepts=result)
         store[key] = result
-        return result
+        return ConceptFetchResult(result, "api")
 
 
 async def _ggzjl(symbol: str) -> dict | None:
@@ -261,14 +298,15 @@ async def enrich_stock_row(
     concept_cache: dict[str, list[str] | None] | None = None,
     concept_file_cache=None,
     skip_wencai: bool = False,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], ConceptFetchSource | None]:
     item = dict(row)
     symbol = str(item.get("股票代码", "")).strip()
+    concept_source: ConceptFetchSource | None = None
     if not symbol:
-        return item
+        return item, None
 
     if not skip_wencai:
-        item = await attach_stock_concepts_from_wencai(
+        item, concept_source = await attach_stock_concepts_from_wencai(
             item,
             cache=concept_cache,
             file_cache=concept_file_cache,
@@ -300,7 +338,7 @@ async def enrich_stock_row(
     if zj_raw:
         item["个股资金流"] = zj_raw
 
-    return item
+    return item, concept_source
 
 
 async def enrich_stock_rows(
@@ -320,20 +358,41 @@ async def enrich_stock_rows(
     day_cache = concept_file_cache if concept_file_cache is not None else get_daily_concept_cache()
     out: list[dict] = []
     total = len(rows)
+    cache_hits = 0
+    api_calls = 0
     for i, row in enumerate(rows):
         if not isinstance(row, dict):
             continue
-        out.append(
-            await enrich_stock_row(
-                settings,
-                row,
-                include_pre_snapshot=include_pre_snapshot,
-                concept_cache=cache,
-                concept_file_cache=day_cache,
-                skip_wencai=skip_wencai,
-            )
+        item, concept_source = await enrich_stock_row(
+            settings,
+            row,
+            include_pre_snapshot=include_pre_snapshot,
+            concept_cache=cache,
+            concept_file_cache=day_cache,
+            skip_wencai=skip_wencai,
         )
+        out.append(item)
+        if not skip_wencai:
+            if concept_source in ("memory", "file"):
+                cache_hits += 1
+            elif concept_source == "api":
+                api_calls += 1
+            if progress_scope and total and (i == 0 or i + 1 == total or (i + 1) % 5 == 0):
+                code = str(row.get("股票代码", "")).strip()
+                log_progress_count(
+                    progress_scope,
+                    concept_fetch_progress_label(concept_source),
+                    i + 1,
+                    total,
+                    detail=code,
+                )
         if progress_scope and total and (i == 0 or i + 1 == total or (i + 1) % 5 == 0):
             code = str(row.get("股票代码", "")).strip()
             log_progress_count(progress_scope, progress_label, i + 1, total, detail=code)
+    if progress_scope and total and not skip_wencai:
+        log_progress(
+            progress_scope,
+            "补概念汇总",
+            detail=f"共 {total} 只，缓存 {cache_hits}，问财 {api_calls}",
+        )
     return out

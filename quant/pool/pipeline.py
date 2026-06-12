@@ -22,11 +22,10 @@ async def run_candidate_pipeline(
     if not rows:
         log_progress(progress_scope, "候选为空，跳过问财/enrich")
         return []
-    log_progress(progress_scope, "问财补概念", detail=f"共 {len(rows)} 只")
+    log_progress(progress_scope, "补概念", detail=f"共 {len(rows)} 只")
     with_concepts = await attach_concepts_to_rows(
         rows,
         progress_scope=progress_scope,
-        progress_label="问财",
     )
     log_progress(progress_scope, "enrich 行情数据", detail=f"共 {len(with_concepts)} 只")
     enriched = await enrich_stock_rows(

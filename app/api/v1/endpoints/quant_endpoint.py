@@ -29,7 +29,11 @@ from app.utils.common_util import (
 from app.utils.dataframe import dataframe_to_records
 from app.utils.dfcf_util import ztgc, ztgc_with_date
 from app.utils.error_log import log_caught_error
-from app.services.stock_enrich import attach_stock_concepts_from_wencai, enrich_stock_rows
+from app.services.stock_enrich import (
+    attach_stock_concepts_from_wencai,
+    concept_fetch_progress_label,
+    enrich_stock_rows,
+)
 from app.utils.etf52_util import zdfb_52etf
 from app.utils.ths_util import stock_fund_flow_concept, hot_stock, zdfb_ths
 from quant.pool.candidate_config import PAYLOAD_KEY_PKYD, PAYLOAD_KEY_POPULARITY, PAYLOAD_KEY_ZT
@@ -413,26 +417,43 @@ async def _hot(settings: SettingsDep, *, progress_scope: str | None = "during_ma
         raw_hot = await hot_stock(settings, n)
         rows = prefilter_popularity(raw_hot if isinstance(raw_hot, list) else [])
         scope = progress_scope or "during_market"
-        log_progress(scope, "人气榜问财补概念", detail=f"共 {len(rows)} 只")
+        log_progress(scope, "人气榜补概念", detail=f"共 {len(rows)} 只")
         from app.services.stock_concept_cache import get_daily_concept_cache
 
         out: list[dict[str, Any]] = []
         mem_cache: dict[str, list[str] | None] = {}
         day_cache = get_daily_concept_cache()
         total = len(rows)
+        cache_hits = 0
+        api_calls = 0
         for i, item in enumerate(rows):
             if not isinstance(item, dict):
                 continue
-            out.append(
-                await attach_stock_concepts_from_wencai(
-                    item,
-                    cache=mem_cache,
-                    file_cache=day_cache,
-                )
+            row, source = await attach_stock_concepts_from_wencai(
+                item,
+                cache=mem_cache,
+                file_cache=day_cache,
             )
+            out.append(row)
+            if source in ("memory", "file"):
+                cache_hits += 1
+            elif source == "api":
+                api_calls += 1
             if total and (i == 0 or i + 1 == total or (i + 1) % 5 == 0):
                 code = str(item.get("股票代码", "")).strip()
-                log_progress_count(scope, "问财", i + 1, total, detail=code)
+                log_progress_count(
+                    scope,
+                    concept_fetch_progress_label(source),
+                    i + 1,
+                    total,
+                    detail=code,
+                )
+        if total:
+            log_progress(
+                scope,
+                "人气榜补概念汇总",
+                detail=f"共 {total} 只，缓存 {cache_hits}，问财 {api_calls}",
+            )
         return out
     except Exception:
         _log_api_error("同花顺人气股 | ths.hot_stock (no enrich)")
@@ -618,7 +639,7 @@ async def during_market(settings: SettingsDep, background_tasks: BackgroundTasks
     log_progress(scope, "拉取涨停统计")
     zttj = await _ztgk(settings, True)
 
-    log_progress(scope, "拉取人气榜并问财补概念")
+    log_progress(scope, "拉取人气榜并补概念")
     hot_ = await _hot(settings)
 
     zxg_, ccg_ = await _enrich_optional_and_holding(settings, progress_scope=scope)
