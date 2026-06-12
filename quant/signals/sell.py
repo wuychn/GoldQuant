@@ -1,4 +1,4 @@
-"""卖出原始信号：顺势卖出 — 回调仓仅止损/有效破 MA20；上升仓按趋势走弱卖出。"""
+"""卖出原始信号：止损/时间横盘止损/日内走弱 + 顺势卖出。"""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from quant.constants import (
     SELL_KIND_INTRADAY_WEAK,
     SELL_KIND_MA5_BREAK,
     SELL_KIND_TREND_ERODE,
+    SELL_KIND_TIME_STOP,
     STRATEGY_NAME,
 )
 from quant.scoring.context import ScoreContext
@@ -17,6 +18,7 @@ from quant.store.state import get_holdings
 from quant.scoring.tech_indicators import mas_from_stock, quote_last_price
 from quant.strategy.intraday import intraday_weakness_triggers_sell
 from quant.strategy.main_wave import detect_sell_setup
+from quant.strategy.time_stop import parse_buy_date, time_stop_triggers_sell
 from quant.strategy.trend import (
     PHASE_DOWN,
     PHASE_PREPARING_DOWN,
@@ -83,11 +85,19 @@ def generate_sell_signals(ctx: ScoreContext) -> list[TradeSignal]:
         sell_type = ""
         kind = ""
         reason = ""
+        buy_dt = parse_buy_date(enriched)
+        ts_ok, ts_reason = time_stop_triggers_sell(
+            enriched, sell_cfg, pnl_pct=pnl_pct, buy_date=buy_dt
+        )
 
         if pnl_pct <= stop_loss:
             sell_type = "止损"
             kind = "止损"
             reason = f"浮亏{pnl_pct:.2f}%≤{stop_loss}%"
+        elif ts_ok:
+            sell_type = "时间止损"
+            kind = SELL_KIND_TIME_STOP
+            reason = ts_reason
         elif _intraday_weakness_applies(ctx, sell_cfg):
             ok_weak, weak_reason = intraday_weakness_triggers_sell(enriched, sell_cfg)
             if ok_weak:
