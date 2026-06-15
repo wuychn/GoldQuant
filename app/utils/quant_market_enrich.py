@@ -1,4 +1,4 @@
-"""量化大盘附加数据（如盘前竞价分钟行情）；返回字段以东财中文列为主。"""
+"""量化个股分钟行情（东财）；返回字段以东财中文列为主。"""
 
 from __future__ import annotations
 
@@ -13,8 +13,8 @@ from app.utils.error_log import log_caught_error
 logger = logging.getLogger(__name__)
 
 
-def pre_auction_minute_zh(context: str, symbol: str) -> list[dict[str, Any]] | None:
-    """东财盘前竞价分钟（默认 09:15–当日收盘时段），列名与东财一致为中文。"""
+def stock_intraday_minute_zh(context: str, symbol: str) -> list[dict[str, Any]] | None:
+    """东财当日 1 分钟 K（09:15–15:00），含集合竞价与连续竞价；列名与东财一致为中文。"""
     try:
         df = ak.stock_zh_a_hist_pre_min_em(
             symbol=str(symbol).strip(),
@@ -25,5 +25,10 @@ def pre_auction_minute_zh(context: str, symbol: str) -> list[dict[str, Any]] | N
             return []
         return dataframe_to_records(df)
     except Exception as e:
-        log_caught_error(logger, f"集合竞价分钟 [{context}] symbol={symbol}", e)
+        log_caught_error(logger, f"分钟行情 [{context}] symbol={symbol}", e)
         return None
+
+
+def pre_auction_minute_zh(context: str, symbol: str) -> list[dict[str, Any]] | None:
+    """兼容旧名；实为 ``stock_intraday_minute_zh``。"""
+    return stock_intraday_minute_zh(context, symbol)

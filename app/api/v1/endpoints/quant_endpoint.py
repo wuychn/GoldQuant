@@ -6,6 +6,7 @@ import copy
 import json
 import logging
 import re
+import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 from numbers import Integral, Real
@@ -29,11 +30,7 @@ from app.utils.common_util import (
 from app.utils.dataframe import dataframe_to_records
 from app.utils.dfcf_util import ztgc, ztgc_with_date
 from app.utils.error_log import log_caught_error
-from app.services.stock_enrich import (
-    attach_stock_concepts_from_wencai,
-    concept_fetch_progress_label,
-    enrich_stock_rows,
-)
+from app.services.stock_enrich import enrich_stock_rows
 from app.utils.etf52_util import zdfb_52etf
 from app.utils.ths_util import stock_fund_flow_concept, hot_stock, zdfb_ths
 from quant.pool.candidate_config import PAYLOAD_KEY_PKYD, PAYLOAD_KEY_POPULARITY, PAYLOAD_KEY_ZT
@@ -202,6 +199,8 @@ async def _enrich_stock_list(
         fetch_stocks: Callable[..., Awaitable[list]],
         *,
         include_pre_snapshot: bool = False,
+        skip_wencai: bool = False,
+        skip_jbxx: bool = False,
 ) -> list:
     try:
         rows = await fetch_stocks(settings)
@@ -211,7 +210,13 @@ async def _enrich_stock_list(
     if not rows:
         return []
     try:
-        return await enrich_stock_rows(settings, rows, include_pre_snapshot=include_pre_snapshot)
+        return await enrich_stock_rows(
+            settings,
+            rows,
+            include_pre_snapshot=include_pre_snapshot,
+            skip_wencai=skip_wencai,
+            skip_jbxx=skip_jbxx,
+        )
     except Exception:
         _log_api_error("_enrich_stock_list enrich")
         return rows
@@ -229,21 +234,96 @@ async def _async_holding_rows(_settings: SettingsDep) -> list:
     return await run_in_threadpool(get_holdings)
 
 
+async def _enrich_optional_and_holding_from_rows(
+    settings: SettingsDep,
+    optional: list,
+    holding: list,
+    *,
+    progress_scope: str | None = None,
+    include_pre_snapshot: bool = True,
+    skip_wencai: bool = False,
+    skip_jbxx: bool = False,
+) -> tuple[list, list]:
+    """对已取到的自选/持仓行 enrich；同代码只 enrich 一次。
+
+    ``skip_wencai=False``（默认）：日缓存优先，未命中或仅有空占位时再问财并写入缓存。
+    """
+    optional = optional if isinstance(optional, list) else []
+    holding = holding if isinstance(holding, list) else []
+
+    def _code(row: dict) -> str:
+        return str(row.get("股票代码", "")).strip()
+
+    seen: set[str] = set()
+    unique_rows: list[dict] = []
+    for row in optional:
+        if not isinstance(row, dict):
+            continue
+        c = _code(row)
+        if not c or c in seen:
+            continue
+        seen.add(c)
+        unique_rows.append(dict(row))
+    for row in holding:
+        if not isinstance(row, dict):
+            continue
+        c = _code(row)
+        if not c or c in seen:
+            continue
+        seen.add(c)
+        unique_rows.append(dict(row))
+
+    if progress_scope:
+        log_progress(
+            progress_scope,
+            "enrich 自选/持仓",
+            detail=f"自选 {len(optional)} + 持仓 {len(holding)} → 去重 {len(unique_rows)}",
+        )
+
+    enriched = await enrich_stock_rows(
+        settings,
+        unique_rows,
+        include_pre_snapshot=include_pre_snapshot,
+        skip_wencai=skip_wencai,
+        skip_jbxx=skip_jbxx,
+        progress_scope=progress_scope,
+        progress_label="enrich",
+    )
+    by_code = {_code(r): r for r in enriched if isinstance(r, dict) and _code(r)}
+
+    zxg = [by_code[c] for r in optional if isinstance(r, dict) and (c := _code(r)) in by_code]
+    ccg = [by_code[c] for r in holding if isinstance(r, dict) and (c := _code(r)) in by_code]
+
+    if progress_scope:
+        log_progress(
+            progress_scope,
+            "自选/持仓 enrich 完成",
+            detail=f"自选 {len(zxg)} 只，持仓 {len(ccg)} 只",
+        )
+    return zxg, ccg
+
+
 async def _enrich_optional_and_holding(
     settings: SettingsDep,
     *,
     progress_scope: str | None = None,
+    include_pre_snapshot: bool = True,
+    skip_wencai: bool = False,
+    skip_jbxx: bool = False,
 ) -> tuple[list, list]:
-    """自选 + 持仓两行列表，结构与原先两次 ``_enrich_stock_list`` 调用一致。"""
-    if progress_scope:
-        log_progress(progress_scope, "enrich 自选股")
-    zxg = await _enrich_stock_list(settings, _async_optional_rows, include_pre_snapshot=True)
-    if progress_scope:
-        log_progress(progress_scope, "enrich 持仓股", detail=f"自选 {len(zxg)} 只")
-    ccg = await _enrich_stock_list(settings, _async_holding_rows, include_pre_snapshot=True)
-    if progress_scope:
-        log_progress(progress_scope, "自选/持仓 enrich 完成", detail=f"持仓 {len(ccg)} 只")
-    return zxg, ccg
+    optional, holding = await asyncio.gather(
+        _async_optional_rows(settings),
+        _async_holding_rows(settings),
+    )
+    return await _enrich_optional_and_holding_from_rows(
+        settings,
+        optional,
+        holding,
+        progress_scope=progress_scope,
+        include_pre_snapshot=include_pre_snapshot,
+        skip_wencai=skip_wencai,
+        skip_jbxx=skip_jbxx,
+    )
 
 
 def _quant_data_file(name: str) -> Path:
@@ -411,50 +491,14 @@ async def _ztgk(settings: SettingsDep, more: bool = False, *, zt_full: list | No
 
 
 async def _hot(settings: SettingsDep, *, progress_scope: str | None = "during_market"):
-    """盘中等人气榜展示：初筛 + 问财概念（不走完整 enrich）。"""
+    """盘中人气榜：同花顺排名/连板/概念标签；不问财（仅自选人气匹配与叙述）。"""
     try:
         n = settings.quant_hot_list_limit()
         raw_hot = await hot_stock(settings, n)
         rows = prefilter_popularity(raw_hot if isinstance(raw_hot, list) else [])
         scope = progress_scope or "during_market"
-        log_progress(scope, "人气榜补概念", detail=f"共 {len(rows)} 只")
-        from app.services.stock_concept_cache import get_daily_concept_cache
-
-        out: list[dict[str, Any]] = []
-        mem_cache: dict[str, list[str] | None] = {}
-        day_cache = get_daily_concept_cache()
-        total = len(rows)
-        cache_hits = 0
-        api_calls = 0
-        for i, item in enumerate(rows):
-            if not isinstance(item, dict):
-                continue
-            row, source = await attach_stock_concepts_from_wencai(
-                item,
-                cache=mem_cache,
-                file_cache=day_cache,
-            )
-            out.append(row)
-            if source in ("memory", "file"):
-                cache_hits += 1
-            elif source == "api":
-                api_calls += 1
-            if total and (i == 0 or i + 1 == total or (i + 1) % 5 == 0):
-                code = str(item.get("股票代码", "")).strip()
-                log_progress_count(
-                    scope,
-                    concept_fetch_progress_label(source),
-                    i + 1,
-                    total,
-                    detail=code,
-                )
-        if total:
-            log_progress(
-                scope,
-                "人气榜补概念汇总",
-                detail=f"共 {total} 只，缓存 {cache_hits}，问财 {api_calls}",
-            )
-        return out
+        log_progress(scope, "人气榜", detail=f"共 {len(rows)} 只")
+        return [dict(r) for r in rows if isinstance(r, dict)]
     except Exception:
         _log_api_error("同花顺人气股 | ths.hot_stock (no enrich)")
         return []
@@ -600,49 +644,43 @@ async def during_market(settings: SettingsDep, background_tasks: BackgroundTasks
     scope = "during_market"
     log_progress(scope, "开始构建盘中 payload")
 
-    log_progress(scope, "拉取大盘指数")
-    dpzs = await _dpzs()
-
-    log_progress(scope, "拉取赚钱效应")
-    zqxy_ = await _zqxy(market_phase="intraday")
-
-    log_progress(scope, "拉取概念四榜")
-    jrzfqsgn = await _stock_fund_flow_concept_or_none(
-        "涨幅前十概念 | ths.stock_fund_flow_concept",
-        "行业-涨跌幅",
+    optional, holding = await asyncio.gather(
+        _async_optional_rows(settings),
+        _async_holding_rows(settings),
     )
+    optional = optional if isinstance(optional, list) else []
+    holding = holding if isinstance(holding, list) else []
 
-    # 跌幅前十概念
-    jrdfqsgn = await _stock_fund_flow_concept_or_none(
-        "涨幅前十概念 | ths.stock_fund_flow_concept",
-        "行业-涨跌幅",
-        False
+    log_progress(scope, "并行拉取大盘/概念/涨停/人气 + enrich 自选/持仓")
+    macro_task = asyncio.gather(
+        _dpzs(),
+        _zqxy(market_phase="intraday"),
+        _stock_fund_flow_concept_or_none(
+            "涨幅前十概念 | ths.stock_fund_flow_concept",
+            "行业-涨跌幅",
+        ),
+        _stock_fund_flow_concept_or_none(
+            "资金流入前十概念 | ths.stock_fund_flow_concept",
+            "净额",
+        ),
+        _ztgk(settings, True),
+        _hot(settings),
     )
-
-    # 资金流入前十概念
-    jrzjlrqsgn = await _stock_fund_flow_concept_or_none(
-        "资金流入前十概念 | ths.stock_fund_flow_concept",
-        "净额",
+    enrich_task = _enrich_optional_and_holding_from_rows(
+        settings,
+        optional,
+        holding,
+        progress_scope=scope,
+        include_pre_snapshot=True,
+        skip_wencai=False,  # 自选/持仓：缓存优先，缺失或 5 点预取失败时问财并落盘
+        skip_jbxx=True,
     )
+    (
+        (dpzs, zqxy_, jrzfqsgn, jrzjlrqsgn, zttj, hot_),
+        (zxg_, ccg_),
+    ) = await asyncio.gather(macro_task, enrich_task)
 
-    # 资金流出前十概念
-    jrzjlcqsgn = await _stock_fund_flow_concept_or_none(
-        "资金流入前十概念 | ths.stock_fund_flow_concept",
-        "净额",
-        False
-    )
-
-    # 合并涨幅和资金流入
-    gn_bk = _merge_concept_boards(jrzfqsgn, jrzjlrqsgn, jrdfqsgn, jrzjlcqsgn)
-
-    # 涨停概况
-    log_progress(scope, "拉取涨停统计")
-    zttj = await _ztgk(settings, True)
-
-    log_progress(scope, "拉取人气榜并补概念")
-    hot_ = await _hot(settings)
-
-    zxg_, ccg_ = await _enrich_optional_and_holding(settings, progress_scope=scope)
+    gn_bk = _merge_concept_boards(jrzfqsgn, jrzjlrqsgn, None, None)
 
     result = {
         "大盘指数": dpzs,

@@ -12,6 +12,43 @@ from quant.scoring.tech_indicators import (
     to_float,
 )
 
+_HMS_RE = re.compile(r"(\d{1,2}):(\d{2})(?::(\d{2}))?")
+
+
+def is_continuous_auction_minute(ts: object) -> bool:
+    """A 股连续竞价时段：09:30–11:30、13:00–15:00（含端点）。"""
+    m = _HMS_RE.search(str(ts or ""))
+    if not m:
+        return False
+    h, mi = int(m.group(1)), int(m.group(2))
+    tot = h * 60 + mi
+    return (9 * 60 + 30 <= tot <= 11 * 60 + 30) or (13 * 60 <= tot <= 15 * 60)
+
+
+def session_minute_bars(stock: dict) -> list[dict]:
+    """连续竞价分钟 K（09:30 起，含成交量）。"""
+    raw = stock.get("分钟行情") or []
+    if not isinstance(raw, list):
+        return []
+    out: list[dict] = []
+    for row in raw:
+        if not isinstance(row, dict):
+            continue
+        ts = str(row.get("时间") or "")
+        if not is_continuous_auction_minute(ts):
+            continue
+        close = to_float(row.get("收盘") or row.get("最新价"))
+        if close is None or close <= 0:
+            continue
+        vol = to_float(row.get("成交量")) or 0.0
+        opn = to_float(row.get("开盘")) or close
+        out.append({"open": opn, "close": close, "vol": vol, "time": ts})
+    return out
+
+
+def _session_minute_bars(stock: dict) -> list[dict]:
+    return session_minute_bars(stock)
+
 
 def _parse_amount_wan(v: object) -> float | None:
     if v is None:
@@ -23,28 +60,6 @@ def _parse_amount_wan(v: object) -> float | None:
     if not m:
         return None
     return float(m.group())
-
-
-def _session_minute_bars(stock: dict) -> list[dict]:
-    """连续竞价分钟 K（09:30 起，含成交量）。"""
-    raw = stock.get("分钟行情") or []
-    if not isinstance(raw, list):
-        return []
-    out: list[dict] = []
-    for row in raw:
-        if not isinstance(row, dict):
-            continue
-        ts = str(row.get("时间") or "")
-        # 09:30 及之后；排除纯集合竞价 09:15–09:25
-        if not any(x in ts for x in ("09:3", "09:4", "09:5", "10:", "11:", "13:", "14:", "15:0")):
-            continue
-        close = to_float(row.get("收盘") or row.get("最新价"))
-        if close is None or close <= 0:
-            continue
-        vol = to_float(row.get("成交量")) or 0.0
-        opn = to_float(row.get("开盘")) or close
-        out.append({"open": opn, "close": close, "vol": vol, "time": ts})
-    return out
 
 
 def _vwap(bars: list[dict]) -> float | None:

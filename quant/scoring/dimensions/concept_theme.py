@@ -65,7 +65,7 @@ class ConceptThemeScorer:
         available = bool(hit_detail.get("available", True))
         return DimensionResult(
             self.name,
-            clamp(raw_score),
+            clamp(raw_score, lo=-100.0, hi=100.0),
             0,
             True,
             available=available,

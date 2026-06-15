@@ -172,6 +172,11 @@ gates:
     board_limit: 10                 # 每日快照：涨/跌/流入/流出榜各取前 N
     lookback_days: 10               # 指标计算窗口（交易日，含当日 payload）
     # past_board_days 默认 lookback_days-1：评分池 = 文件过去 N 日榜 + 当日榜
+    # 命中概念窗口排名分档（取命中里排名最靠前的一个定档）
+    rank_tiers:
+      mid_score: 45                 # 排名第 4–7：中间分（远低于前三 raw 分）
+      low_score: 5                  # 排名第 8–10：可忽略的低分
+      off_top_penalty: -50          # 排名第 11 及以后：负分减分
     score_weights:                  # 概念权重：入选次数 50 + 综合涨幅 30 + 净流入 20
       selection_count: 50           # 近 N 日累计入选涨幅榜前十次数
       composite_gain: 30            # 近 N 日综合涨幅(%，各上榜日涨跌幅累加)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -14,7 +15,7 @@ from app.utils.quant_archive import (
     load_computed_metrics_zh,
     load_merge_write_daily_bars,
 )
-from app.utils.quant_market_enrich import pre_auction_minute_zh
+from app.utils.quant_market_enrich import stock_intraday_minute_zh
 from app.utils.ths_util import ggzjl, wcxg
 from app.utils.error_log import log_caught_error
 from quant.progress_log import log_progress, log_progress_count
@@ -232,7 +233,9 @@ async def fetch_stock_concepts_wcxg(
     *,
     cache: dict[str, list[str] | None] | None = None,
     file_cache=None,
+    api_allowed: bool = True,
 ) -> ConceptFetchResult:
+    """问财概念：内存 → 日文件；文件命中且概念非空则返回，否则在 ``api_allowed`` 时调问财。"""
     from app.services.stock_concept_cache import get_daily_concept_cache
 
     key = str(symbol).strip()
@@ -244,7 +247,7 @@ async def fetch_stock_concepts_wcxg(
 
     day_cache = file_cache if file_cache is not None else get_daily_concept_cache()
     hit, cached = day_cache.lookup(key)
-    if hit:
+    if hit and (cached is not None or not api_allowed):
         store[key] = cached
         return ConceptFetchResult(cached, "file")
 
@@ -252,9 +255,13 @@ async def fetch_stock_concepts_wcxg(
         if key in store:
             return ConceptFetchResult(store[key], "memory")
         hit, cached = day_cache.lookup(key)
-        if hit:
+        if hit and (cached is not None or not api_allowed):
             store[key] = cached
             return ConceptFetchResult(cached, "file")
+
+        if not api_allowed:
+            store[key] = None
+            return ConceptFetchResult(None, None)
 
         question = key
         if name:
@@ -290,6 +297,35 @@ async def _ggzjl(symbol: str) -> dict | None:
         return None
 
 
+async def _attach_concepts_cache_only(
+    item: dict[str, Any],
+    *,
+    cache: dict[str, list[str] | None] | None = None,
+    file_cache=None,
+) -> tuple[dict[str, Any], ConceptFetchSource | None]:
+    """仅内存/日文件缓存或行内已有概念，不调问财 API。"""
+    symbol = str(item.get("股票代码", "")).strip()
+    if not symbol:
+        return item, None
+    fallback = _parse_existing_concepts(item)
+    stock_name = item.get("股票名称")
+    fetched = await fetch_stock_concepts_wcxg(
+        symbol,
+        stock_name if isinstance(stock_name, str) else None,
+        cache=cache,
+        file_cache=file_cache,
+        api_allowed=False,
+    )
+    if fetched.concepts:
+        item["所属概念"] = fetched.concepts
+        item["概念来源"] = CONCEPT_SOURCE_WENCAI
+    elif fallback:
+        item["所属概念"] = fallback
+        item["概念来源"] = _infer_fallback_concept_source(item)
+        return item, None
+    return item, fetched.source
+
+
 async def enrich_stock_row(
     settings: Settings,
     row: dict[str, Any],
@@ -298,6 +334,7 @@ async def enrich_stock_row(
     concept_cache: dict[str, list[str] | None] | None = None,
     concept_file_cache=None,
     skip_wencai: bool = False,
+    skip_jbxx: bool = False,
 ) -> tuple[dict[str, Any], ConceptFetchSource | None]:
     item = dict(row)
     symbol = str(item.get("股票代码", "")).strip()
@@ -305,25 +342,49 @@ async def enrich_stock_row(
     if not symbol:
         return item, None
 
-    if not skip_wencai:
+    if skip_wencai:
+        item, concept_source = await _attach_concepts_cache_only(
+            item,
+            cache=concept_cache,
+            file_cache=concept_file_cache,
+        )
+    else:
         item, concept_source = await attach_stock_concepts_from_wencai(
             item,
             cache=concept_cache,
             file_cache=concept_file_cache,
         )
 
-    from app.services.stock_jbxx_cache import fetch_jbxx_cached
+    if not skip_jbxx:
+        from app.services.stock_jbxx_cache import fetch_jbxx_cached
 
-    jbxx_ = fetch_jbxx_cached(symbol)
-    if isinstance(jbxx_, dict):
-        for k in ("总股本", "流通股", "总市值", "流通市值", "上市时间"):
-            if k in jbxx_:
-                item[k] = jbxx_[k]
+        jbxx_ = await asyncio.to_thread(fetch_jbxx_cached, symbol)
+        if isinstance(jbxx_, dict):
+            for k in ("总股本", "流通股", "总市值", "流通市值", "上市时间"):
+                if k in jbxx_:
+                    item[k] = jbxx_[k]
 
-    pk_raw = _sync_call_or_none("盘口", lambda: pk(symbol))
+    io_tasks: list[Any] = [
+        asyncio.to_thread(_sync_call_or_none, "盘口", lambda: pk(symbol)),
+        asyncio.to_thread(_load_hist, settings, symbol),
+        _ggzjl(symbol),
+    ]
+    if include_pre_snapshot:
+        io_tasks.append(
+            asyncio.to_thread(
+                stock_intraday_minute_zh,
+                "分钟行情 | ak.stock_zh_a_hist_pre_min_em",
+                symbol,
+            )
+        )
+    io_results = await asyncio.gather(*io_tasks)
+    pk_raw = io_results[0]
+    hist_ = io_results[1]
+    zj_raw = io_results[2]
+    pm = io_results[3] if include_pre_snapshot else None
+
     item["盘口"] = pk_raw if isinstance(pk_raw, dict) else {}
-
-    item["历史行情"] = _load_hist(settings, symbol)
+    item["历史行情"] = hist_ if isinstance(hist_, list) else []
 
     if settings.QUANT_ARCHIVE_ENABLED:
         tzh = load_computed_metrics_zh(settings, symbol)
@@ -331,10 +392,8 @@ async def enrich_stock_row(
             item["技术指标"] = tzh
 
     if include_pre_snapshot:
-        pm = pre_auction_minute_zh("分钟行情 | ak.stock_zh_a_hist_pre_min_em", symbol)
         item["分钟行情"] = pm if isinstance(pm, list) else []
 
-    zj_raw = await _ggzjl(symbol)
     if zj_raw:
         item["个股资金流"] = zj_raw
 
@@ -347,52 +406,71 @@ async def enrich_stock_rows(
     *,
     include_pre_snapshot: bool = False,
     skip_wencai: bool = False,
+    skip_jbxx: bool = False,
     concept_cache: dict[str, list[str] | None] | None = None,
     concept_file_cache=None,
     progress_scope: str | None = None,
     progress_label: str = "enrich",
+    max_concurrency: int | None = None,
 ) -> list[dict]:
     from app.services.stock_concept_cache import get_daily_concept_cache
 
     cache = concept_cache if concept_cache is not None else _concept_cache
     day_cache = concept_file_cache if concept_file_cache is not None else get_daily_concept_cache()
-    out: list[dict] = []
-    total = len(rows)
+    indexed: list[tuple[int, dict]] = [
+        (i, row) for i, row in enumerate(rows) if isinstance(row, dict)
+    ]
+    total = len(indexed)
+    if not indexed:
+        return []
+
+    conc = max_concurrency if max_concurrency is not None else settings.QUANT_ENRICH_CONCURRENCY
+    sem = asyncio.Semaphore(max(1, conc))
     cache_hits = 0
     api_calls = 0
-    for i, row in enumerate(rows):
-        if not isinstance(row, dict):
-            continue
-        item, concept_source = await enrich_stock_row(
-            settings,
-            row,
-            include_pre_snapshot=include_pre_snapshot,
-            concept_cache=cache,
-            concept_file_cache=day_cache,
-            skip_wencai=skip_wencai,
-        )
-        out.append(item)
-        if not skip_wencai:
+    done = 0
+    progress_lock = asyncio.Lock()
+
+    async def _one(idx: int, row: dict) -> tuple[int, dict, ConceptFetchSource | None]:
+        nonlocal cache_hits, api_calls, done
+        async with sem:
+            item, concept_source = await enrich_stock_row(
+                settings,
+                row,
+                include_pre_snapshot=include_pre_snapshot,
+                concept_cache=cache,
+                concept_file_cache=day_cache,
+                skip_wencai=skip_wencai,
+                skip_jbxx=skip_jbxx,
+            )
+        async with progress_lock:
             if concept_source in ("memory", "file"):
                 cache_hits += 1
             elif concept_source == "api":
                 api_calls += 1
-            if progress_scope and total and (i == 0 or i + 1 == total or (i + 1) % 5 == 0):
+            done += 1
+            if progress_scope and total and (
+                done == 1 or done == total or done % 5 == 0
+            ):
                 code = str(row.get("股票代码", "")).strip()
-                log_progress_count(
-                    progress_scope,
-                    concept_fetch_progress_label(concept_source),
-                    i + 1,
-                    total,
-                    detail=code,
-                )
-        if progress_scope and total and (i == 0 or i + 1 == total or (i + 1) % 5 == 0):
-            code = str(row.get("股票代码", "")).strip()
-            log_progress_count(progress_scope, progress_label, i + 1, total, detail=code)
-    if progress_scope and total and not skip_wencai:
+                if concept_source is not None or not skip_wencai:
+                    log_progress_count(
+                        progress_scope,
+                        concept_fetch_progress_label(concept_source),
+                        done,
+                        total,
+                        detail=code,
+                    )
+                log_progress_count(progress_scope, progress_label, done, total, detail=code)
+        return idx, item, concept_source
+
+    results = await asyncio.gather(*(_one(i, row) for i, row in indexed))
+    results.sort(key=lambda x: x[0])
+    out = [item for _, item, _ in results]
+    if progress_scope and total and (cache_hits or api_calls):
         log_progress(
             progress_scope,
             "补概念汇总",
-            detail=f"共 {total} 只，缓存 {cache_hits}，问财 {api_calls}",
+            detail=f"共 {total} 只，缓存 {cache_hits}，问财 {api_calls}，并发 {conc}",
         )
     return out

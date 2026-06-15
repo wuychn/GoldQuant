@@ -528,6 +528,40 @@ def update_concept_tracker_state(payload: dict) -> dict[str, Any]:
     return state
 
 
+def _concept_rank_map(nets: dict[str, float]) -> dict[str, int]:
+    ranked = sorted(nets.items(), key=lambda x: (-x[1], x[0]))
+    return {name: i + 1 for i, (name, _) in enumerate(ranked)}
+
+
+def _top_n_concept_names(nets: dict[str, float], top_n: int) -> list[str]:
+    ranked = sorted(nets.items(), key=lambda x: (-x[1], x[0]))
+    return [name for name, _ in ranked[: max(1, top_n)]]
+
+
+def _rank_tier_cfg(cfg: dict[str, Any] | None = None) -> dict[str, float]:
+    c = cfg or _concept_tracker_cfg()
+    tiers = c.get("rank_tiers") or {}
+    return {
+        "mid_score": float(tiers.get("mid_score", 45)),
+        "low_score": float(tiers.get("low_score", 5)),
+        "off_top_penalty": float(tiers.get("off_top_penalty", -50)),
+    }
+
+
+def _score_by_hit_rank(rank: int | None, raw_score: float, cfg: dict[str, Any] | None = None) -> tuple[float, str]:
+    """按命中概念在窗口内的排名分档给分。"""
+    tiers = _rank_tier_cfg(cfg)
+    if rank is None or rank <= 0:
+        return tiers["off_top_penalty"], "榜外"
+    if rank <= 3:
+        return max(-100.0, min(100.0, raw_score)), "前三"
+    if rank <= 7:
+        return tiers["mid_score"], "中游(4-7)"
+    if rank <= 10:
+        return tiers["low_score"], "边缘(8-10)"
+    return tiers["off_top_penalty"], "榜外(11+)"
+
+
 def score_concept_resonance(
     stock_concepts: set[str],
     payload: dict,
@@ -535,11 +569,12 @@ def score_concept_resonance(
     mode: str = "",
     update: bool = False,
 ) -> tuple[float, dict[str, Any]]:
-    """个股 concept_theme：取命中评分池概念中权重分最高者（0–100）；无命中为 0 分。"""
+    """个股 concept_theme：按命中概念的最佳窗口排名分档给分。"""
     del mode, update
     cfg = _concept_tracker_cfg()
     w_cfg = cfg.get("score_weights") or {}
     no_hit = float(w_cfg.get("no_hit", 0))
+    tiers = _rank_tier_cfg(cfg)
 
     state = _load_state()
     daily: dict[str, Any] = state.get("daily") or {}
@@ -551,27 +586,46 @@ def score_concept_resonance(
 
     gain, fund = _today_gain_fund_concepts(payload, daily, limit=limit)
     past_dates = _past_board_trading_days(_past_board_days(cfg))
+    rank_map = _concept_rank_map(nets)
+    top_names = _top_n_concept_names(nets, 10)
+
+    base_detail: dict[str, Any] = {
+        "available": True,
+        "评分概念池": sorted(pool),
+        "当日榜概念": sorted(gain | fund),
+        "文件榜覆盖日": past_dates,
+        "窗口前十概念": top_names,
+        "排名分档": tiers,
+    }
 
     matched = {c: nets[c] for c in stock_concepts if c in nets}
     if not matched:
         return no_hit, {
+            **base_detail,
             "命中概念": [],
             "概念权重分": {},
-            "available": True,
-            "评分概念池": sorted(pool),
-            "当日榜概念": sorted(gain | fund),
-            "文件榜覆盖日": past_dates,
+            "排名档位": None,
         }
 
-    peak = max(matched.values())
-    return max(0.0, min(100.0, peak)), {
-        "available": True,
+    best_name = min(matched.keys(), key=lambda c: (rank_map.get(c, 9999), -matched[c], c))
+    best_raw = matched[best_name]
+    best_rank = rank_map.get(best_name)
+    score, tier_label = _score_by_hit_rank(best_rank, best_raw, cfg)
+    hit_detail = {
+        k: round(v, 2) for k, v in sorted(matched.items(), key=lambda x: (-x[1], x[0]))
+    }
+    matched_ranks = {k: rank_map.get(k) for k in sorted(matched.keys())}
+
+    return score, {
+        **base_detail,
         "命中概念": sorted(matched.keys()),
-        "概念权重分": {k: round(v, 2) for k, v in sorted(matched.items(), key=lambda x: -x[1])},
-        "最高概念分": round(peak, 2),
-        "评分概念池": sorted(pool),
-        "当日榜概念": sorted(gain | fund),
-        "文件榜覆盖日": past_dates,
+        "概念权重分": hit_detail,
+        "命中概念排名": matched_ranks,
+        "最佳命中概念": best_name,
+        "最高概念分": round(best_raw, 2),
+        "最高命中排名": best_rank,
+        "排名档位": tier_label,
+        "概念减分": score < 0,
     }
 
 

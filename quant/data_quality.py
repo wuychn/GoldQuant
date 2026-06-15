@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 
 from quant.scoring.tech_indicators import quote_last_price
+from quant.strategy.intraday import session_minute_bars
 from quant.timeutil import cn_datetime_str
 
 
@@ -21,21 +22,20 @@ class DataQualityReport:
         return asdict(self)
 
 
-def _minute_bar_quality(stocks: list[dict], *, min_bars: int = 5) -> list[str]:
+def _session_minute_bar_quality(stocks: list[dict], *, min_bars: int = 5) -> list[str]:
+    """校验 09:30 起连续竞价分钟 K（非 09:15 集合竞价段）。"""
     issues: list[str] = []
     for stock in stocks:
         code = str(stock.get("股票代码", "")).strip()
-        bars = stock.get("分钟行情") or []
-        if not isinstance(bars, list) or len(bars) < min_bars:
-            issues.append(f"{code} 分钟行情不足({len(bars) if isinstance(bars, list) else 0}<{min_bars})")
+        bars = session_minute_bars(stock)
+        if len(bars) < min_bars:
+            issues.append(
+                f"{code} 连续竞价分钟不足({len(bars)}<{min_bars})"
+            )
             continue
-        nonzero_vol = sum(
-            1
-            for b in bars
-            if isinstance(b, dict) and float(str(b.get("成交量") or 0).replace(",", "") or 0) > 0
-        )
+        nonzero_vol = sum(1 for b in bars if b.get("vol", 0) > 0)
         if nonzero_vol < min_bars // 2:
-            issues.append(f"{code} 分钟成交量异常")
+            issues.append(f"{code} 连续竞价分钟成交量异常")
     return issues
 
 
@@ -71,15 +71,15 @@ def assess_payload_quality(payload: dict, *, mode: str = "") -> DataQualityRepor
             if quote_last_price(stock) is None:
                 issues.append(f"{label} {code} 无有效现价")
 
-    if mode == "during_market" and watch:
-        issues.extend(_minute_bar_quality(watch))
+    if mode == "during_market" and (watch or holdings):
+        issues.extend(_session_minute_bar_quality(watch + holdings))
 
     report.issues = issues
     critical = any(
         x in " ".join(issues)
         for x in ("缺少大盘指数", "涨跌幅缺失", "缺少赚钱效应")
     )
-    stale_intraday = any("分钟" in x for x in issues)
+    stale_intraday = any("分钟" in x or "连续竞价" in x for x in issues)
 
     if critical:
         report.ok = False
