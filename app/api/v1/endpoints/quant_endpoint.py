@@ -32,7 +32,8 @@ from app.utils.dfcf_util import ztgc, ztgc_with_date
 from app.utils.error_log import log_caught_error
 from app.services.stock_enrich import enrich_stock_rows
 from app.utils.etf52_util import zdfb_52etf
-from app.utils.ths_util import stock_fund_flow_concept, hot_stock, zdfb_ths
+from app.utils.ths_util import hyylb, stock_fund_flow_concept, hot_stock, zdfb_ths
+from quant.scoring.theme_boards import normalize_industry_board_rows
 from quant.pool.candidate_config import PAYLOAD_KEY_PKYD, PAYLOAD_KEY_POPULARITY, PAYLOAD_KEY_ZT
 from quant.pool.candidate_sources import build_all_source_candidates
 from quant.pool.pkyd_util import (
@@ -162,6 +163,33 @@ def _merge_concept_boards(jzf: list | None, jzj: list | None, jdf: list | None, 
         "资金流入榜": (jzj or [])[:limit],
         "资金流出榜": (jzjlc or [])[:limit],
     }
+
+
+def _merge_industry_boards(
+    gain: list | None,
+    fund: list | None,
+    loss: list | None = None,
+    fund_out: list | None = None,
+    *,
+    limit: int = 10,
+) -> dict[str, Any]:
+    boards: dict[str, Any] = {
+        "涨幅榜": normalize_industry_board_rows((gain or [])[:limit]),
+        "资金流入榜": normalize_industry_board_rows((fund or [])[:limit]),
+    }
+    if loss is not None:
+        boards["跌幅榜"] = normalize_industry_board_rows((loss or [])[:limit])
+    if fund_out is not None:
+        boards["资金流出榜"] = normalize_industry_board_rows((fund_out or [])[:limit])
+    return boards
+
+
+async def _industry_board_or_none(context: str, sort_key: str, desc: bool = True) -> list | None:
+    try:
+        return await hyylb(sort_key, desc)
+    except Exception:
+        _log_api_error(f"{context} sort_key={sort_key!r} desc={desc}")
+        return None
 
 
 def _log_api_error(context: str, exc: Exception | None = None) -> None:
@@ -504,8 +532,8 @@ async def _hot(settings: SettingsDep, *, progress_scope: str | None = "during_ma
         return []
 
 
-def _concept_payload_stub(gn_bk: dict | None) -> dict[str, Any]:
-    return {"概念板块": gn_bk or {}}
+def _theme_payload_stub(gn_bk: dict | None, hy_bk: dict | None = None) -> dict[str, Any]:
+    return {"概念板块": gn_bk or {}, "行业板块": hy_bk or {}}
 
 
 # ---------------------------------------------------------------------------
@@ -663,6 +691,8 @@ async def during_market(settings: SettingsDep, background_tasks: BackgroundTasks
             "资金流入前十概念 | ths.stock_fund_flow_concept",
             "净额",
         ),
+        _industry_board_or_none("行业涨幅榜 | ths.hyylb", "涨跌幅", True),
+        _industry_board_or_none("行业资金流入榜 | ths.hyylb", "净流入", True),
         _ztgk(settings, True),
         _hot(settings),
     )
@@ -676,16 +706,18 @@ async def during_market(settings: SettingsDep, background_tasks: BackgroundTasks
         skip_jbxx=True,
     )
     (
-        (dpzs, zqxy_, jrzfqsgn, jrzjlrqsgn, zttj, hot_),
+        (dpzs, zqxy_, jrzfqsgn, jrzjlrqsgn, hy_gain, hy_fund, zttj, hot_),
         (zxg_, ccg_),
     ) = await asyncio.gather(macro_task, enrich_task)
 
     gn_bk = _merge_concept_boards(jrzfqsgn, jrzjlrqsgn, None, None)
+    hy_bk = _merge_industry_boards(hy_gain, hy_fund)
 
     result = {
         "大盘指数": dpzs,
         "赚钱效应": zqxy_,
         "概念板块": gn_bk,
+        "行业板块": hy_bk,
         "涨停统计": zttj,
         PAYLOAD_KEY_POPULARITY: hot_,
         "自选股": zxg_,
@@ -714,34 +746,43 @@ async def post_market_lunch(settings: SettingsDep) -> Response:
     log_progress(scope, "拉取赚钱效应")
     zqxy_ = await _zqxy(market_phase="intraday")
 
-    log_progress(scope, "拉取概念四榜")
-    jrzfqsgn = await _stock_fund_flow_concept_or_none(
-        "涨幅前十概念 | ths.stock_fund_flow_concept",
-        "行业-涨跌幅",
+    log_progress(scope, "拉取概念/行业四榜")
+    (
+        jrzfqsgn,
+        jrdfqsgn,
+        jrzjlrqsgn,
+        jrzjlcqsgn,
+        hy_gain,
+        hy_loss,
+        hy_fund,
+        hy_fund_out,
+    ) = await asyncio.gather(
+        _stock_fund_flow_concept_or_none(
+            "涨幅前十概念 | ths.stock_fund_flow_concept",
+            "行业-涨跌幅",
+        ),
+        _stock_fund_flow_concept_or_none(
+            "跌幅前十概念 | ths.stock_fund_flow_concept",
+            "行业-涨跌幅",
+            False,
+        ),
+        _stock_fund_flow_concept_or_none(
+            "资金流入前十概念 | ths.stock_fund_flow_concept",
+            "净额",
+        ),
+        _stock_fund_flow_concept_or_none(
+            "资金流出前十概念 | ths.stock_fund_flow_concept",
+            "净额",
+            False,
+        ),
+        _industry_board_or_none("行业涨幅榜 | ths.hyylb", "涨跌幅", True),
+        _industry_board_or_none("行业跌幅榜 | ths.hyylb", "涨跌幅", False),
+        _industry_board_or_none("行业资金流入榜 | ths.hyylb", "净流入", True),
+        _industry_board_or_none("行业资金流出榜 | ths.hyylb", "净流入", False),
     )
 
-    # 跌幅前十概念
-    jrdfqsgn = await _stock_fund_flow_concept_or_none(
-        "涨幅前十概念 | ths.stock_fund_flow_concept",
-        "行业-涨跌幅",
-        False
-    )
-
-    # 资金流入前十概念
-    jrzjlrqsgn = await _stock_fund_flow_concept_or_none(
-        "资金流入前十概念 | ths.stock_fund_flow_concept",
-        "净额",
-    )
-
-    # 资金流出前十概念
-    jrzjlcqsgn = await _stock_fund_flow_concept_or_none(
-        "资金流入前十概念 | ths.stock_fund_flow_concept",
-        "净额",
-        False
-    )
-
-    # 合并涨幅和资金流入
     gn_bk = _merge_concept_boards(jrzfqsgn, jrzjlrqsgn, jrdfqsgn, jrzjlcqsgn)
+    hy_bk = _merge_industry_boards(hy_gain, hy_fund, hy_loss, hy_fund_out)
 
     # 涨停概况
     log_progress(scope, "拉取涨停统计")
@@ -753,6 +794,7 @@ async def post_market_lunch(settings: SettingsDep) -> Response:
         "大盘指数": dpzs,
         "赚钱效应": zqxy_,
         "概念板块": gn_bk,
+        "行业板块": hy_bk,
         "涨停统计": zttj,
         "自选股": zxg_,
         "持仓股": ccg_,
@@ -783,40 +825,49 @@ async def post_market(settings: SettingsDep, background_tasks: BackgroundTasks) 
     log_progress(scope, "拉取大盘资金流")
     zjl = await zjl_(3)
 
-    log_progress(scope, "拉取概念四榜")
-    jrzfqsgn = await _stock_fund_flow_concept_or_none(
-        "涨幅前十概念 | ths.stock_fund_flow_concept",
-        "行业-涨跌幅",
+    log_progress(scope, "拉取概念/行业四榜")
+    (
+        jrzfqsgn,
+        jrdfqsgn,
+        jrzjlrqsgn,
+        jrzjlcqsgn,
+        hy_gain,
+        hy_loss,
+        hy_fund,
+        hy_fund_out,
+    ) = await asyncio.gather(
+        _stock_fund_flow_concept_or_none(
+            "涨幅前十概念 | ths.stock_fund_flow_concept",
+            "行业-涨跌幅",
+        ),
+        _stock_fund_flow_concept_or_none(
+            "跌幅前十概念 | ths.stock_fund_flow_concept",
+            "行业-涨跌幅",
+            False,
+        ),
+        _stock_fund_flow_concept_or_none(
+            "资金流入前十概念 | ths.stock_fund_flow_concept",
+            "净额",
+        ),
+        _stock_fund_flow_concept_or_none(
+            "资金流出前十概念 | ths.stock_fund_flow_concept",
+            "净额",
+            False,
+        ),
+        _industry_board_or_none("行业涨幅榜 | ths.hyylb", "涨跌幅", True),
+        _industry_board_or_none("行业跌幅榜 | ths.hyylb", "涨跌幅", False),
+        _industry_board_or_none("行业资金流入榜 | ths.hyylb", "净流入", True),
+        _industry_board_or_none("行业资金流出榜 | ths.hyylb", "净流入", False),
     )
 
-    # 跌幅前十概念
-    jrdfqsgn = await _stock_fund_flow_concept_or_none(
-        "跌幅前十概念 | ths.stock_fund_flow_concept",
-        "行业-涨跌幅",
-        False
-    )
-
-    # 资金流入前十概念
-    jrzjlrqsgn = await _stock_fund_flow_concept_or_none(
-        "资金流入前十概念 | ths.stock_fund_flow_concept",
-        "净额",
-    )
-
-    # 资金流出前十概念
-    jrzjlcqsgn = await _stock_fund_flow_concept_or_none(
-        "资金流出前十概念 | ths.stock_fund_flow_concept",
-        "净额",
-        False
-    )
-
-    # 合并涨幅和资金流入
     gn_bk = _merge_concept_boards(jrzfqsgn, jrzjlrqsgn, jrdfqsgn, jrzjlcqsgn)
+    hy_bk = _merge_industry_boards(hy_gain, hy_fund, hy_loss, hy_fund_out)
 
     log_progress(scope, "拉取涨停全量")
     zt_full = await run_in_threadpool(ztgc)
     zttj = await _ztgk(settings, True, zt_full=zt_full if isinstance(zt_full, list) else [])
 
-    payload_stub = _concept_payload_stub(gn_bk)
+    payload_stub = _theme_payload_stub(gn_bk, hy_bk)
     log_progress(scope, "构建三来源候选（初筛→问财→enrich）")
     sources = await build_all_source_candidates(
         settings,
@@ -839,6 +890,7 @@ async def post_market(settings: SettingsDep, background_tasks: BackgroundTasks) 
         "赚钱效应": zqxy_,
         "大盘资金流": zjl,
         "概念板块": gn_bk,
+        "行业板块": hy_bk,
         "涨停统计": zttj,
         PAYLOAD_KEY_POPULARITY: hot_,
         PAYLOAD_KEY_ZT: zt_candidates,

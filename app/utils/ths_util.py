@@ -433,6 +433,20 @@ async def zdfb_ths():
     return await call_ths_api_with_header(_ZDFB_URL)
 
 
+async def hyylb(sort_key: str = "涨跌幅", desc: bool = True):
+    """
+    行业一览表（实时？）
+    :return:
+    """
+    records = dataframe_to_records(ak.stock_board_industry_summary_ths())
+    return sort_by_field_and_limit(
+        records,
+        sort_key,
+        10,
+        desc=desc,
+    )
+
+
 async def ggzjl(symbol):
     """个股资金流。"""
     return await call_ths_api_with_header(_STOCK_FUNDS_URL.format(symbol=symbol))
@@ -450,5 +464,5 @@ if __name__ == "__main__":
     # gnzjl = asyncio.run(stock_fund_flow_concept('3日排行', '流入资金'))
     # print(json.dumps(gnzjl, ensure_ascii=False, indent=2))
 
-    concepts = asyncio.run(wcxg("002580"))
-    print(json.dumps(concepts, ensure_ascii=False, indent=2))
+    hyylb_ = asyncio.run(hyylb())
+    print(json.dumps(hyylb_, ensure_ascii=False, indent=2))

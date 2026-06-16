@@ -360,7 +360,7 @@ async def enrich_stock_row(
 
         jbxx_ = await asyncio.to_thread(fetch_jbxx_cached, symbol)
         if isinstance(jbxx_, dict):
-            for k in ("总股本", "流通股", "总市值", "流通市值", "上市时间"):
+            for k in ("总股本", "流通股", "总市值", "流通市值", "上市时间", "行业"):
                 if k in jbxx_:
                     item[k] = jbxx_[k]
 

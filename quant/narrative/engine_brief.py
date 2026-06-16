@@ -27,8 +27,9 @@ from quant.scoring.context import (
     zt_height,
 )
 from quant.narrative.push_style import BRIEF_PREAMBLE, profit_effect_level
+from quant.timeutil import intraday_session_time_line
 from quant.scoring.global_macro import global_macro_for_scoring
-from quant.scoring.theme_tracker import theme_detail
+from quant.scoring.theme_boards import board_gain_fund_lists
 from quant.scoring.tech_indicators import stock_daily_change_pct
 from quant.strategy.main_wave import is_in_main_wave
 
@@ -83,9 +84,8 @@ def build_engine_brief(
     watchlist_added: list[dict] | None = None,
 ) -> str:
     """组装写作参考块（供 LLM 引用，勿原样复制标签进飞书正文）。"""
-    detail = theme_detail(payload)
-    gain = detail.get("当日涨幅概念") or []
-    fund = detail.get("当日资金概念") or []
+    concept_gain, concept_fund = board_gain_fund_lists(payload, "概念板块")
+    industry_gain, industry_fund = board_gain_fund_lists(payload, "行业板块")
     accel = _collect_main_wave_stocks(ctx, payload)
 
     profit = profit_effect(payload)
@@ -102,8 +102,10 @@ def build_engine_brief(
     lines = [
         BRIEF_PREAMBLE,
         f"赚钱效应：{effect_level}（上证{idx_s}% 上涨{up}/下跌{down} 涨停{zt_cnt}/跌停{dt_cnt} 最高{height}板）",
-        f"当日涨幅概念：{'、'.join(gain[:10]) if gain else '暂无'}",
-        f"资金流入概念：{'、'.join(fund[:10]) if fund else '暂无'}",
+        f"当日涨幅概念：{'、'.join(concept_gain[:10]) if concept_gain else '暂无'}",
+        f"资金流入概念：{'、'.join(concept_fund[:10]) if concept_fund else '暂无'}",
+        f"当日涨幅行业：{'、'.join(industry_gain[:10]) if industry_gain else '暂无'}",
+        f"资金流入行业：{'、'.join(industry_fund[:10]) if industry_fund else '暂无'}",
         f"主升波段（{len(accel)}只）：{'、'.join(accel[:12]) if accel else '暂无'}",
     ]
     if gates.passed:
@@ -122,6 +124,7 @@ def build_engine_brief(
         lines.append(rotation)
 
     if mode == "during_market":
+        lines.append(intraday_session_time_line())
         macro = global_macro_for_scoring()
         if macro:
             label = {"bearish": "利空", "neutral": "中性", "bullish": "利好"}.get(

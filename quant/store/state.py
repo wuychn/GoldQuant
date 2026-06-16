@@ -31,7 +31,7 @@ from quant.store.paths import (
 )
 from quant.store.views import render_holding_md, render_optional_md
 
-INITIAL_CAPITAL = 10000.0
+INITIAL_CAPITAL = 100_000.0
 STRATEGY_TAGS = frozenset({STRATEGY_NAME})
 
 

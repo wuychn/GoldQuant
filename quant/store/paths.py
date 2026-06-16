@@ -6,7 +6,7 @@
   state/     程序读写源（JSON/JSONL）
   views/     人类可读 MD（由 state 自动生成）
   daily/     按交易日归档（raw/derived/trades/review）
-  config/    用户 quant.yml、ml_calibration.yml
+  config/    运行时 quant.yml、ml_calibration.yml（可选）；别名见包内 quant/config/
   memory/    新闻摘要、经验教训
   cache/     跨日短缓存（如个股基本信息）
   archive/   跨日汇总（预留）

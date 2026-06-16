@@ -9,10 +9,11 @@ from quant.pool.candidate_config import (
     load_candidate_config,
     pkyd_dual_tag_limit,
     pkyd_labels,
-    pkyd_prefilter_pool,
+    pkyd_min_tags,
     popularity_limit,
     zt_min_boards,
 )
+from quant.pool.pkyd_filter import passes_pkyd_main_wave_filter
 from quant.pool.pkyd_util import extract_pkyd_code, merge_pkyd_rows_by_code
 from quant.pool.symbol_filter import apply_symbol_pool_filter, normalize_stock_row
 
@@ -58,38 +59,39 @@ def prefilter_zt_pool(rows: list[dict] | None, *, cfg: dict | None = None) -> li
 
 
 def prefilter_pkyd(rows: list[dict] | None, *, cfg: dict | None = None) -> list[dict]:
-    """盘口异动：标的池 + 非 ST → 双标签，enrich 前取较宽池。"""
-    pool = pkyd_prefilter_pool(cfg)
+    """盘口异动初筛：仅标的池（沪主/深主/创业板，剔除 ST、科创板、北交所等）。
+
+    技术形态（近3月涨幅、本月阳线、日/周/月主升）在 enrich 后由 ``postfilter_pkyd_acceleration`` 统一筛选。
+    """
+    min_tags = pkyd_min_tags(cfg)
     filtered = apply_symbol_pool_filter(rows)
-    dual: list[dict] = []
+    out: list[dict] = []
     for row in filtered:
-        if _pkyd_tag_count(row) < 2:
+        if min_tags > 0 and _pkyd_tag_count(row) < min_tags:
             continue
         norm = normalize_stock_row(row, source=SOURCE_LABEL_PKYD)
         if norm:
-            dual.append(norm)
-    dual.sort(key=lambda r: (-_pkyd_tag_count(r), str(r.get("股票代码", ""))))
-    return dual[:pool]
+            out.append(norm)
+    out.sort(key=lambda r: str(r.get("股票代码", "")))
+    return out
 
 
 def postfilter_pkyd_acceleration(rows: list[dict], *, cfg: dict | None = None) -> list[dict]:
-    """enrich 后：须主升加速段，再按近一月涨幅取前 N。"""
+    """enrich 后：近3月涨幅+本月阳线+日/周/月主升，再按近3月涨幅取前 N。"""
     from quant.config import load_gates_config
-    from quant.scoring.tech_indicators import monthly_return_pct
-    from quant.strategy.main_wave import PHASE_ACCEL, PHASE_PULLBACK, main_wave_phase
+    from quant.scoring.tech_indicators import monthly_three_month_return_pct
 
     c = cfg or load_candidate_config()
     mw = load_gates_config().get("main_wave") or {}
-    days = int(mw.get("monthly_return_days", 22))
     limit = pkyd_dual_tag_limit(c)
 
     passed: list[dict] = []
     for row in rows:
-        ok, phase, _ = main_wave_phase(row, mw)
-        if ok and phase in (PHASE_ACCEL, PHASE_PULLBACK):
+        ok, _, _ = passes_pkyd_main_wave_filter(row, mw_cfg=mw, candidate_cfg=c)
+        if ok:
             passed.append(row)
     passed.sort(
-        key=lambda r: monthly_return_pct(r, days=days) or -1e9,
+        key=lambda r: monthly_three_month_return_pct(r.get("历史行情") or []) or -1e9,
         reverse=True,
     )
     return passed[:limit]

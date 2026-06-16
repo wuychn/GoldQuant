@@ -3,17 +3,16 @@
 from __future__ import annotations
 
 from quant.pool.candidate_config import PAYLOAD_KEY_POPULARITY
+from quant.scoring.industry_aliases import expand_industries
 from quant.scoring.context import ScoreContext
 from quant.scoring.dimensions.base import clamp
 from quant.scoring.models import DimensionResult
-from quant.scoring.theme_tracker import score_concept_resonance, theme_detail
+from quant.scoring.theme_tracker import score_theme_resonance, theme_detail
 
-CONCEPT_SOURCE_WENCAI = "问财"
-CONCEPT_SOURCE_HOT = "人气榜"
+CONCEPT_SOURCE_HOT = "同花顺"
 
 
-def _stock_concepts(stock: dict) -> set[str]:
-    raw = stock.get("所属概念") or stock.get("概念") or []
+def _parse_name_set(raw: object) -> set[str]:
     if isinstance(raw, str):
         raw = raw.strip()
         if not raw or raw in ("无", "-", "—"):
@@ -24,32 +23,32 @@ def _stock_concepts(stock: dict) -> set[str]:
     return set()
 
 
-def _concept_source(stock: dict) -> str:
-    return str(stock.get("概念来源") or "").strip()
+def _stock_concepts(stock: dict) -> set[str]:
+    """同花顺概念名（不做别名映射）。"""
+    return _parse_name_set(stock.get("所属概念") or stock.get("概念"))
 
 
-def _has_wencai_concepts(stock: dict) -> bool:
-    return _concept_source(stock) == CONCEPT_SOURCE_WENCAI and bool(_stock_concepts(stock))
+def _stock_industry_raw(stock: dict) -> set[str]:
+    return _parse_name_set(stock.get("行业"))
+
+
+def _stock_industry(stock: dict) -> set[str]:
+    """东财 jbxx 行业 → 同花顺行业榜名（仅行业域映射）。"""
+    return expand_industries(_stock_industry_raw(stock))
 
 
 def resolve_stock_concepts(stock: dict, payload: dict) -> dict:
-    """优先问财所属概念；仅当缺失时回退同花顺人气榜 tag。"""
-    if _has_wencai_concepts(stock):
-        return stock
-    if _stock_concepts(stock):
-        return stock
-
+    """所属概念优先同花顺人气榜 tag（与概念榜同源）。"""
     code = str(stock.get("股票代码", "")).strip()
-    if not code:
-        return stock
-    for row in payload.get(PAYLOAD_KEY_POPULARITY) or []:
-        if not isinstance(row, dict):
-            continue
-        if str(row.get("股票代码", "")).strip() != code:
-            continue
-        tag = row.get("所属概念") or row.get("概念")
-        if tag:
-            return {**stock, "所属概念": tag, "概念来源": CONCEPT_SOURCE_HOT}
+    if code:
+        for row in payload.get(PAYLOAD_KEY_POPULARITY) or []:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("股票代码", "")).strip() != code:
+                continue
+            tag = row.get("所属概念") or row.get("概念")
+            if tag:
+                return {**stock, "所属概念": tag, "概念来源": CONCEPT_SOURCE_HOT}
     return stock
 
 
@@ -59,10 +58,18 @@ class ConceptThemeScorer:
     def score(self, ctx: ScoreContext, stock: dict) -> DimensionResult:
         stock = resolve_stock_concepts(stock, ctx.payload)
         concepts = _stock_concepts(stock)
+        industries_raw = _stock_industry_raw(stock)
+        industries = _stock_industry(stock)
         detail = theme_detail(ctx.payload, mode=ctx.mode)
-        raw_score, hit_detail = score_concept_resonance(concepts, ctx.payload, mode=ctx.mode)
-        src = _concept_source(stock)
+        raw_score, hit_detail = score_theme_resonance(
+            concepts,
+            industries,
+            ctx.payload,
+            mode=ctx.mode,
+        )
         available = bool(hit_detail.get("available", True))
+        mapped_only = sorted(industries - industries_raw)
+        theme_tags = concepts | industries
         return DimensionResult(
             self.name,
             clamp(raw_score, lo=-100.0, hi=100.0),
@@ -73,6 +80,9 @@ class ConceptThemeScorer:
                 **detail,
                 **hit_detail,
                 "个股概念": list(concepts)[:12],
-                "概念来源": src or None,
+                "个股行业": sorted(industries_raw),
+                "个股行业映射": mapped_only,
+                "个股题材": sorted(theme_tags)[:16],
+                "概念来源": str(stock.get("概念来源") or "").strip() or None,
             },
         )

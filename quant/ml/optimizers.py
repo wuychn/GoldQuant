@@ -192,6 +192,70 @@ def optimize_confirmation_intervals(
     return out
 
 
+def optimize_concept_score_weights(
+    samples: list[ScoreSample],
+    *,
+    base_weights: dict[str, float],
+) -> dict[str, Any]:
+    """基于 concept_theme 维度与 label 相关性，微调概念指标权重组合。"""
+    keys = ("selection_count", "composite_gain", "net_fund_flow")
+    base = {k: float(base_weights.get(k, 0)) for k in keys}
+    if sum(base.values()) <= 0:
+        base = {"selection_count": 50.0, "composite_gain": 30.0, "net_fund_flow": 20.0}
+
+    if len(samples) < 10:
+        return {"score_weights": base, "note": "样本不足，保留原 concept 指标权重"}
+
+    ct = np.array([s.dim_scores.get("concept_theme", 50.0) for s in samples], dtype=float)
+    y = _labels(samples)
+    if ct.std() <= 1e-6:
+        return {"score_weights": base, "note": "concept_theme 得分无方差，保留原权重"}
+
+    corr = float(np.corrcoef(ct, y)[0, 1])
+    presets = [
+        (50, 30, 20),
+        (45, 35, 20),
+        (40, 35, 25),
+        (55, 25, 20),
+        (45, 30, 25),
+        (50, 25, 25),
+    ]
+    best_preset = base
+    best_score = -1.0
+    for sc, cg, nf in presets:
+        w_sum = sc + cg + nf
+        proxy = ct * (w_sum / 100.0)
+        pred = (proxy >= np.median(proxy)).astype(float)
+        precision = (pred * y).sum() / max(pred.sum(), 1)
+        recall = (pred * y).sum() / max(y.sum(), 1)
+        f1 = 2 * precision * recall / max(precision + recall, 1e-9)
+        if f1 > best_score:
+            best_score = f1
+            best_preset = {
+                "selection_count": float(sc),
+                "composite_gain": float(cg),
+                "net_fund_flow": float(nf),
+            }
+
+    if corr > 0.08:
+        best_preset["net_fund_flow"] = min(35.0, best_preset["net_fund_flow"] + 3.0)
+        best_preset["selection_count"] = max(40.0, best_preset["selection_count"] - 3.0)
+    elif corr < 0.0:
+        best_preset["selection_count"] = min(60.0, best_preset["selection_count"] + 3.0)
+        best_preset["net_fund_flow"] = max(10.0, best_preset["net_fund_flow"] - 3.0)
+
+    total = sum(best_preset.values())
+    if total > 0:
+        scale = 100.0 / total
+        best_preset = {k: round(v * scale, 1) for k, v in best_preset.items()}
+
+    return {
+        "score_weights": best_preset,
+        "concept_theme_corr": corr,
+        "proxy_f1": best_score,
+    }
+
+
 def optimize_bayesian(
     samples: list[ScoreSample],
     *,

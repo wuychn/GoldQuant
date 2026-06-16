@@ -40,6 +40,16 @@ def pkyd_dual_tag_limit(cfg: dict | None = None) -> int:
     return int(c.get("pkyd_dual_tag_limit", 20))
 
 
+def pkyd_min_tags(cfg: dict | None = None) -> int:
+    c = cfg or load_candidate_config()
+    return int(c.get("pkyd_min_tags", 1))
+
+
+def pkyd_three_month_min_pct(cfg: dict | None = None) -> float:
+    c = cfg or load_candidate_config()
+    return float(c.get("pkyd_three_month_min_pct", 30.0))
+
+
 def pkyd_labels(cfg: dict | None = None) -> tuple[str, ...]:
     c = cfg or load_candidate_config()
     raw = c.get("pkyd_labels") or list(DEFAULT_PKYD_LABELS)

@@ -9,6 +9,7 @@
     python -m quant post_market_evening
     python -m quant news
     python -m quant prefetch_concepts
+    python -m quant industry_aliases_draft
 
 ML 校准（独立命令）::
 
@@ -37,10 +38,15 @@ def main():
         print("用法: python -m quant <mode>")
         print(
             "可用模式: news | pre_market | during_market | post_market_lunch | "
-            "post_market_evening | prefetch_concepts"
+            "post_market_evening | prefetch_concepts | industry_aliases_draft"
         )
         sys.exit(1)
     mode = sys.argv[1]
+    if mode == "industry_aliases_draft":
+        from quant.scoring.industry_aliases_draft import main as industry_aliases_draft_main
+
+        industry_aliases_draft_main()
+        return
     if mode == "prefetch_concepts":
         import asyncio
 

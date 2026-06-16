@@ -66,10 +66,10 @@ def _patched_session_request(self: Session, method: str, url: str | bytes, **kwa
             h = dict(kwargs.get("headers") or {})
             h.update(extra)
             kwargs["headers"] = h
-    if "eastmoney.com" in url_s:
-        sleep(random.randint(1, 3))
     if "www.iwencai.com" in url_s:
         sleep(random.randint(10, 30))
+    else:
+        sleep(random.randint(1, 3))
     return _ORIGINAL_SESSION_REQUEST(self, method, url, **kwargs)
 
 

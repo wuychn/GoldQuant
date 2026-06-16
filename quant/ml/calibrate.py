@@ -21,6 +21,7 @@ from quant.ml.dataset import ScoreSample, load_score_samples
 from quant.ml.optimizers import (
     optimize_bayesian,
     optimize_confirmation_intervals,
+    optimize_concept_score_weights,
     optimize_thresholds_grid,
     optimize_weights_lightgbm,
     optimize_weights_linear,
@@ -62,6 +63,7 @@ class CalibrationResult:
     thresholds: dict[str, float] = field(default_factory=dict)
     dimension_weights: dict[str, float] = field(default_factory=dict)
     confirmation: dict[str, Any] = field(default_factory=dict)
+    concept_tracker: dict[str, Any] = field(default_factory=dict)
     metrics: dict[str, Any] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
     apply_blocked: bool = False
@@ -81,6 +83,8 @@ class CalibrationResult:
             out["dimension_weights"] = self.dimension_weights
         if self.confirmation:
             out["confirmation"] = self.confirmation
+        if self.concept_tracker:
+            out["concept_tracker"] = self.concept_tracker
         if self.walk_forward:
             out["walk_forward"] = self.walk_forward
         out["apply_blocked"] = self.apply_blocked
@@ -147,6 +151,36 @@ def _calibrate_weights_and_thresholds(
         "sell_threshold": gopt["sell_threshold"],
     }
     return weights, thresholds, metrics, notes
+
+
+def _base_concept_score_weights(gates_cfg: dict) -> dict[str, float]:
+    ct = gates_cfg.get("concept_tracker") or {}
+    sw = ct.get("score_weights") or {}
+    return {
+        "selection_count": float(sw.get("selection_count", 50)),
+        "composite_gain": float(sw.get("composite_gain", 30)),
+        "net_fund_flow": float(sw.get("net_fund_flow", 20)),
+    }
+
+
+def _apply_concept_tracker_calibration(
+    result: CalibrationResult,
+    samples: list[ScoreSample],
+    gates_cfg: dict,
+) -> None:
+    base_sw = _base_concept_score_weights(gates_cfg)
+    opt = optimize_concept_score_weights(samples, base_weights=base_sw)
+    sw = opt.get("score_weights") or base_sw
+    result.concept_tracker = {"score_weights": sw}
+    if opt.get("note"):
+        result.notes.append(str(opt["note"]))
+    elif "concept_theme_corr" in opt:
+        result.metrics["concept_theme_corr"] = opt["concept_theme_corr"]
+        result.metrics["concept_proxy_f1"] = opt.get("proxy_f1")
+        result.notes.append(
+            f"concept 指标权重校准：selection={sw['selection_count']}, "
+            f"gain={sw['composite_gain']}, fund={sw['net_fund_flow']}"
+        )
 
 
 def calibrate(
@@ -237,6 +271,7 @@ def calibrate(
         )
 
     result.confirmation = optimize_confirmation_intervals(samples, base_cfg=gates_cfg)
+    _apply_concept_tracker_calibration(result, samples, gates_cfg)
 
     wf = walk_forward_validate(samples, base_thresholds=result.thresholds or base_th)
     result.walk_forward = wf

@@ -9,6 +9,11 @@ from quant.narrative.push_style import (
     DEPRECATED_TERM_REPLACEMENTS,
     PUSH_OPS_SECTION_MARKERS,
 )
+from quant.timeutil import (
+    format_minutes_since_open_phrase,
+    intraday_minutes_since_open,
+    parse_cn_datetime_str,
+)
 
 # 误带入正文的内部前缀 / 字段名
 _STRIP_PREFIXES = (
@@ -62,6 +67,23 @@ _RE_INTERNAL_PHRASES: list[tuple[re.Pattern[str], str]] = [
 _RE_BLANK_LINES = re.compile(r"\n{3,}")
 _RE_INLINE_OPS_LINE = re.compile(r"(?m)^(?:今日)?操作[：:].+\n?")
 _RE_NO_TRADE_LINE = re.compile(r"(?m)^(?:今日)?无买卖(?:操作)?[。.]?\s*\n?")
+_RE_FALSE_HALF_HOUR = re.compile(
+    r"开盘(?:后)?(?:约|已)?半(?:个)?小时|"
+    r"半(?:个)?小时(?:行情|走势|来)|"
+    r"开盘半(?:个)?小时"
+)
+
+
+def _fix_false_open_half_hour(text: str, *, push_timestamp: str = "") -> str:
+    """10:00 前误写「开盘半小时」→ 按推送时刻改为「开盘约N分钟」。"""
+    if not _RE_FALSE_HALF_HOUR.search(text):
+        return text
+    dt = parse_cn_datetime_str(push_timestamp)
+    minutes = intraday_minutes_since_open(dt) if dt else None
+    if minutes is None or minutes >= 30:
+        return text
+    repl = format_minutes_since_open_phrase(minutes)
+    return _RE_FALSE_HALF_HOUR.sub(repl, text)
 
 
 def _protected_ops_boundary(text: str) -> int:
@@ -84,7 +106,7 @@ def _strip_inline_ops_lines(text: str) -> str:
     return head + tail
 
 
-def sanitize_feishu_body(text: str) -> str:
+def sanitize_feishu_body(text: str, *, push_timestamp: str = "") -> str:
     if not text or not text.strip():
         return text
     out = text
@@ -101,4 +123,5 @@ def sanitize_feishu_body(text: str) -> str:
         out = pat.sub(repl, out)
     out = _strip_inline_ops_lines(out)
     out = re.sub(r"(?m)^本轮无操作信号[。.]?.*\n?", "", out)
+    out = _fix_false_open_half_hour(out, push_timestamp=push_timestamp)
     return _RE_BLANK_LINES.sub("\n\n", out).strip()

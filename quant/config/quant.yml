@@ -21,10 +21,11 @@ scoring:
 
   # 晚间候选池（初筛在 quant/pool/sources.py，问财+enrich 在 quant/pool/pipeline.py）
   candidate:
-    popularity_limit: 30        # 人气榜初筛：取前 N
+    popularity_limit: 20        # 人气榜初筛：取前 N
     zt_min_boards: 3            # 涨停池初筛：连板数 ≥（晚间复盘仅纳入 3 板及以上）
-    pkyd_dual_tag_limit: 20     # 盘口异动：加速过滤后取前 N（按近一月涨幅）
-    pkyd_prefilter_pool: 60     # 盘口异动：enrich 前双标签池上限
+    pkyd_dual_tag_limit: 20     # 盘口异动：主升筛选后取前 N（按近3月涨幅）
+    pkyd_min_tags: 1            # 初筛：至少 N 个异动标签（0=不校验）
+    pkyd_three_month_min_pct: 30  # enrich 后：月线近3月累计涨幅下限(%)
     pkyd_labels:                # 东财盘口异动类型
       - 60日新高
       - 60日大幅上涨
@@ -171,14 +172,42 @@ gates:
   concept_tracker:
     board_limit: 10                 # 每日快照：涨/跌/流入/流出榜各取前 N
     lookback_days: 10               # 指标计算窗口（交易日，含当日 payload）
+    recency_decay: 0.88             # 时间衰减：越近权重越大（1.0=等权）；当日=1，9日前≈0.35
+    fund_log_scale: true            # 资金净流入 log1p 后再归一化，减弱极端值挤压
+    normalize_mode: percentile       # percentile | minmax；百分位排名抗极端值
+    dual_window:                    # 方案C：结构(持续性) + 动量(近端热度) 双窗口合成
+      enabled: true
+      structural_days: 10           # 结构窗口：看中期主线持续性
+      momentum_days: 3              # 动量窗口：看近 3 日爆发
+      structural_weight: 0.6
+      momentum_weight: 0.4
+    mode_overrides:                 # 盘中偏动量、晚间偏结构
+      during_market:
+        dual_window:
+          structural_days: 7
+          momentum_days: 3
+          structural_weight: 0.45
+          momentum_weight: 0.55
+      pre_market:
+        dual_window:
+          structural_days: 10
+          momentum_days: 5
+          structural_weight: 0.65
+          momentum_weight: 0.35
+      post_market_evening:
+        dual_window:
+          structural_days: 10
+          momentum_days: 5
+          structural_weight: 0.65
+          momentum_weight: 0.35
     # past_board_days 默认 lookback_days-1：评分池 = 文件过去 N 日榜 + 当日榜
     # 命中概念窗口排名分档（取命中里排名最靠前的一个定档）
     rank_tiers:
-      mid_score: 45                 # 排名第 4–7：中间分（远低于前三 raw 分）
-      low_score: 5                  # 排名第 8–10：可忽略的低分
+      low_score: 5                  # 保留字段；8–10 名已改用 raw 分
       off_top_penalty: -50          # 排名第 11 及以后：负分减分
-    score_weights:                  # 概念权重：入选次数 50 + 综合涨幅 30 + 净流入 20
-      selection_count: 50           # 近 N 日累计入选涨幅榜前十次数
+      # 排名第 1–10：使用窗口 raw 权重分；11+ 负分
+    score_weights:                  # 概念权重：上榜次数 50 + 综合涨幅 30 + 净流入 20
+      selection_count: 50           # 近 N 日累计入选涨/资金榜前十次数（同一日只计 1 次）
       composite_gain: 30            # 近 N 日综合涨幅(%，各上榜日涨跌幅累加)
       net_fund_flow: 20             # 近 N 日资金净流入(亿元，流入−流出)
       no_hit: 0                     # 个股概念均未命中窗口概念池时的分数
@@ -199,14 +228,14 @@ gates:
     pullback_spread_ratio: 0.55     # 回调期允许的发散度下限 = min_spread×此值
     pullback_above_ma5_ratio: 1.02  # 价高于 MA5×此值视为加速段而非回调
     accel_price_ma5_ratio: 0.97     # 加速段：现价不低于 MA5×此值
-    monthly_return_days: 22         # 盘口异动排序：近 N 日涨幅
+    monthly_return_days: 22         # 保留：其他模块近 N 日涨幅参考
     pullback_ma_zone_low: 0.985     # 回调企稳：现价/MA10 下限
     pullback_ma_zone_high: 1.015    # 回调企稳：现价/MA10 上限
     ma5_break_ratio: 0.995          # 卖-破5日线：现价 < MA5×此值
     ma20_break_ratio: 0.995         # 卖-趋势衰竭：现价 < MA20×此值
 
   # 仓位：按强势/震荡/弱势（infer_regime → 总仓 80% / 50% / 20%）
-  # 单票买入预算 = 剩余仓位 / 剩余空位，满配时合计 ≈ total_pct
+  # 多候选买入预算按评分比例分配 room，单票仍受 single_pct 上限约束
   position:
     强势:
       total_pct: 80                 # 总仓位上限(%)
@@ -224,6 +253,13 @@ gates:
       max_change_pct: 8.0           # 盘前模式允许的最大涨幅(%)
     during_market:
       max_change_pct: 8.0           # 盘中模式允许的最大涨幅(%)
+      strong_market:                # 强市动态放宽（独立于仓位档位 infer_regime）
+        enabled: true
+        index_min_pct: 1.0          # 上证涨幅 ≥ 此值
+        zt_min: 80                  # 涨停家数 ≥ 此值
+        require_up_gt_down: true
+        max_change_pct: 9.5         # 强市追高线上调
+        buy_threshold_delta: -2     # 买入线略降（如 72→70）
       intraday:                       # 盘中买入分时过滤（仅 during_market）
         enabled: true
         require_above_avg: true       # 现价须在分时均价上方

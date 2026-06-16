@@ -117,7 +117,9 @@ def hist(symbol, period='daily', *, start_date=None, end_date=None):
 
 
 if __name__ == "__main__":
-    print(json.dumps(jbxx("600519"), ensure_ascii=False, indent=2))
+    # print(json.dumps(jbxx("600519"), ensure_ascii=False, indent=2))
     # print(hqbj_dc(600519))
+    # 60日大幅上涨
+    print(json.dumps(pkyd('60日大幅上涨'), ensure_ascii=False, indent=2))
     # print(hqbj("002580"))
     # print(json.dumps(ztgc(), ensure_ascii=False, indent=2))

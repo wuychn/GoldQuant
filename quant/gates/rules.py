@@ -196,27 +196,60 @@ def calc_buy_quantity(stock: dict, ctx: ScoreContext, price: float) -> int:
 
     例：震荡 total=50%、max=3 → 空仓时每笔约 16.7% 总资产，满 3 只合计约 50%。
     """
+    qty_map = allocate_buy_quantities_by_score(
+        [(1.0, {**stock, "战法": str(stock.get("战法", STRATEGY_NAME))}, price)],
+        ctx,
+    )
+    code = str(stock.get("股票代码", "")).strip()
+    return qty_map.get(code, 0)
+
+
+def allocate_buy_quantities_by_score(
+    candidates: list[tuple[float, dict, float]],
+    ctx: ScoreContext,
+) -> dict[str, int]:
+    """多候选按评分比例分配剩余仓位预算（100 股整数倍）。"""
+    if not candidates:
+        return {}
+
     limits = position_limits(ctx)
     max_stocks = int(limits["max_stocks"])
     held = active_holding_count()
-    if held >= max_stocks or price <= 0:
-        return 0
+    if held >= max_stocks:
+        return {}
 
     total_assets = get_total_assets()
     if total_assets <= 0:
-        return 0
+        return {}
 
     current_mv = compute_holdings_market_value(get_holdings())
     total_cap = total_assets * float(limits["total_pct"]) / 100
     room = max(0.0, total_cap - current_mv)
     if room <= 0:
-        return 0
+        return {}
 
-    remaining_slots = max_stocks - held
-    strategy = str(stock.get("战法", STRATEGY_NAME))
-    budget = min(room / remaining_slots, get_cash())
-    cap_value = total_assets * per_stock_pct_at_full(limits, strategy) / 100
-    budget = min(budget, cap_value)
+    scores = [max(float(s), 1.0) for s, _, _ in candidates]
+    score_sum = sum(scores)
+    if score_sum <= 0:
+        return {}
 
-    qty = int(budget / price / 100) * 100
-    return max(qty, 0)
+    remaining_cash = get_cash()
+    result: dict[str, int] = {}
+
+    for (score, stock, price), w in zip(candidates, scores):
+        del score
+        if price <= 0:
+            continue
+        code = str(stock.get("股票代码", "")).strip()
+        if not code:
+            continue
+        strategy = str(stock.get("战法", STRATEGY_NAME))
+        budget = room * (w / score_sum)
+        cap_value = total_assets * per_stock_pct_at_full(limits, strategy) / 100
+        budget = min(budget, cap_value, remaining_cash)
+        qty = int(budget / price / 100) * 100
+        if qty >= 100:
+            result[code] = qty
+            remaining_cash -= qty * price
+
+    return result

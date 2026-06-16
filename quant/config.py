@@ -81,6 +81,13 @@ def _apply_ml_gates(gates: dict, ml: dict) -> None:
     mw = ml.get("main_wave")
     if isinstance(mw, dict):
         gates.setdefault("main_wave", {}).update(mw)
+    ct = ml.get("concept_tracker")
+    if isinstance(ct, dict):
+        block = gates.setdefault("concept_tracker", {})
+        sw = ct.get("score_weights")
+        if isinstance(sw, dict):
+            score_weights = block.setdefault("score_weights", {})
+            score_weights.update(sw)
 
 
 @lru_cache(maxsize=1)

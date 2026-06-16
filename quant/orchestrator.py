@@ -405,7 +405,7 @@ def run_mode(mode: str, timestamp: str) -> None:
         body = f"服务异常，请稍后重试。({e})"
 
     log_progress(mode, "保存复盘文案")
-    message = format_push_message(label, timestamp, sanitize_feishu_body(body))
+    message = format_push_message(label, timestamp, sanitize_feishu_body(body, push_timestamp=timestamp))
     save_review(mode, message)
 
     if mode == "post_market_evening":

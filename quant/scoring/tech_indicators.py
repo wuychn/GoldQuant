@@ -108,6 +108,10 @@ def hist_close(row: dict) -> float | None:
     return metric_from_dict(row, "收盘", "close", "收盘价")
 
 
+def hist_open(row: dict) -> float | None:
+    return metric_from_dict(row, "开盘", "open", "开盘价", "今开")
+
+
 def hist_rows_sorted(hist: object) -> list[dict]:
     """历史行情按日期升序的有效 K 线行。"""
     if not isinstance(hist, list):
@@ -146,12 +150,18 @@ def _hist_row_date(row: dict) -> str:
 
 def _period_closes(hist: object, *, period: str) -> list[float]:
     """由日线聚合周/月收盘价序列（每周期取最后一根收盘）。"""
+    ohlc = _period_ohlc(hist, period=period)
+    return [c for _, c in ohlc]
+
+
+def _period_ohlc(hist: object, *, period: str) -> list[tuple[float, float]]:
+    """由日线聚合周/月 (open, close) 序列，open 取周期内首个有效开盘价。"""
     from datetime import datetime
 
     rows = hist_rows_sorted(hist)
     if not rows:
         return []
-    buckets: dict[str, float] = {}
+    buckets: dict[str, dict[str, float]] = {}
     for row in rows:
         ds = _hist_row_date(row)
         close = hist_close(row)
@@ -165,8 +175,12 @@ def _period_closes(hist: object, *, period: str) -> list[float]:
             key = f"{dt.isocalendar().year}-W{dt.isocalendar().week:02d}"
         else:
             key = f"{dt.year}-{dt.month:02d}"
-        buckets[key] = close
-    return [buckets[k] for k in sorted(buckets)]
+        open_p = hist_open(row) or close
+        if key not in buckets:
+            buckets[key] = {"open": open_p, "close": close}
+        else:
+            buckets[key]["close"] = close
+    return [(b["open"], b["close"]) for k in sorted(buckets) if (b := buckets[k])]
 
 
 def period_trend_up(closes: list[float]) -> bool:
@@ -228,6 +242,70 @@ def monthly_return_pct(stock: dict, *, days: int = 22) -> float | None:
     if start <= 0:
         return None
     return (end - start) / start * 100
+
+
+def monthly_three_month_return_pct(hist: object) -> float | None:
+    """月线近 3 个月累计涨幅(%)：第 T-3 月末收盘 → 当前月最新收盘。"""
+    closes = _period_closes(hist, period="monthly")
+    if len(closes) < 4:
+        return None
+    start = closes[-4]
+    end = closes[-1]
+    if start <= 0:
+        return None
+    return (end - start) / start * 100
+
+
+def current_month_is_yang(hist: object) -> bool:
+    """本月阳线：当前月 close > open。"""
+    ohlc = _period_ohlc(hist, period="monthly")
+    if not ohlc:
+        return False
+    open_p, close = ohlc[-1]
+    return close > open_p
+
+
+def closes_ma_diverging_up(closes: list[float], *, min_spread_pct: float) -> bool:
+    """收盘价序列：均线多头且发散（自适应短序列窗口）。"""
+    from quant.strategy.main_wave import ma_diverging
+
+    n = len(closes)
+    if n < 4:
+        return False
+    if n >= 20:
+        w1, w2, w3 = 5, 10, 20
+    elif n >= 8:
+        w1, w2, w3 = 2, 4, 8
+    else:
+        w1, w2, w3 = 2, min(3, n - 1), n
+        if w2 <= w1:
+            w2 = min(n - 1, w1 + 1)
+        if w3 <= w2:
+            w3 = w2 + 1
+    ma5 = sum(closes[-w1:]) / w1
+    ma10 = sum(closes[-w2:]) / w2
+    ma20 = sum(closes[-w3:]) / w3
+    return ma_diverging(
+        {"ma5": ma5, "ma10": ma10, "ma20": ma20},
+        min_spread_pct=min_spread_pct,
+    )
+
+
+def multi_timeframe_main_wave_up(
+    hist: object,
+    *,
+    min_spread_pct: float,
+) -> tuple[bool, dict[str, bool]]:
+    """日/周/月线均主升浪（均线发散向上）。"""
+    daily = hist_closes(hist)
+    weekly = _period_closes(hist, period="weekly")
+    monthly = _period_closes(hist, period="monthly")
+    flags = {
+        "日线主升": closes_ma_diverging_up(daily, min_spread_pct=min_spread_pct),
+        "周线主升": closes_ma_diverging_up(weekly, min_spread_pct=min_spread_pct),
+        "月线主升": closes_ma_diverging_up(monthly, min_spread_pct=min_spread_pct),
+    }
+    return all(flags.values()), flags
 
 
 def mas_from_stock(stock: dict) -> dict[str, float | None]:
