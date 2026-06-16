@@ -167,7 +167,7 @@ class Settings(BaseSettings):
     #: 自选/持仓 enrich 并发数（每只含盘口/日 K/分钟/资金流等 IO；过大易触发源站限流）。
     QUANT_ENRICH_CONCURRENCY: int = Field(default=6, ge=1, le=32)
 
-    #: 测试阶段：为 true 时人气榜/涨停统计/盘口异动仅处理前 3 条（仍走实时接口）。
+    #: 测试阶段：为 true 时人气榜/涨停统计仅处理前 3 条（仍走实时接口）。
     QUANT_TEST_PHASE: bool = False
     #: 本地数据：为 true 时 ``python -m quant`` 从 ``data/*.json`` 读数，不请求 FastAPI。
     QUANT_USE_LOCAL_FIXTURE: bool = False
@@ -177,7 +177,7 @@ class Settings(BaseSettings):
         return 3 if self.QUANT_TEST_PHASE else 30
 
     def quant_bulk_row_limit(self) -> int | None:
-        """涨停统计、盘口异动处理条数上限；``None`` 表示全量。"""
+        """涨停统计处理条数上限；``None`` 表示全量。"""
         return 3 if self.QUANT_TEST_PHASE else None
 
     # 飞书配置

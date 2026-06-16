@@ -38,7 +38,7 @@ def _collect_main_wave_stocks(ctx: ScoreContext, payload: dict) -> list[str]:
     mw_cfg = load_gates_config().get("main_wave") or {}
     seen: set[str] = set()
     out: list[str] = []
-    for key in ("同花顺人气榜", "自选股", "持仓股", "盘口异动"):
+    for key in ("同花顺人气榜", "自选股", "持仓股", "创新高", "持续上涨", "持续放量", "量价齐升"):
         for row in payload.get(key) or []:
             if not isinstance(row, dict):
                 continue

@@ -5,31 +5,36 @@ from __future__ import annotations
 from typing import Any
 
 from app.core.config import Settings
-from app.utils.dfcf_util import pkyd, ztgc
-from app.utils.ths_util import hot_stock
+from app.utils.dfcf_util import ztgc
+from app.utils.ths_util import cxfl, cxg, hot_stock, ljqs, lxsz
 from quant.pool.candidate_config import (
-    PAYLOAD_KEY_PKYD,
+    PAYLOAD_KEY_CXFL,
+    PAYLOAD_KEY_CXG,
+    PAYLOAD_KEY_LJQS,
+    PAYLOAD_KEY_LXSZ,
     PAYLOAD_KEY_POPULARITY,
     PAYLOAD_KEY_ZT,
-    SOURCE_LABEL_PKYD,
+    SOURCE_LABEL_THS_RANK,
     SOURCE_LABEL_POPULARITY,
     SOURCE_LABEL_ZT,
+    cxg_labels,
     load_candidate_config,
-    pkyd_labels,
-    popularity_limit,
 )
 from quant.pool.pipeline import run_candidate_pipeline
 from quant.pool.source_merge import merge_prefiltered_sources, split_enriched_by_source
 from quant.pool.sources import (
-    merge_pkyd_from_batches,
-    postfilter_pkyd_acceleration,
+    merge_ths_rank_from_batches,
     prefilter_popularity,
+    prefilter_ths_rank,
     prefilter_zt_pool,
 )
+from quant.pool.ths_rank_util import split_enriched_ths_rank_payload
 from quant.progress_log import log_progress, log_progress_done
 
 
 async def _prefilter_popularity(settings: Settings, cfg: dict) -> list[dict]:
+    from quant.pool.candidate_config import popularity_limit
+
     limit = settings.quant_hot_list_limit() if settings.QUANT_TEST_PHASE else popularity_limit(cfg)
     raw = await hot_stock(settings, limit)
     return prefilter_popularity(raw if isinstance(raw, list) else [], cfg=cfg)
@@ -46,13 +51,37 @@ async def _prefilter_zt(
     return prefilter_zt_pool(raw if isinstance(raw, list) else [], cfg=cfg)
 
 
-async def _prefilter_pkyd(settings: Settings, cfg: dict) -> list[dict]:
+async def _prefilter_ths_rank(settings: Settings, cfg: dict) -> list[dict]:
     del settings
     batches: list[tuple[str, list[dict]]] = []
-    for label in pkyd_labels(cfg):
-        batch = pkyd(label)
+    for label in cxg_labels(cfg):
+        batch = await cxg(label)
         batches.append((label, batch if isinstance(batch, list) else []))
-    return merge_pkyd_from_batches(batches, cfg=cfg)
+    for label, fn in (
+        ("持续上涨", lxsz),
+        ("持续放量", cxfl),
+        ("量价齐升", ljqs),
+    ):
+        batch = await fn()
+        batches.append((label, batch if isinstance(batch, list) else []))
+    return merge_ths_rank_from_batches(batches, cfg=cfg)
+
+
+async def build_ths_rank_candidates(
+    settings: Settings,
+    payload: dict[str, Any],
+    *,
+    include_pre_snapshot: bool = False,
+) -> dict[str, list[dict]]:
+    cfg = load_candidate_config()
+    rows = await _prefilter_ths_rank(settings, cfg)
+    enriched = await run_candidate_pipeline(
+        settings,
+        rows,
+        payload,
+        include_pre_snapshot=include_pre_snapshot,
+    )
+    return split_enriched_ths_rank_payload(enriched)
 
 
 async def build_popularity_candidates(
@@ -88,22 +117,6 @@ async def build_zt_candidates(
     )
 
 
-async def build_pkyd_candidates(
-    settings: Settings,
-    payload: dict[str, Any],
-    *,
-    include_pre_snapshot: bool = False,
-) -> list[dict]:
-    cfg = load_candidate_config()
-    rows = await _prefilter_pkyd(settings, cfg)
-    return await run_candidate_pipeline(
-        settings,
-        rows,
-        payload,
-        include_pre_snapshot=include_pre_snapshot,
-    )
-
-
 async def build_all_source_candidates(
     settings: Settings,
     payload: dict[str, Any],
@@ -118,15 +131,15 @@ async def build_all_source_candidates(
     pop_rows = await _prefilter_popularity(settings, cfg)
     log_progress(progress_scope, "初筛：涨停池")
     zt_rows_f = await _prefilter_zt(settings, cfg, zt_rows=zt_rows)
-    log_progress(progress_scope, "初筛：盘口异动")
-    pkyd_rows = await _prefilter_pkyd(settings, cfg)
+    log_progress(progress_scope, "初筛：同花顺形态榜")
+    ths_rows = await _prefilter_ths_rank(settings, cfg)
     log_progress(
         progress_scope,
         "初筛完成",
-        detail=f"人气 {len(pop_rows)} / 涨停 {len(zt_rows_f)} / 异动 {len(pkyd_rows)}",
+        detail=f"人气 {len(pop_rows)} / 涨停 {len(zt_rows_f)} / 形态 {len(ths_rows)}",
     )
 
-    merged_rows, source_orders = merge_prefiltered_sources(pop_rows, zt_rows_f, pkyd_rows)
+    merged_rows, source_orders = merge_prefiltered_sources(pop_rows, zt_rows_f, ths_rows)
     log_progress(progress_scope, "合并去重", detail=f"unique {len(merged_rows)} 只")
     enriched = await run_candidate_pipeline(
         settings,
@@ -136,17 +149,22 @@ async def build_all_source_candidates(
         progress_scope=progress_scope,
     )
     by_source = split_enriched_by_source(enriched, source_orders)
-    pkyd_enriched = by_source.get(SOURCE_LABEL_PKYD, [])
-    pkyd_filtered = postfilter_pkyd_acceleration(pkyd_enriched, cfg=cfg)
+    ths_enriched = by_source.get(SOURCE_LABEL_THS_RANK, [])
+    ths_payload = split_enriched_ths_rank_payload(ths_enriched)
     log_progress(
         progress_scope,
-        "盘口异动主升筛选",
-        detail=f"{len(pkyd_enriched)} → {len(pkyd_filtered)} 只",
+        "形态榜拆分",
+        detail=(
+            f"创新高 {len(ths_payload[PAYLOAD_KEY_CXG])} / "
+            f"持续上涨 {len(ths_payload[PAYLOAD_KEY_LXSZ])} / "
+            f"持续放量 {len(ths_payload[PAYLOAD_KEY_CXFL])} / "
+            f"量价齐升 {len(ths_payload[PAYLOAD_KEY_LJQS])}"
+        ),
     )
     result = {
         PAYLOAD_KEY_POPULARITY: by_source.get(SOURCE_LABEL_POPULARITY, []),
         PAYLOAD_KEY_ZT: by_source.get(SOURCE_LABEL_ZT, []),
-        PAYLOAD_KEY_PKYD: pkyd_filtered,
+        **ths_payload,
     }
     log_progress_done(
         progress_scope,
@@ -154,7 +172,7 @@ async def build_all_source_candidates(
         detail=(
             f"人气 {len(result[PAYLOAD_KEY_POPULARITY])} / "
             f"涨停 {len(result[PAYLOAD_KEY_ZT])} / "
-            f"异动 {len(result[PAYLOAD_KEY_PKYD])}"
+            f"形态 {len(ths_enriched)}"
         ),
     )
     return result

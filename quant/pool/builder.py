@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from quant.pool.candidate_config import (
-    PAYLOAD_KEY_PKYD,
     PAYLOAD_KEY_POPULARITY,
     PAYLOAD_KEY_ZT,
+    THS_RANK_PAYLOAD_KEYS,
+    include_ths_rank_pool,
     load_candidate_config,
 )
-from quant.pool.pkyd_util import attach_pkyd_tags, build_pkyd_tag_map, stock_pkyd_tags
+from quant.pool.ths_rank_util import attach_ths_rank_tags, build_ths_rank_tag_map, stock_ths_rank_tags
 
 
 def _code(row: dict) -> str:
@@ -38,17 +39,18 @@ def build_candidates(payload: dict) -> list[dict]:
         zt_key = None
     else:
         zt_key = PAYLOAD_KEY_ZT
-    if not bool(cfg.get("include_pkyd_pool", True)):
-        pkyd_key = None
-    else:
-        pkyd_key = PAYLOAD_KEY_PKYD
 
-    tag_map = build_pkyd_tag_map(payload.get(PAYLOAD_KEY_PKYD))
+    ths_keys = list(THS_RANK_PAYLOAD_KEYS) if include_ths_rank_pool(cfg) else []
+
+    all_ths_rows: list[dict] = []
+    for key in ths_keys:
+        all_ths_rows.extend(payload.get(key) or [])
+    tag_map = build_ths_rank_tag_map(all_ths_rows)
+
     source_keys = [PAYLOAD_KEY_POPULARITY]
     if zt_key:
         source_keys.append(zt_key)
-    if pkyd_key:
-        source_keys.append(pkyd_key)
+    source_keys.extend(ths_keys)
 
     merged: dict[str, dict] = {}
     for key in source_keys:
@@ -58,21 +60,21 @@ def build_candidates(payload: dict) -> list[dict]:
             code = _code(row)
             if not code:
                 continue
-            tagged = attach_pkyd_tags(dict(row), tag_map)
+            tagged = attach_ths_rank_tags(dict(row), tag_map)
             if code in merged:
                 _merge_source_label(merged[code], tagged)
                 combined = dict(merged[code])
                 for k, v in tagged.items():
                     if k != "候选来源":
                         combined[k] = v
-                merged[code] = attach_pkyd_tags(combined, tag_map)
+                merged[code] = attach_ths_rank_tags(combined, tag_map)
             else:
                 merged[code] = tagged
 
     out: list[dict] = []
     for row in merged.values():
-        tags = stock_pkyd_tags(row)
-        if tags and not row.get("盘口异动标签"):
-            row = {**row, "盘口异动标签": tags}
+        tags = stock_ths_rank_tags(row)
+        if tags and not row.get("榜单标签"):
+            row = {**row, "榜单标签": tags}
         out.append(row)
     return out

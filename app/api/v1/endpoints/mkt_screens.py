@@ -98,6 +98,20 @@ async def ths_rank_cxfl() -> Response:
 
 
 @router.get(
+    "/stock/ths/rank/ljqs",
+    response_model=Response,
+    summary="量价齐升（同花顺）",
+    description="封装 `ak.stock_rank_ljqs_ths`，无入参。",
+)
+async def ths_rank_ljqs() -> Response:
+    try:
+        df = await run_in_threadpool(ak.stock_rank_ljqs_ths)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return Response(data=_ak("stock_rank_ljqs_ths", {}, df))
+
+
+@router.get(
     "/stock/ths/rank/cxsl",
     response_model=Response,
     summary="持续缩量（同花顺）",

@@ -446,6 +446,50 @@ async def hyylb(sort_key: str = "涨跌幅", desc: bool = True):
         desc=desc,
     )
 
+async def cxg(symbol: str="创月新高"):
+    """创新高"""
+    records = dataframe_to_records(ak.stock_rank_cxg_ths(symbol))
+    return sort_by_field_and_limit(
+        records,
+        '涨跌幅',
+        20
+    )
+
+async def lxsz():
+    """持续上涨"""
+    records = dataframe_to_records(ak.stock_rank_lxsz_ths())
+    return sort_by_field_and_limit(
+        records,
+        '连续涨跌幅',
+        20
+    )
+
+async def cxfl():
+    """持续放量"""
+    records = dataframe_to_records(ak.stock_rank_cxfl_ths())
+    return sort_by_field_and_limit(
+        records,
+        '阶段涨跌幅',
+        20
+    )
+
+async def xstp(symbol: str="5日均线"):
+    """向上突破"""
+    records = dataframe_to_records(ak.stock_rank_xstp_ths(symbol))
+    return sort_by_field_and_limit(
+        records,
+        '阶段涨跌幅',
+        20
+    )
+
+async def ljqs():
+    """量价齐升"""
+    records = dataframe_to_records(ak.stock_rank_ljqs_ths())
+    return sort_by_field_and_limit(
+        records,
+        '阶段涨幅',
+        20
+    )
 
 async def ggzjl(symbol):
     """个股资金流。"""
@@ -464,5 +508,5 @@ if __name__ == "__main__":
     # gnzjl = asyncio.run(stock_fund_flow_concept('3日排行', '流入资金'))
     # print(json.dumps(gnzjl, ensure_ascii=False, indent=2))
 
-    hyylb_ = asyncio.run(hyylb())
-    print(json.dumps(hyylb_, ensure_ascii=False, indent=2))
+    r = asyncio.run(ljqs())
+    print(json.dumps(r, ensure_ascii=False, indent=2))

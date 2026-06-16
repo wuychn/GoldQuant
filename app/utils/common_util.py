@@ -118,7 +118,7 @@ def sort_by_field_and_limit(
     def get_sort_key(item: Any) -> Any:
         if isinstance(item, dict):
             # 如果是字典 → 用 key 获取
-            return item.get(field_name) if field_name in item else 0
+            return item.get(field_name) if field_name in item and item.get(field_name) else 0
         else:
             # 如果是普通对象 → 用属性获取
             return getattr(item, field_name, 0)

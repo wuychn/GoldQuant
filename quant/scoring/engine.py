@@ -11,7 +11,7 @@ from quant.scoring.dimensions.main_wave import MainWaveScorer
 from quant.scoring.dimensions.market_fund_flow import MarketFundFlowScorer
 from quant.scoring.dimensions.market_index import MarketIndexScorer
 from quant.scoring.dimensions.market_sentiment import MarketSentimentScorer
-from quant.scoring.dimensions.pkyd_signal import PkydSignalScorer
+from quant.scoring.dimensions.ths_rank_signal import ThsRankSignalScorer
 from quant.scoring.dimensions.popularity import PopularityRankScorer
 from quant.scoring.dimensions.stock_fund_flow import StockFundFlowScorer
 from quant.scoring.dimensions.stock_history import StockHistoryScorer
@@ -31,7 +31,7 @@ _SCORERS = {
     "stock_history": StockHistoryScorer(),
     "stock_fund_flow": StockFundFlowScorer(),
     "popularity_rank": PopularityRankScorer(),
-    "pkyd_signal": PkydSignalScorer(),
+    "ths_rank_signal": ThsRankSignalScorer(),
     "technical": TechnicalScorer(),
     "minute_bars": StubScorer("minute_bars"),
     "us_overnight": StubScorer("us_overnight"),

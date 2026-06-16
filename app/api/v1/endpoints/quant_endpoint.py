@@ -34,12 +34,20 @@ from app.services.stock_enrich import enrich_stock_rows
 from app.utils.etf52_util import zdfb_52etf
 from app.utils.ths_util import hyylb, stock_fund_flow_concept, hot_stock, zdfb_ths
 from quant.scoring.theme_boards import normalize_industry_board_rows
-from quant.pool.candidate_config import PAYLOAD_KEY_PKYD, PAYLOAD_KEY_POPULARITY, PAYLOAD_KEY_ZT
+from quant.pool.candidate_config import (
+    PAYLOAD_KEY_CXFL,
+    PAYLOAD_KEY_CXG,
+    PAYLOAD_KEY_LJQS,
+    PAYLOAD_KEY_LXSZ,
+    PAYLOAD_KEY_POPULARITY,
+    PAYLOAD_KEY_ZT,
+    THS_RANK_PAYLOAD_KEYS,
+)
 from quant.pool.candidate_sources import build_all_source_candidates
-from quant.pool.pkyd_util import (
-    build_pkyd_tag_map,
-    enrich_list_with_pkyd_tags,
-    enrich_zt_stats_with_pkyd,
+from quant.pool.ths_rank_util import (
+    build_ths_rank_tag_map,
+    enrich_list_with_ths_rank_tags,
+    enrich_zt_stats_with_ths_rank,
 )
 from quant.pool.sources import prefilter_popularity
 from quant.pool.symbol_filter import apply_symbol_pool_filter
@@ -878,10 +886,12 @@ async def post_market(settings: SettingsDep, background_tasks: BackgroundTasks) 
     )
     hot_ = sources[PAYLOAD_KEY_POPULARITY]
     zt_candidates = sources[PAYLOAD_KEY_ZT]
-    pkyd_list = sources[PAYLOAD_KEY_PKYD]
-    tag_map = build_pkyd_tag_map(pkyd_list)
-    hot_ = enrich_list_with_pkyd_tags(hot_, tag_map)
-    zttj = enrich_zt_stats_with_pkyd(zttj, tag_map)
+    ths_rows: list[dict] = []
+    for key in THS_RANK_PAYLOAD_KEYS:
+        ths_rows.extend(sources.get(key) or [])
+    tag_map = build_ths_rank_tag_map(ths_rows)
+    hot_ = enrich_list_with_ths_rank_tags(hot_, tag_map)
+    zttj = enrich_zt_stats_with_ths_rank(zttj, tag_map)
 
     zxg_, ccg_ = await _enrich_optional_and_holding(settings, progress_scope=scope)
 
@@ -894,7 +904,10 @@ async def post_market(settings: SettingsDep, background_tasks: BackgroundTasks) 
         "涨停统计": zttj,
         PAYLOAD_KEY_POPULARITY: hot_,
         PAYLOAD_KEY_ZT: zt_candidates,
-        PAYLOAD_KEY_PKYD: pkyd_list,
+        PAYLOAD_KEY_CXG: sources[PAYLOAD_KEY_CXG],
+        PAYLOAD_KEY_LXSZ: sources[PAYLOAD_KEY_LXSZ],
+        PAYLOAD_KEY_CXFL: sources[PAYLOAD_KEY_CXFL],
+        PAYLOAD_KEY_LJQS: sources[PAYLOAD_KEY_LJQS],
         "自选股": zxg_,
         "持仓股": ccg_,
     }

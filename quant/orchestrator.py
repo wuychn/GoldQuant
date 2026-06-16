@@ -34,7 +34,7 @@ from quant.narrative.prompts import (
 )
 from quant.pool.builder import build_candidates
 from quant.scoring.theme_tracker import update_concept_tracker_state
-from quant.pool.pkyd_util import stock_pkyd_tags
+from quant.pool.ths_rank_util import format_ths_rank_watchlist_reason, stock_ths_rank_tags
 from quant.narrative.push_sanitize import sanitize_feishu_body
 from quant.push.feishu import get_token, send_msg
 from quant.push.format import format_push_message
@@ -111,9 +111,11 @@ def _watchlist_add_reason(score, candidate_row: dict) -> str:
         sources = [str(s).strip() for s in raw_source if str(s).strip()]
     else:
         sources = [str(raw_source).strip()] if str(raw_source or "").strip() else []
-    if "盘口异动" in sources:
-        tags = "、".join(stock_pkyd_tags(candidate_row)) or "盘口异动"
-        parts.append(f"盘口异动({tags})")
+    ths_tags = stock_ths_rank_tags(candidate_row)
+    if ths_tags:
+        ths_reason = format_ths_rank_watchlist_reason(ths_tags)
+        if ths_reason:
+            parts.append(ths_reason)
     if "涨停池" in sources:
         boards = candidate_row.get("连板数")
         parts.append(f"涨停池(连板{boards})" if boards is not None else "涨停池")
@@ -155,9 +157,9 @@ def _update_watchlist_evening(ctx: ScoreContext) -> tuple[list[dict], list[dict]
             "评分": round(s.total, 2),
             "加入自选原因": _watchlist_add_reason(s, cand),
         }
-        pkyd_tags = stock_pkyd_tags(cand)
-        if pkyd_tags:
-            row["盘口异动标签"] = pkyd_tags
+        ths_tags = stock_ths_rank_tags(cand)
+        if ths_tags:
+            row["榜单标签"] = ths_tags
         passed_rows.append(row)
 
     existing = get_optional()
