@@ -9,13 +9,5 @@
 #
 # 刷新：python -m quant industry_aliases_draft（合并自动推断，不覆盖已有项）
 aliases:
-  IT服务: # 同花顺
-    - IT服务Ⅱ # 东财 jbxx
-  其他社会服务: # 同花顺
-    - 工程咨询服务Ⅱ # 东财 jbxx
-  塑料制品: # 同花顺
-    - 塑料 # 东财 jbxx
-  非金属材料: # 同花顺
-    - 玻璃玻纤 # 东财 jbxx
-  食品加工制造: # 同花顺
-    - 休闲食品 # 东财 jbxx
+  元件: # 同花顺
+    - 元件 # 东财 jbxx
