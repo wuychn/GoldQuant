@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from quant.config import load_gates_config
+from quant.data_quality import skip_intraday_buy_codes
 from quant.constants import STRATEGY_NAME
 from quant.gates.buy_policy import effective_buy_threshold, effective_max_change_pct
 from quant.gates.rules import (
@@ -17,6 +18,7 @@ from quant.scoring.context import ScoreContext
 from quant.scoring.engine import ScoringEngine
 from quant.scoring.models import StockScore
 from quant.signals.models import TradeSignal
+from quant.store.intraday_fund_track import record_watchlist_fund_snapshots
 from quant.store.state import get_holdings
 from quant.scoring.tech_indicators import quote_last_price, quote_open_price
 from quant.strategy.intraday import intraday_allows_buy
@@ -57,6 +59,9 @@ def _evaluate_buy_candidate(
     if not code or code in held:
         return None
     if not check_buy_gates(stock, ctx).passed:
+        return None
+
+    if mode == "during_market" and code in skip_intraday_buy_codes(ctx.payload):
         return None
 
     ok_trend, _ = trend_allows_buy(stock, mw_cfg)
@@ -102,6 +107,46 @@ def _evaluate_buy_candidate(
     )
 
 
+def _stock_from_payload(payload: dict, code: str) -> dict | None:
+    for key in ("自选股", "持仓股"):
+        for row in payload.get(key) or []:
+            if isinstance(row, dict) and str(row.get("股票代码", "")).strip() == code:
+                return row
+    return None
+
+
+def verify_buy_signal_still_valid(code: str, ctx: ScoreContext, *, mode: str = "during_market") -> bool:
+    """持续确认成交前再验：趋势/评分/涨幅/分时须仍满足。"""
+    stock = _stock_from_payload(ctx.payload, code)
+    if not stock:
+        return False
+    if code in skip_intraday_buy_codes(ctx.payload):
+        return False
+    mw_cfg = load_gates_config().get("main_wave") or {}
+    buy_cfg = (load_gates_config().get("buy") or {}).get(
+        "during_market" if mode == "during_market" else "pre_market"
+    ) or {}
+    engine = ScoringEngine()
+    base_threshold = float(engine.config.get("buy_threshold", 72))
+    buy_threshold = effective_buy_threshold(base_threshold, ctx.payload, buy_cfg)
+    max_change_pct = effective_max_change_pct(buy_cfg, ctx.payload)
+    held = {str(h.get("股票代码", "")).strip() for h in get_holdings()}
+    return (
+        _evaluate_buy_candidate(
+            stock,
+            ctx,
+            mode=mode,
+            engine=engine,
+            mw_cfg=mw_cfg,
+            buy_cfg=buy_cfg,
+            held=held,
+            buy_threshold=buy_threshold,
+            max_change_pct=max_change_pct,
+        )
+        is not None
+    )
+
+
 def generate_buy_signals(ctx: ScoreContext, *, mode: str) -> list[TradeSignal]:
     """产生买入原始信号（未经三确认，勿直接 execute）。
 
@@ -111,6 +156,9 @@ def generate_buy_signals(ctx: ScoreContext, *, mode: str) -> list[TradeSignal]:
     dq = ctx.payload.get("_data_quality") or {}
     if mode == "during_market" and dq.get("block_intraday_buy"):
         return []
+
+    if mode == "during_market":
+        record_watchlist_fund_snapshots(ctx.payload.get("自选股") or [])
 
     mw_cfg = load_gates_config().get("main_wave") or {}
     buy_cfg = (load_gates_config().get("buy") or {}).get(

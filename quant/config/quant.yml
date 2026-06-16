@@ -130,13 +130,18 @@ gates:
   stoploss_cooldown_days: 3         # 止损卖出后 N 日内不再买同代码
   block_same_day_rebuy_after_sell: true  # 当日卖出过的代码当日不再买入
 
-  # 持续确认：条件须连续保持 persistence_minutes + min_consecutive_runs 轮调度
+  # 持续确认：买入当日有效 + 软中断；卖出仍偏严格
   confirmation:
-    default_persistence_minutes: 15   # 买入默认持续时长（10 分钟调度：约 09:37→09:52）
-    default_min_consecutive_runs: 2   # 买入默认连续轮次
-    max_window_minutes: 180           # 自首次满足起超过此窗口仍未成交则重新计时
-    skip_count_modes:                 # 这些模式只生成原始信号，不计入持续确认
-      - pre_market                      # 盘中从 09:37 起算
+    default_persistence_minutes: 10
+    default_min_consecutive_runs: 2
+    max_window_minutes: 180
+    buy_policy:
+      same_day_window: true       # 买入：同一自然日内不因 max_window 重计
+      max_miss_streak: 1          # 买入：允许 1 轮未见信号（软中断）
+      use_trading_minutes: true   # 买入：持续时长按连续竞价分钟（剔除午休）
+      verify_before_execute: true # 买入：成交前再验趋势/评分/分时
+    skip_count_modes:
+      - pre_market
     by_kind:
       止损:
         persistence_minutes: 0
@@ -144,7 +149,13 @@ gates:
       日内走弱:
         persistence_minutes: 10
         min_consecutive_runs: 2
-      # 上升途中 / 回调企稳：买入继承下方 强势/震荡/弱势，不设 by_kind 覆盖
+      上升途中:
+        persistence_minutes: 10
+        min_consecutive_runs: 2
+      回调企稳:
+        persistence_minutes: 10
+        min_consecutive_runs: 2
+      # 破5日线 / 趋势衰竭 / 评分走弱：卖出侧仍偏长确认
       破5日线:
         persistence_minutes: 20
         min_consecutive_runs: 3
@@ -160,12 +171,12 @@ gates:
       min_consecutive_runs: 2
       max_window_minutes: 120
     震荡:
-      persistence_minutes: 15   # 买入约 09:37→09:52（2 轮）
+      persistence_minutes: 10   # 买入约 09:37→09:47（2 轮）
       min_consecutive_runs: 2
       max_window_minutes: 180
     弱势:
-      persistence_minutes: 30
-      min_consecutive_runs: 3
+      persistence_minutes: 15
+      min_consecutive_runs: 2
       max_window_minutes: 240
 
   # 概念板块：滑动窗口四榜快照 + concept_theme 概念权重；仅晚间复盘写入状态
@@ -262,15 +273,19 @@ gates:
         buy_threshold_delta: -2     # 买入线略降（如 72→70）
       intraday:                       # 盘中买入分时过滤（仅 during_market）
         enabled: true
-        require_above_avg: true       # 现价须在分时均价上方
-        avg_margin_pct: 0.0           # 高于均价的幅度(%)
-        lookback_minutes: 15          # 分时回看分钟数
-        max_recent_drop_pct: 0.35     # 近 N 分钟累计跌幅上限(%)
-        max_down_bars_ratio: 0.55     # 近 N 分钟下跌 K 线占比上限
-        require_fund_flow_improve: true # 后半段分时资金强于前半段
-        max_drop_from_high_pct: 2.5   # 距日内高点最大回撤(%)
-        min_day_change_pct: -1.5      # 当日涨幅下限(%)
-        hard_net_outflow_wan: 8000    # 当日净流出硬上限(万元)
+        require_above_avg: true
+        avg_margin_pct: 0.0
+        lookback_minutes: 15
+        min_above_vwap_ratio: 0.65
+        max_recent_drop_pct: 0.35
+        max_down_bars_ratio: 0.55
+        require_strength_signal: true
+        skip_strength_min_day_chg: 5.0
+        fund_improve_min_delta_wan: 50
+        minute_momentum_relax_ratio: 0.85
+        max_drop_from_high_pct: 2.5
+        min_day_change_pct: -1.5
+        hard_net_outflow_wan: 8000
 
   # 卖出：止损 + 日内走弱 + 神奇2点30 最终确认
   sell:

@@ -1,7 +1,7 @@
-"""信号持续确认：条件自首次满足起须连续保持足够时长与调度轮次，方可成交。
+"""信号持续确认：条件须保持足够时长与调度轮次，方可成交。
 
-与旧「计数三确认」不同，中间任一轮条件消失会清零 pending（见本轮未见信号则删除条目）。
-趋势类卖出（破5日线/趋势衰竭/评分走弱）在持续条件已满足后，仍须 14:30 后执行。
+买入：当日有效（跨日清零）、午休不计中断、允许 1 轮软中断、成交前再验买点。
+卖出：条件消失仍清零；趋势类卖须 14:30 后执行。
 
 持久化：~/.quant/state/signal_pending.json
 """
@@ -12,7 +12,8 @@ import json
 from dataclasses import asdict, dataclass
 from datetime import datetime
 
-from quant.timeutil import CN_TZ, cn_now, ensure_cn_tz
+from quant.constants import BUY_KIND_ASCENT, BUY_KIND_PULLBACK
+from quant.timeutil import CN_TZ, cn_date_str, cn_now, ensure_cn_tz, trading_minutes_between
 from quant.config import load_gates_config
 from quant.scoring.context import ScoreContext, infer_regime
 from quant.signals.models import TradeSignal
@@ -20,6 +21,7 @@ from quant.store.paths import state_file
 from quant.trading_hours import is_late_session_for_trend_sell, sell_kinds_requiring_late_final
 
 _PENDING_FILE = "signal_pending.json"
+_BUY_KINDS = {BUY_KIND_ASCENT, BUY_KIND_PULLBACK, "默认"}
 
 
 @dataclass
@@ -27,11 +29,13 @@ class PendingSignal:
     code: str
     action: str
     signal_kind: str
-    count: int  # 连续满足条件的调度轮次
+    count: int  # 累计满足条件的调度轮次
     first_at: str
     last_at: str
     regime: str
     last_reason: str = ""
+    miss_streak: int = 0  # 连续未出现轮次（买入软中断）
+    first_date: str = ""  # 首次满足的自然日 yyyy-mm-dd
 
     def key(self) -> str:
         return f"{self.code}|{self.action}|{self.signal_kind}"
@@ -51,7 +55,25 @@ def _parse_ts(s: str) -> datetime | None:
         return None
 
 
-def confirmation_config(ctx: ScoreContext, signal_kind: str = "") -> dict:
+def _entry_from_dict(v: dict) -> PendingSignal | None:
+    try:
+        return PendingSignal(
+            code=str(v["code"]),
+            action=str(v["action"]),
+            signal_kind=str(v["signal_kind"]),
+            count=int(v["count"]),
+            first_at=str(v["first_at"]),
+            last_at=str(v["last_at"]),
+            regime=str(v.get("regime") or ""),
+            last_reason=str(v.get("last_reason") or ""),
+            miss_streak=int(v.get("miss_streak") or 0),
+            first_date=str(v.get("first_date") or ""),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def confirmation_config(ctx: ScoreContext, signal_kind: str = "", *, action: str = "") -> dict:
     """按 signal_kind → 市场状态 → 全局默认 解析持续确认参数。"""
     cfg = load_gates_config().get("confirmation") or {}
     regime = infer_regime(ctx.payload)
@@ -62,7 +84,7 @@ def confirmation_config(ctx: ScoreContext, signal_kind: str = "") -> dict:
     if persist is None:
         persist = regime_block.get("persistence_minutes")
     if persist is None:
-        persist = cfg.get("default_persistence_minutes", 15)
+        persist = cfg.get("default_persistence_minutes", 10)
 
     min_runs = kind_block.get("min_consecutive_runs")
     if min_runs is None:
@@ -80,12 +102,26 @@ def confirmation_config(ctx: ScoreContext, signal_kind: str = "") -> dict:
     if max_window is None:
         max_window = cfg.get("max_window_minutes", 180)
 
-    return {
+    out = {
         "persistence_minutes": persist_f,
         "min_consecutive_runs": min_runs_i,
         "max_window_minutes": float(max_window),
         "regime": regime,
+        "same_day_window": False,
+        "max_miss_streak": 0,
+        "use_trading_minutes": False,
+        "verify_before_execute": False,
     }
+
+    is_buy = action == "买入" or signal_kind in _BUY_KINDS
+    if is_buy and action != "卖出":
+        buy_pol = cfg.get("buy_policy") or {}
+        out["same_day_window"] = bool(buy_pol.get("same_day_window", True))
+        out["max_miss_streak"] = int(buy_pol.get("max_miss_streak", 1))
+        out["use_trading_minutes"] = bool(buy_pol.get("use_trading_minutes", True))
+        out["verify_before_execute"] = bool(buy_pol.get("verify_before_execute", True))
+
+    return out
 
 
 def persistence_satisfied(
@@ -94,14 +130,18 @@ def persistence_satisfied(
     *,
     persistence_minutes: float,
     min_consecutive_runs: int,
+    use_trading_minutes: bool = False,
 ) -> bool:
-    """是否达到持续时长 + 连续轮次。"""
+    """是否达到持续时长 + 轮次（买入可用连续竞价分钟，剔除午休）。"""
     first_dt = _parse_ts(entry.first_at)
     if first_dt is None:
         return False
     if persistence_minutes <= 0:
-        return entry.count >= 1
-    elapsed = (now - first_dt).total_seconds() / 60.0
+        return entry.count >= min_consecutive_runs
+    if use_trading_minutes:
+        elapsed = trading_minutes_between(first_dt, now)
+    else:
+        elapsed = (now - first_dt).total_seconds() / 60.0
     return elapsed >= persistence_minutes and entry.count >= min_consecutive_runs
 
 
@@ -118,10 +158,9 @@ def load_pending() -> dict[str, PendingSignal]:
         return out
     for k, v in raw.items():
         if isinstance(v, dict):
-            try:
-                out[k] = PendingSignal(**v)
-            except TypeError:
-                continue
+            entry = _entry_from_dict(v)
+            if entry is not None:
+                out[k] = entry
     return out
 
 
@@ -132,6 +171,15 @@ def save_pending(pending: dict[str, PendingSignal]) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _purge_cross_day_buy_pending(pending: dict[str, PendingSignal], today: str) -> None:
+    for key in list(pending.keys()):
+        entry = pending[key]
+        if entry.action != "买入":
+            continue
+        if entry.first_date and entry.first_date != today:
+            del pending[key]
+
+
 def _needs_late_final_confirm(sig: TradeSignal) -> bool:
     if sig.action != "卖出":
         return False
@@ -140,7 +188,12 @@ def _needs_late_final_confirm(sig: TradeSignal) -> bool:
     return sig.signal_kind in sell_kinds_requiring_late_final()
 
 
-def _waiting_late_session(entry: PendingSignal, sig: TradeSignal, now: datetime, conf: dict) -> bool:
+def _waiting_late_session(
+    entry: PendingSignal,
+    sig: TradeSignal,
+    now: datetime,
+    conf: dict,
+) -> bool:
     """持续条件已满足，但趋势类卖须等 14:30 后成交。"""
     if not _needs_late_final_confirm(sig):
         return False
@@ -151,6 +204,7 @@ def _waiting_late_session(entry: PendingSignal, sig: TradeSignal, now: datetime,
         now,
         persistence_minutes=conf["persistence_minutes"],
         min_consecutive_runs=conf["min_consecutive_runs"],
+        use_trading_minutes=conf.get("use_trading_minutes", False),
     )
 
 
@@ -171,11 +225,45 @@ def _clear_opposite_pending(raw_signals: list[TradeSignal]) -> None:
         save_pending(pending)
 
 
-def _elapsed_minutes(entry: PendingSignal, now: datetime) -> float:
+def _elapsed_minutes(entry: PendingSignal, now: datetime, *, use_trading_minutes: bool) -> float:
     first_dt = _parse_ts(entry.first_at)
     if first_dt is None:
         return 0.0
+    if use_trading_minutes:
+        return trading_minutes_between(first_dt, now)
     return (now - first_dt).total_seconds() / 60.0
+
+
+def _new_pending(sig: TradeSignal, kind: str, regime: str, now: datetime) -> PendingSignal:
+    return PendingSignal(
+        code=sig.code,
+        action=sig.action,
+        signal_kind=kind,
+        count=1,
+        first_at=now.isoformat(),
+        last_at=now.isoformat(),
+        regime=regime,
+        last_reason=sig.reason,
+        miss_streak=0,
+        first_date=cn_date_str(now),
+    )
+
+
+def _should_reset_window(
+    entry: PendingSignal,
+    conf: dict,
+    elapsed: float,
+    *,
+    waiting_late: bool,
+    today: str,
+) -> bool:
+    if waiting_late:
+        return False
+    if conf.get("same_day_window") and entry.action == "买入":
+        if entry.first_date and entry.first_date != today:
+            return True
+        return False
+    return elapsed > conf["max_window_minutes"]
 
 
 def _try_execute(
@@ -183,10 +271,12 @@ def _try_execute(
     entry: PendingSignal,
     conf: dict,
     now: datetime,
+    ctx: ScoreContext | None = None,
 ) -> tuple[TradeSignal | None, str]:
     """持续确认达标后生成可执行信号；返回 (exec_sig, audit_status)。"""
     persist = conf["persistence_minutes"]
-    elapsed = _elapsed_minutes(entry, now)
+    use_tm = conf.get("use_trading_minutes", False)
+    elapsed = _elapsed_minutes(entry, now, use_trading_minutes=use_tm)
 
     if _waiting_late_session(entry, sig, now, conf):
         return None, "持续条件已满足，等待14:30后执行"
@@ -196,11 +286,18 @@ def _try_execute(
         now,
         persistence_minutes=persist,
         min_consecutive_runs=conf["min_consecutive_runs"],
+        use_trading_minutes=use_tm,
     ):
         return (
             None,
             f"持续确认中（{elapsed:.0f}/{persist:.0f}分，{entry.count}/{conf['min_consecutive_runs']}轮）",
         )
+
+    if sig.action == "买入" and conf.get("verify_before_execute") and ctx is not None:
+        from quant.signals.buy import verify_buy_signal_still_valid
+
+        if not verify_buy_signal_still_valid(sig.code, ctx, mode=ctx.mode or "during_market"):
+            return None, "持续确认完成但买点已失效，暂不成交"
 
     kind = sig.signal_kind or "默认"
     exec_sig = TradeSignal(
@@ -230,13 +327,12 @@ def apply_three_confirmations(
     *,
     scope_action: str | None = None,
 ) -> tuple[list[TradeSignal], list[dict]]:
-    """持续确认：返回可执行信号 + 审计日志。
-
-    scope_action：仅清理该方向下本轮未出现的 pending（买卖分两次调用时必传，避免误删对向）。
-    """
+    """持续确认：返回可执行信号 + 审计日志。"""
     _clear_opposite_pending(raw_signals)
     now = _now()
+    today = cn_date_str(now)
     pending = load_pending()
+    _purge_cross_day_buy_pending(pending, today)
     executable: list[TradeSignal] = []
     audit: list[dict] = []
     seen_keys: set[str] = set()
@@ -251,24 +347,14 @@ def apply_three_confirmations(
         kind = sig.signal_kind or "默认"
         key = f"{sig.code}|{sig.action}|{kind}"
         seen_keys.add(key)
-        conf = confirmation_config(ctx, kind)
+        conf = confirmation_config(ctx, kind, action=sig.action)
         regime = conf["regime"]
-        max_window = conf["max_window_minutes"]
         entry = pending.get(key)
 
         if entry is None:
-            entry = PendingSignal(
-                code=sig.code,
-                action=sig.action,
-                signal_kind=kind,
-                count=1,
-                first_at=now.isoformat(),
-                last_at=now.isoformat(),
-                regime=regime,
-                last_reason=sig.reason,
-            )
+            entry = _new_pending(sig, kind, regime, now)
             pending[key] = entry
-            exec_sig, status = _try_execute(sig, entry, conf, now)
+            exec_sig, status = _try_execute(sig, entry, conf, now, ctx)
             if exec_sig:
                 executable.append(exec_sig)
                 del pending[key]
@@ -279,45 +365,36 @@ def apply_three_confirmations(
 
         first_dt = _parse_ts(entry.first_at)
         if first_dt is None:
-            entry = PendingSignal(
-                code=sig.code,
-                action=sig.action,
-                signal_kind=kind,
-                count=1,
-                first_at=now.isoformat(),
-                last_at=now.isoformat(),
-                regime=regime,
-                last_reason=sig.reason,
-            )
+            entry = _new_pending(sig, kind, regime, now)
             pending[key] = entry
             audit.append(_audit_row(sig, entry, "时间戳异常，重新计时", executable=False))
             continue
 
-        elapsed = _elapsed_minutes(entry, now)
+        use_tm = conf.get("use_trading_minutes", False)
+        elapsed = _elapsed_minutes(entry, now, use_trading_minutes=use_tm)
         waiting_late = _waiting_late_session(entry, sig, now, conf)
 
-        if elapsed > max_window and not waiting_late:
-            entry = PendingSignal(
-                code=sig.code,
-                action=sig.action,
-                signal_kind=kind,
-                count=1,
-                first_at=now.isoformat(),
-                last_at=now.isoformat(),
-                regime=regime,
-                last_reason=sig.reason,
+        if _should_reset_window(entry, conf, elapsed, waiting_late=waiting_late, today=today):
+            reset_reason = (
+                "跨日重新计时"
+                if entry.first_date and entry.first_date != today
+                else "持续超时，重新计时"
             )
+            entry = _new_pending(sig, kind, regime, now)
             pending[key] = entry
-            audit.append(_audit_row(sig, entry, "持续超时，重新计时", executable=False))
+            audit.append(_audit_row(sig, entry, reset_reason, executable=False))
             continue
 
+        entry.miss_streak = 0
         entry.count += 1
         entry.last_at = now.isoformat()
         entry.last_reason = sig.reason
         entry.regime = regime
+        if not entry.first_date:
+            entry.first_date = today
         pending[key] = entry
 
-        exec_sig, status = _try_execute(sig, entry, conf, now)
+        exec_sig, status = _try_execute(sig, entry, conf, now, ctx)
         if exec_sig:
             executable.append(exec_sig)
             del pending[key]
@@ -327,7 +404,14 @@ def apply_three_confirmations(
 
     for key in list(pending.keys()):
         entry = pending[key]
-        if entry.action in scope_actions and key not in seen_keys:
+        if entry.action not in scope_actions or key in seen_keys:
+            continue
+        conf = confirmation_config(ctx, entry.signal_kind, action=entry.action)
+        max_miss = int(conf.get("max_miss_streak", 0))
+        if max_miss > 0 and entry.miss_streak < max_miss:
+            entry.miss_streak += 1
+            pending[key] = entry
+        else:
             del pending[key]
 
     save_pending(pending)

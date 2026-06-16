@@ -66,7 +66,7 @@ class ApplyPersistenceFlowTests(unittest.TestCase):
             signal_kind=kind,
         )
 
-    def test_condition_break_clears_pending(self) -> None:
+    def test_condition_break_soft_miss_keeps_pending_once(self) -> None:
         from unittest.mock import patch
 
         from quant.scoring.context import ScoreContext
@@ -81,6 +81,7 @@ class ApplyPersistenceFlowTests(unittest.TestCase):
             first_at=_ts(9, 37).isoformat(),
             last_at=_ts(9, 47).isoformat(),
             regime="震荡",
+            first_date="2026-06-11",
         )
         pending[entry.key()] = entry
 
@@ -89,6 +90,10 @@ class ApplyPersistenceFlowTests(unittest.TestCase):
             "min_consecutive_runs": 3,
             "max_window_minutes": 180.0,
             "regime": "震荡",
+            "same_day_window": True,
+            "max_miss_streak": 1,
+            "use_trading_minutes": True,
+            "verify_before_execute": False,
         }
 
         with (
@@ -96,12 +101,56 @@ class ApplyPersistenceFlowTests(unittest.TestCase):
             patch.object(mod, "save_pending") as save_mock,
             patch.object(mod, "_clear_opposite_pending"),
             patch.object(mod, "_now", return_value=_ts(9, 57)),
+            patch.object(mod, "cn_date_str", return_value="2026-06-11"),
             patch.object(mod, "confirmation_config", return_value=conf),
         ):
             ctx = ScoreContext.from_payload({}, mode="during_market")
             executable, audit = mod.apply_three_confirmations([], ctx, scope_action="买入")
             self.assertEqual(executable, [])
             save_mock.assert_called_once()
+            saved = save_mock.call_args[0][0]
+            self.assertIn(entry.key(), saved)
+            self.assertEqual(saved[entry.key()].miss_streak, 1)
+
+    def test_condition_break_clears_after_second_miss(self) -> None:
+        from unittest.mock import patch
+
+        from quant.scoring.context import ScoreContext
+        from quant.signals import confirmation as mod
+
+        entry = PendingSignal(
+            code="600226",
+            action="买入",
+            signal_kind="上升途中",
+            count=2,
+            first_at=_ts(9, 37).isoformat(),
+            last_at=_ts(9, 47).isoformat(),
+            regime="震荡",
+            first_date="2026-06-11",
+            miss_streak=1,
+        )
+        pending = {entry.key(): entry}
+        conf = {
+            "persistence_minutes": 20.0,
+            "min_consecutive_runs": 3,
+            "max_window_minutes": 180.0,
+            "regime": "震荡",
+            "same_day_window": True,
+            "max_miss_streak": 1,
+            "use_trading_minutes": True,
+            "verify_before_execute": False,
+        }
+
+        with (
+            patch.object(mod, "load_pending", return_value=dict(pending)),
+            patch.object(mod, "save_pending") as save_mock,
+            patch.object(mod, "_clear_opposite_pending"),
+            patch.object(mod, "_now", return_value=_ts(10, 7)),
+            patch.object(mod, "cn_date_str", return_value="2026-06-11"),
+            patch.object(mod, "confirmation_config", return_value=conf),
+        ):
+            ctx = ScoreContext.from_payload({}, mode="during_market")
+            mod.apply_three_confirmations([], ctx, scope_action="买入")
             saved = save_mock.call_args[0][0]
             self.assertEqual(saved, {})
 

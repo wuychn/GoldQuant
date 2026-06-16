@@ -11,6 +11,7 @@ from quant.scoring.tech_indicators import (
     quote_last_price,
     to_float,
 )
+from quant.store.intraday_fund_track import net_flow_improving
 
 _HMS_RE = re.compile(r"(\d{1,2}):(\d{2})(?::(\d{2}))?")
 
@@ -74,6 +75,30 @@ def _vwap(bars: list[dict]) -> float | None:
     return num / den if den > 0 else None
 
 
+def _above_vwap_ratio(bars: list[dict], vwap: float, lookback: int) -> float:
+    recent = bars[-lookback:] if bars else []
+    if not recent or vwap <= 0:
+        return 0.0
+    above = sum(1 for b in recent if b["close"] >= vwap)
+    return above / len(recent)
+
+
+def _minute_momentum_improving(recent: list[dict], relax: float) -> bool:
+    if len(recent) < 6:
+        return False
+    flows = [(b["close"] - b["open"]) * b["vol"] for b in recent]
+    mid = len(flows) // 2
+    early_sum = sum(flows[:mid])
+    late_sum = sum(flows[mid:])
+    if early_sum > 0:
+        need = early_sum * relax
+    elif early_sum < 0:
+        need = early_sum / relax
+    else:
+        need = 0.0
+    return late_sum > need
+
+
 def _intraday_cfg(buy_cfg: dict[str, Any] | None) -> dict[str, Any]:
     c = buy_cfg or {}
     intra = dict(c.get("intraday") or {})
@@ -85,7 +110,7 @@ def intraday_allows_buy(
     stock: dict,
     buy_cfg: dict[str, Any] | None = None,
 ) -> tuple[bool, str]:
-    """盘中买入前置：非下行、均价线上方、分时资金改善、走势不过弱。"""
+    """盘中买入前置：均价上方占比 + 近端走势 + 资金改善（可负但收敛）。"""
     intra = _intraday_cfg(buy_cfg)
     if not intra.get("enabled", True):
         return True, ""
@@ -94,21 +119,31 @@ def intraday_allows_buy(
     if not last or last <= 0:
         return False, "无有效现价"
 
+    code = str(stock.get("股票代码", "")).strip()
     pk = stock.get("盘口") if isinstance(stock.get("盘口"), dict) else {}
     bars = _session_minute_bars(stock)
+    avg = quote_avg_price(stock) or _vwap(bars)
+    vwap = avg or _vwap(bars)
 
     # --- 1. 现价须在分时均价上方 ---
     if intra.get("require_above_avg", True):
-        avg = quote_avg_price(stock) or _vwap(bars)
         margin = float(intra.get("avg_margin_pct", 0.0))
-        floor = avg * (1 + margin / 100) if avg else None
+        floor = vwap * (1 + margin / 100) if vwap else None
         if floor is None or last < floor:
-            avg_s = f"{avg:.2f}" if avg else "—"
+            avg_s = f"{vwap:.2f}" if vwap else "—"
             return False, f"现价{last:.2f}低于分时均价{avg_s}"
 
-    # --- 2. 近 N 分钟走势不能持续下行 ---
     lookback = max(3, int(intra.get("lookback_minutes", 15)))
     recent = bars[-lookback:] if bars else []
+
+    # --- 2. 近 N 分钟多数收在 VWAP 上方 ---
+    min_above_ratio = float(intra.get("min_above_vwap_ratio", 0.65))
+    if vwap and len(recent) >= 5:
+        ratio = _above_vwap_ratio(bars, vwap, lookback)
+        if ratio < min_above_ratio:
+            return False, f"分时仅{ratio:.0%}在均价上方(需≥{min_above_ratio:.0%})"
+
+    # --- 3. 近 N 分钟走势不能持续下行 ---
     if len(recent) >= 3:
         closes = [b["close"] for b in recent]
         drop_pct = (closes[-1] - closes[0]) / closes[0] * 100
@@ -121,17 +156,31 @@ def intraday_allows_buy(
         if down_steps / (len(closes) - 1) > max_down_ratio:
             return False, f"近{len(recent)}分钟跌多涨少"
 
-        # --- 3. 分时资金呈改善（后半段强于前半段；净额可为负） ---
-        if intra.get("require_fund_flow_improve", True):
-            flows = [(b["close"] - b["open"]) * b["vol"] for b in recent]
-            if len(flows) >= 6:
-                mid = len(flows) // 2
-                early_sum = sum(flows[:mid])
-                late_sum = sum(flows[mid:])
-                if late_sum <= early_sum:
-                    return False, "分时资金未见改善"
+    # --- 4. 资金/动能：强势豁免 OR 净流入改善 OR 分钟动能改善 OR 当前净流入 ---
+    if intra.get("require_strength_signal", True):
+        chg = quote_change_pct(stock)
+        skip_min_chg = float(intra.get("skip_strength_min_day_chg", 5.0))
+        strong_day = (
+            chg is not None
+            and chg >= skip_min_chg
+            and vwap
+            and last >= vwap
+        )
 
-    # --- 4. 日内走弱：距高点回撤 / 当日涨幅 ---
+        flow = stock.get("个股资金流") or {}
+        net = _parse_amount_wan(flow.get("净额")) if isinstance(flow, dict) else None
+        min_delta = float(intra.get("fund_improve_min_delta_wan", 50.0))
+        net_ok = net is not None and net > 0
+        improving = net_flow_improving(code, min_delta_wan=min_delta, current_net=net)
+        relax = float(intra.get("minute_momentum_relax_ratio", 0.85))
+        minute_ok = _minute_momentum_improving(recent, relax)
+
+        if not (strong_day or net_ok or improving or minute_ok):
+            if net is not None and net < 0 and not improving:
+                return False, "净流出且未见改善"
+            return False, "分时强势证据不足"
+
+    # --- 5. 日内走弱：距高点回撤 / 当日涨幅 ---
     high = to_float(pk.get("最高"))
     if high and high > 0:
         dd = (last - high) / high * 100
@@ -144,7 +193,6 @@ def intraday_allows_buy(
     if chg is not None and chg < min_chg:
         return False, f"当日涨幅{chg:.2f}%偏弱"
 
-    # 快照资金：极端净流出且分钟也未改善时拦截
     flow = stock.get("个股资金流") or {}
     if isinstance(flow, dict) and flow:
         net = _parse_amount_wan(flow.get("净额"))
