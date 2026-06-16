@@ -19,8 +19,8 @@ class ThsRankSignalScorer:
             return DimensionResult(self.name, 0, 0, True, available=False, detail={})
 
         cfg = (load_scoring_config().get("dimensions") or {}).get(self.name) or {}
-        base = float(cfg.get("base_score", 55))
-        per_tag = float(cfg.get("score_per_tag", 15))
+        base = float(cfg.get("base_score", 35))
+        per_tag = float(cfg.get("score_per_tag", 5))
         s = min(100.0, base + len(tags) * per_tag)
         return DimensionResult(
             self.name,

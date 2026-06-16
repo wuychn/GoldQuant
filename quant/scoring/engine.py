@@ -80,7 +80,7 @@ class ScoringEngine:
         return None
 
     def passes_main_wave(self, score: StockScore) -> bool:
-        """加自选/买入须满足主升浪维度可用且不低于 watchlist 阈值的一半（可配）。"""
+        """主升浪维度可用且不低于 watchlist 阈值×0.55（预留，加自选当前未启用）。"""
         mw = self.main_wave_score(score)
         if mw is None:
             return False

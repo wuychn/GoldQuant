@@ -15,7 +15,7 @@
 scoring:
 
   # 总分阈值：各场景最低通过分
-  watchlist_threshold: 65   # 晚间复盘加自选
+  watchlist_threshold: 70   # 晚间复盘加自选
   buy_threshold: 72         # 产生买入原始信号
   sell_threshold: 45        # 持仓「去弱留强」：低于此分可触发卖出
 
@@ -43,11 +43,11 @@ scoring:
     popularity_rank:        # 同花顺人气排名
       enabled: true
       weight: 10
-    ths_rank_signal:        # 同花顺形态榜（创新高 / 持续上涨 / 持续放量 / 量价齐升）
+    ths_rank_signal:        # 同花顺形态榜（轻量加分，weight=5 不宜过高）
       enabled: true
       weight: 5
-      base_score: 55
-      score_per_tag: 15
+      base_score: 35        # 有标签时维度起分；1 标签≈40，4 标签≈55
+      score_per_tag: 5
     technical:              # MACD、均线等技术指标
       enabled: true
       weight: 9
