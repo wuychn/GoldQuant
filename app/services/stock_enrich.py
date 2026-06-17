@@ -326,6 +326,26 @@ async def _attach_concepts_cache_only(
     return item, fetched.source
 
 
+async def _ensure_stock_industry(
+    item: dict[str, Any],
+    symbol: str,
+    *,
+    allow_network: bool,
+) -> None:
+    """``行业`` 为评分硬依赖：jbxx 全量失败时也尽量从缓存或单独补全。"""
+    if str(item.get("行业") or "").strip():
+        return
+    from app.services.stock_jbxx_cache import fetch_stock_industry
+
+    ind = await asyncio.to_thread(
+        fetch_stock_industry,
+        symbol,
+        allow_network=allow_network,
+    )
+    if ind:
+        item["行业"] = ind
+
+
 async def enrich_stock_row(
     settings: Settings,
     row: dict[str, Any],
@@ -363,6 +383,8 @@ async def enrich_stock_row(
             for k in ("总股本", "流通股", "总市值", "流通市值", "上市时间", "行业"):
                 if k in jbxx_:
                     item[k] = jbxx_[k]
+
+    await _ensure_stock_industry(item, symbol, allow_network=not skip_jbxx)
 
     io_tasks: list[Any] = [
         asyncio.to_thread(_sync_call_or_none, "盘口", lambda: pk(symbol)),

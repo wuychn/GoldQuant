@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from quant.config import load_gates_config
-from quant.data_quality import skip_intraday_buy_codes
 from quant.constants import STRATEGY_NAME
 from quant.gates.buy_policy import effective_buy_threshold, effective_max_change_pct
 from quant.gates.rules import (
@@ -59,9 +58,6 @@ def _evaluate_buy_candidate(
     if not code or code in held:
         return None
     if not check_buy_gates(stock, ctx).passed:
-        return None
-
-    if mode == "during_market" and code in skip_intraday_buy_codes(ctx.payload):
         return None
 
     ok_trend, _ = trend_allows_buy(stock, mw_cfg)
@@ -120,8 +116,6 @@ def verify_buy_signal_still_valid(code: str, ctx: ScoreContext, *, mode: str = "
     stock = _stock_from_payload(ctx.payload, code)
     if not stock:
         return False
-    if code in skip_intraday_buy_codes(ctx.payload):
-        return False
     mw_cfg = load_gates_config().get("main_wave") or {}
     buy_cfg = (load_gates_config().get("buy") or {}).get(
         "during_market" if mode == "during_market" else "pre_market"
@@ -153,10 +147,6 @@ def generate_buy_signals(ctx: ScoreContext, *, mode: str) -> list[TradeSignal]:
     全量扫描自选股，按综合评分降序取前 N（N=剩余持仓空位），
     再按评分比例分配预算，避免列表顺序抢占名额。
     """
-    dq = ctx.payload.get("_data_quality") or {}
-    if mode == "during_market" and dq.get("block_intraday_buy"):
-        return []
-
     if mode == "during_market":
         record_watchlist_fund_snapshots(ctx.payload.get("自选股") or [])
 

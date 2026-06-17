@@ -96,6 +96,39 @@ class StockJbxxCache:
         data = entry.get("data")
         return True, data if isinstance(data, dict) else None
 
+    def lookup_stale(self, code: str) -> dict[str, Any] | None:
+        """返回缓存条目（含过期），供接口失败时回退。"""
+        key = str(code).strip()
+        if not key:
+            return None
+        entry = self._load()["stocks"].get(key)
+        if not isinstance(entry, dict):
+            return None
+        data = entry.get("data")
+        return data if isinstance(data, dict) else None
+
+    def merge_data(self, code: str, patch: dict[str, Any]) -> None:
+        """合并写入部分字段（如仅补 ``行业``），保留已有缓存其它项。"""
+        if not isinstance(patch, dict) or not patch:
+            return
+        key = str(code).strip()
+        if not key:
+            return
+        with self._lock:
+            body = self._load()
+            prev = body["stocks"].get(key)
+            old_data: dict[str, Any] = {}
+            fetched_at = cn_datetime_str()
+            if isinstance(prev, dict):
+                if isinstance(prev.get("data"), dict):
+                    old_data = dict(prev["data"])
+                if str(prev.get("fetched_at", "")).strip():
+                    fetched_at = str(prev["fetched_at"])
+            merged = {**old_data, **patch}
+            body["stocks"][key] = {"data": merged, "fetched_at": fetched_at}
+            _write_json_atomic(self._path, body)
+            self._data = body
+
     def put(self, code: str, data: dict[str, Any] | None) -> None:
         if not isinstance(data, dict) or not data:
             return
@@ -127,8 +160,29 @@ def get_stock_jbxx_cache() -> StockJbxxCache:
         return _store
 
 
+def industry_from_jbxx(data: dict[str, Any] | None) -> str | None:
+    if not isinstance(data, dict):
+        return None
+    text = str(data.get("行业") or "").strip()
+    return text or None
+
+
+def _fetch_jbxx_live(symbol: str) -> dict[str, Any] | None:
+    key = str(symbol).strip()
+    if not key:
+        return None
+    try:
+        from app.utils.dfcf_util import jbxx
+
+        raw = jbxx(key)
+        return raw if isinstance(raw, dict) and raw else None
+    except Exception as e:
+        log_caught_error(logger, f"stock_jbxx_cache 拉取基本信息 symbol={key!r}", e)
+        return None
+
+
 def fetch_jbxx_cached(symbol: str, *, file_cache: StockJbxxCache | None = None) -> dict[str, Any] | None:
-    """带周缓存的基本信息；缓存未命中时调东财 ``jbxx``。"""
+    """带周缓存的基本信息；缓存未命中时调东财 ``jbxx``，失败则回退过期缓存。"""
     key = str(symbol).strip()
     if not key:
         return None
@@ -142,17 +196,59 @@ def fetch_jbxx_cached(symbol: str, *, file_cache: StockJbxxCache | None = None) 
         hit, data = store.lookup(key)
         if hit:
             return data
-        try:
-            from app.utils.dfcf_util import jbxx
+        live = _fetch_jbxx_live(key)
+        if live:
+            store.put(key, live)
+            return live
+        stale = store.lookup_stale(key)
+        if stale:
+            logger.warning("jbxx 接口失败，使用过期缓存 symbol=%s", key)
+            return stale
+        return None
 
-            raw = jbxx(key)
-            data = raw if isinstance(raw, dict) and raw else None
-        except Exception as e:
-            log_caught_error(logger, f"stock_jbxx_cache 拉取基本信息 symbol={key!r}", e)
-            return None
-        if data:
-            store.put(key, data)
-        return data
+
+def fetch_stock_industry(
+    symbol: str,
+    *,
+    file_cache: StockJbxxCache | None = None,
+    allow_network: bool = True,
+) -> str | None:
+    """获取个股东财 ``行业``；优先有效缓存，接口失败时回退过期缓存。"""
+    key = str(symbol).strip()
+    if not key:
+        return None
+
+    store = file_cache if file_cache is not None else get_stock_jbxx_cache()
+    hit, data = store.lookup(key)
+    if hit:
+        ind = industry_from_jbxx(data)
+        if ind:
+            return ind
+
+    stale = store.lookup_stale(key)
+    stale_ind = industry_from_jbxx(stale)
+
+    if not allow_network:
+        return stale_ind
+
+    with store.lock_for(key):
+        hit, data = store.lookup(key)
+        if hit:
+            ind = industry_from_jbxx(data)
+            if ind:
+                return ind
+
+        live = _fetch_jbxx_live(key)
+        if live:
+            store.put(key, live)
+            ind = industry_from_jbxx(live)
+            if ind:
+                return ind
+
+        if stale_ind:
+            logger.warning("jbxx 拉取失败，行业使用过期缓存 symbol=%s", key)
+            return stale_ind
+        return None
 
 
 def prefetch_optional_holding_jbxx() -> int:

@@ -1,18 +1,66 @@
 import json
 
 import akshare as ak
+import requests
 
 from app.utils.common_util import sort_by_field_and_limit, today, get_val, set_field_value, list_to_dict, \
     get_n_workdays_ago
 from app.utils.dataframe import dataframe_to_records
 
+_JBXX_EM_URL = "https://push2.eastmoney.com/api/qt/stock/get"
+_JBXX_EM_FIELDS = (
+    "f120,f121,f122,f174,f175,f59,f163,f43,f57,f58,f169,f170,f46,f44,f51,f168,f47,"
+    "f164,f116,f60,f45,f52,f50,f48,f167,f117,f71,f161,f49,f530,f135,f136,f137,f138,"
+    "f139,f141,f142,f144,f145,f147,f148,f140,f143,f146,f149,f55,f62,f162,f92,f173,f104,"
+    "f105,f84,f85,f183,f184,f185,f186,f187,f188,f189,f190,f191,f192,f107,f111,f86,f177,f78,"
+    "f110,f262,f263,f264,f267,f268,f255,f256,f257,f258,f127,f199,f128,f198,f259,f260,f261,"
+    "f171,f277,f278,f279,f288,f152,f250,f251,f252,f253,f254,f269,f270,f271,f272,f273,f274,"
+    "f275,f276,f265,f266,f289,f290,f286,f285,f292,f293,f294,f295,f43"
+)
+_JBXX_FIELD_MAP = {
+    "f57": "股票代码",
+    "f58": "股票简称",
+    "f84": "总股本",
+    "f85": "流通股",
+    "f127": "行业",
+    "f116": "总市值",
+    "f117": "流通市值",
+    "f189": "上市时间",
+    "f43": "最新",
+}
+
+
+def _parse_stock_individual_info_payload(data_json: dict) -> dict:
+    """从东财 ``push2`` JSON 提取 jbxx 字段；忽略 ``dsc``/``dlmkts`` 等顶层噪声。"""
+    if not isinstance(data_json, dict):
+        return {}
+    data = data_json.get("data")
+    if not isinstance(data, dict):
+        return {}
+    return {name: data[fk] for fk, name in _JBXX_FIELD_MAP.items() if fk in data}
+
+
+def _fetch_stock_individual_info_em(symbol: str, *, timeout: float = 15) -> dict:
+    sym = str(symbol).strip()
+    if not sym:
+        return {}
+    market_code = 1 if sym.startswith("6") else 0
+    params = {
+        "fltt": "2",
+        "invt": "2",
+        "fields": _JBXX_EM_FIELDS,
+        "secid": f"{market_code}.{sym}",
+    }
+    r = requests.get(_JBXX_EM_URL, params=params, timeout=timeout)
+    r.raise_for_status()
+    return _parse_stock_individual_info_payload(r.json())
+
 
 def jbxx(symbol):
     """
-    基本信息
-    :return:
+    基本信息（东财 push2 API，直接解析 ``data``，规避 akshare DataFrame 列数 bug）。
     """
-    return list_to_dict(dataframe_to_records(ak.stock_individual_info_em(symbol=str(symbol))))
+    return _fetch_stock_individual_info_em(str(symbol))
 
 
 def pk(symbol):
@@ -117,9 +165,9 @@ def hist(symbol, period='daily', *, start_date=None, end_date=None):
 
 
 if __name__ == "__main__":
-    # print(json.dumps(jbxx("600519"), ensure_ascii=False, indent=2))
+    print(json.dumps(jbxx("600519"), ensure_ascii=False, indent=2))
     # print(hqbj_dc(600519))
     # 60日大幅上涨
-    print(json.dumps(pkyd('60日大幅上涨'), ensure_ascii=False, indent=2))
+    # print(json.dumps(pkyd('60日大幅上涨'), ensure_ascii=False, indent=2))
     # print(hqbj("002580"))
     # print(json.dumps(ztgc(), ensure_ascii=False, indent=2))

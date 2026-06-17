@@ -15,7 +15,6 @@ from app.utils.common_util import is_real_workday_cn
 from app.core.config import get_settings
 
 from quant.data_fetch import fetch_mode, fixture_path_for_mode, unwrap_payload
-from quant.data_quality import assess_payload_quality
 from quant.progress_log import configure_progress_logging, log_progress, log_progress_done, log_progress_error
 from quant.timeutil import cn_today
 from quant.constants import STRATEGY_NAME
@@ -63,11 +62,7 @@ _MODE_LABELS = {
 
 
 def _prepare_payload(raw: dict, *, mode: str = "") -> dict:
-    payload = merge_payload_holdings(unwrap_payload(raw))
-    if mode:
-        report = assess_payload_quality(payload, mode=mode)
-        payload["_data_quality"] = report.to_dict()
-    return payload
+    return merge_payload_holdings(unwrap_payload(raw))
 
 
 def _build_operation_section(
@@ -241,18 +236,10 @@ def process_during_market(raw: dict) -> str:
     scope = "during_market"
     log_progress(scope, "开始盘中分析")
     payload = _prepare_payload(raw, mode=scope)
-    dq = payload.get("_data_quality") or {}
-    if dq.get("issues"):
-        log_progress(scope, "数据质量告警", detail="；".join(dq["issues"][:5]))
-    save_derived("data_quality.json", dq)
-
     ctx = ScoreContext.from_payload(payload, mode="during_market")
 
     log_progress(scope, "生成买卖信号")
     raw_buy, raw_sell, executable, audit = generate_confirmed_signals(ctx, mode="during_market")
-    if dq.get("block_execute"):
-        log_progress(scope, "数据质量阻断成交", detail="仅生成信号与文案")
-        executable = []
     log_progress(scope, "执行模拟成交", detail=f"可执行 {len(executable)} 条")
     executed = execute_signals(executable, payload=payload) if executable else []
 
