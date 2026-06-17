@@ -18,18 +18,25 @@ def test_propose_normalize_match() -> None:
     assert score >= 0.9
 
 
-def test_propose_exact_skips_alias() -> None:
+def test_propose_exact_returns_same_name() -> None:
     ths = ["元件", "半导体"]
-    canonical, method, _ = propose_ths_match("元件", ths, set(ths))
-    assert canonical is None
+    canonical, method, score = propose_ths_match("元件", ths, set(ths))
+    assert canonical == "元件"
     assert method == "exact"
+    assert score == 1.0
 
 
 def test_build_alias_draft_groups_by_ths() -> None:
-    ths = ["IT服务", "元件", "塑料制品", "食品加工制造"]
-    em = ["IT服务Ⅱ", "塑料", "休闲食品", "元件"]
+    ths = ["IT服务", "元件", "塑料制品", "食品加工制造", "光学光电子", "黑色家电"]
+    em = ["IT服务Ⅱ", "塑料", "休闲食品", "元件", "光学元件", "其他家电Ⅱ"]
     aliases, meta = build_alias_draft(ths, em, min_score=0.72)
     assert "IT服务" in aliases
     assert "IT服务Ⅱ" in aliases["IT服务"]
-    assert "元件" not in sum(aliases.values(), [])
+    assert "光学元件" in aliases["光学光电子"]
+    assert "光学元件" not in aliases.get("元件", [])
+    assert "被动元件" not in sum(aliases.values(), []) or "元件" in aliases
+    assert "其他家电Ⅱ" in aliases["黑色家电"]
+    assert "元件" in aliases
+    assert "元件" in aliases["元件"]
     assert "元件" in meta["exact_matches"]
+    assert "休闲食品" in aliases.get("食品加工制造", []) or "休闲食品" in meta["em_only"]

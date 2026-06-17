@@ -433,18 +433,34 @@ async def zdfb_ths():
     return await call_ths_api_with_header(_ZDFB_URL)
 
 
-async def hyylb(sort_key: str = "涨跌幅", desc: bool = True):
+async def hyylb(sort_key: str = "涨跌幅", desc: bool = True, *, limit: int = 10):
     """
-    行业一览表（实时？）
-    :return:
+    行业一览表（实时行情摘要）。
+
+    ``limit`` 默认 10 供盘前/盘中榜单展示；映射维护请用 ``hyylb_all()`` 或
+    ``fetch_ths_industry_summary`` 获取全量。
     """
-    records = dataframe_to_records(ak.stock_board_industry_summary_ths())
+    records = hyylb_all()
     return sort_by_field_and_limit(
         records,
         sort_key,
-        10,
+        limit,
         desc=desc,
     )
+
+
+def hyylb_all() -> list[dict]:
+    """同花顺行业一览表全量（同步，供映射脚本 / 离线任务）。"""
+    from app.utils.industry_board_fetch import fetch_ths_industry_summary
+
+    return fetch_ths_industry_summary()
+
+
+def ths_industry_names() -> list[dict]:
+    """同花顺行业名称+代码全量。"""
+    from app.utils.industry_board_fetch import fetch_ths_industry_names
+
+    return fetch_ths_industry_names()
 
 async def cxg(symbol: str="创月新高"):
     """创新高"""

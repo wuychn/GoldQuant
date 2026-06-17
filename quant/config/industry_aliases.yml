@@ -1,15 +1,1778 @@
 # 行业名称映射（仅行业域；概念不做映射，概念与行业互不交叉）
 #
-# 编写约定（aliases 块）：
-#   键 key   → 同花顺：行业一览表 hyylb「板块」名（行业榜 canonical，评分数据侧）
-#   列表项   → 东财：jbxx「行业」或东财行业板块名（个股 enrich 侧）
+# 编写约定：
+#   catalog.ths / catalog.em — 两侧 API 全量行业清单
+#   aliases 键 → 同花顺「板块」名（评分 canonical）
+#   aliases 值 → 东财 jbxx「行业」/ 东财板块名（含同名、异名；空列表表示暂无东财对应）
+#   em_only — 东财侧暂未匹配到同花顺的条目
 #
-# 只写经 jbxx 缓存 / 东财板块列表核对过的条目，禁止凭常识猜测。
-# 示例：塑料（东财 jbxx）→ 塑料制品（同花顺）
-#
-# 刷新：python -m quant industry_aliases_draft（合并自动推断，不覆盖已有项）
+# generated_at: 2026-06-17 14:30:58
+# ths=90 em_input=496 aliases=197 em_only=300 ths_only=0
+# 刷新：python -m quant industry_aliases_draft
+catalog:
+  generated_at: 2026-06-17 14:30:58
+  ths:
+    - name: IT服务
+      code: 881271
+    - name: 专用设备
+      code: 881118
+    - name: 中药
+      code: 881141
+    - name: 互联网电商
+      code: 881177
+    - name: 保险
+      code: 881156
+    - name: 元件
+      code: 881270
+    - name: 光伏设备
+      code: 881279
+    - name: 光学光电子
+      code: 881122
+    - name: 公路铁路运输
+      code: 881149
+    - name: 其他电子
+      code: 881123
+    - name: 其他电源设备
+      code: 881282
+    - name: 其他社会服务
+      code: 881179
+    - name: 养殖业
+      code: 881102
+    - name: 军工电子
+      code: 881276
+    - name: 军工装备
+      code: 881166
+    - name: 农产品加工
+      code: 881103
+    - name: 农化制品
+      code: 881263
+    - name: 包装印刷
+      code: 881138
+    - name: 化学制品
+      code: 881109
+    - name: 化学制药
+      code: 881140
+    - name: 化学原料
+      code: 881108
+    - name: 化学纤维
+      code: 881264
+    - name: 医疗器械
+      code: 881144
+    - name: 医疗服务
+      code: 881175
+    - name: 医药商业
+      code: 881143
+    - name: 半导体
+      code: 881121
+    - name: 厨卫电器
+      code: 881174
+    - name: 塑料制品
+      code: 881265
+    - name: 多元金融
+      code: 881283
+    - name: 家居用品
+      code: 881139
+    - name: 小家电
+      code: 881173
+    - name: 小金属
+      code: 881170
+    - name: 工业金属
+      code: 881168
+    - name: 工程机械
+      code: 881268
+    - name: 建筑材料
+      code: 881115
+    - name: 建筑装饰
+      code: 881116
+    - name: 影视院线
+      code: 881274
+    - name: 房地产
+      code: 881153
+    - name: 教育
+      code: 881178
+    - name: 文化传媒
+      code: 881164
+    - name: 旅游及酒店
+      code: 881160
+    - name: 服装家纺
+      code: 881136
+    - name: 机场航运
+      code: 881151
+    - name: 橡胶制品
+      code: 881266
+    - name: 汽车整车
+      code: 881125
+    - name: 汽车服务及其他
+      code: 881128
+    - name: 汽车零部件
+      code: 881126
+    - name: 油气开采及服务
+      code: 881107
+    - name: 消费电子
+      code: 881124
+    - name: 港口航运
+      code: 881148
+    - name: 游戏
+      code: 881275
+    - name: 煤炭开采加工
+      code: 881105
+    - name: 燃气
+      code: 881146
+    - name: 物流
+      code: 881152
+    - name: 环保设备
+      code: 881284
+    - name: 环境治理
+      code: 881181
+    - name: 生物制品
+      code: 881142
+    - name: 电力
+      code: 881145
+    - name: 电子化学品
+      code: 881172
+    - name: 电机
+      code: 881277
+    - name: 电池
+      code: 881281
+    - name: 电网设备
+      code: 881278
+    - name: 白色家电
+      code: 881131
+    - name: 白酒
+      code: 881273
+    - name: 石油加工贸易
+      code: 881180
+    - name: 种植业与林业
+      code: 881101
+    - name: 纺织制造
+      code: 881135
+    - name: 综合
+      code: 881165
+    - name: 美容护理
+      code: 881182
+    - name: 能源金属
+      code: 881267
+    - name: 自动化设备
+      code: 881171
+    - name: 计算机设备
+      code: 881130
+    - name: 证券
+      code: 881157
+    - name: 贵金属
+      code: 881169
+    - name: 贸易
+      code: 881159
+    - name: 轨交设备
+      code: 881269
+    - name: 软件开发
+      code: 881272
+    - name: 通信服务
+      code: 881162
+    - name: 通信设备
+      code: 881129
+    - name: 通用设备
+      code: 881117
+    - name: 造纸
+      code: 881137
+    - name: 金属新材料
+      code: 881114
+    - name: 钢铁
+      code: 881112
+    - name: 银行
+      code: 881155
+    - name: 零售
+      code: 881158
+    - name: 非金属材料
+      code: 881167
+    - name: 风电设备
+      code: 881280
+    - name: 食品加工制造
+      code: 881134
+    - name: 饮料制造
+      code: 881133
+    - name: 黑色家电
+      code: 881132
+  em:
+    - name: IT服务Ⅱ
+      code: BK1238
+    - name: IT服务Ⅲ
+      code: BK1444
+    - name: LED
+      code: BK1333
+    - name: 一般零售
+      code: BK0482
+    - name: 专业工程
+      code: BK1248
+    - name: 专业服务
+      code: BK1043
+    - name: 专业连锁Ⅱ
+      code: BK1270
+    - name: 专业连锁Ⅲ
+      code: BK1555
+    - name: 专用设备
+      code: BK0910
+    - name: 个护小家电
+      code: BK1458
+    - name: 个护用品
+      code: BK1251
+    - name: 中药Ⅱ
+      code: BK1040
+    - name: 中药Ⅲ
+      code: BK1608
+    - name: 乘用车
+      code: BK1262
+    - name: 乳品
+      code: BK1585
+    - name: 互联网电商
+      code: BK1268
+    - name: 交通运输
+      code: BK1210
+    - name: 产业地产
+      code: BK1344
+    - name: 人力资源服务
+      code: BK1568
+    - name: 人工景区
+      code: BK1562
+    - name: 仓储物流
+      code: BK1486
+    - name: 仪器仪表
+      code: BK0458
+    - name: 休闲食品
+      code: BK1281
+    - name: 会展服务
+      code: BK1565
+    - name: 传媒
+      code: BK0486
+    - name: 住宅开发
+      code: BK1346
+    - name: 体外诊断
+      code: BK1603
+    - name: 体育Ⅱ
+      code: BK1273
+    - name: 体育Ⅲ
+      code: BK1564
+    - name: 保健品
+      code: BK1579
+    - name: 保险Ⅱ
+      code: BK0474
+    - name: 保险Ⅲ
+      code: BK1358
+    - name: 信托
+      code: BK1363
+    - name: 元件
+      code: BK0459
+    - name: 光伏主材
+      code: BK1318
+    - name: 光伏加工设备
+      code: BK1317
+    - name: 光伏发电
+      code: BK1375
+    - name: 光伏电池组件
+      code: BK1315
+    - name: 光伏设备
+      code: BK1031
+    - name: 光伏辅材
+      code: BK1316
+    - name: 光学元件
+      code: BK1334
+    - name: 光学光电子
+      code: BK1038
+    - name: 公交
+      code: BK1484
+    - name: 公用事业
+      code: BK0427
+    - name: 公路货运
+      code: BK1487
+    - name: 其他专业工程
+      code: BK1477
+    - name: 其他专业服务
+      code: BK1567
+    - name: 其他专用设备
+      code: BK1405
+    - name: 其他养殖
+      code: BK1510
+    - name: 其他农产品加工
+      code: BK1505
+    - name: 其他化学制品
+      code: BK1428
+    - name: 其他化学原料
+      code: BK1420
+    - name: 其他化学纤维
+      code: BK1415
+    - name: 其他医疗服务
+      code: BK1599
+    - name: 其他塑料制品
+      code: BK1440
+    - name: 其他家居用品
+      code: BK1540
+    - name: 其他家电Ⅱ
+      code: BK1243
+    - name: 其他家电Ⅲ
+      code: BK1456
+    - name: 其他小金属
+      code: BK1624
+    - name: 其他建材Ⅲ
+      code: BK1468
+    - name: 其他数字媒体
+      code: BK1295
+    - name: 其他橡胶制品
+      code: BK1441
+    - name: 其他汽车零部件
+      code: BK1528
+    - name: 其他生物制品
+      code: BK1596
+    - name: 其他电子Ⅱ
+      code: BK1223
+    - name: 其他电子Ⅲ
+      code: BK1336
+    - name: 其他电源设备Ⅱ
+      code: BK1034
+    - name: 其他电源设备Ⅲ
+      code: BK1322
+    - name: 其他石化
+      code: BK1570
+    - name: 其他种植业
+      code: BK1516
+    - name: 其他纺织
+      code: BK1350
+    - name: 其他能源发电
+      code: BK1378
+    - name: 其他自动化设备
+      code: BK1410
+    - name: 其他计算机设备
+      code: BK1446
+    - name: 其他运输设备
+      code: BK1522
+    - name: 其他通信设备
+      code: BK1590
+    - name: 其他通用设备
+      code: BK1398
+    - name: 其他酒类
+      code: BK1578
+    - name: 其他金属新材料
+      code: BK1619
+    - name: 其他饰品
+      code: BK1356
+    - name: 其他黑色家电
+      code: BK1454
+    - name: 养殖业
+      code: BK1259
+    - name: 军工电子Ⅱ
+      code: BK1233
+    - name: 军工电子Ⅲ
+      code: BK1386
+    - name: 农业综合Ⅱ
+      code: BK1257
+    - name: 农业综合Ⅲ
+      code: BK1506
+    - name: 农产品加工
+      code: BK1256
+    - name: 农化制品
+      code: BK0731
+    - name: 农商行Ⅲ
+      code: BK1612
+    - name: 农林牧渔
+      code: BK0433
+    - name: 农用机械
+      code: BK1404
+    - name: 农药
+      code: BK1436
+    - name: 冰洗
+      code: BK1449
+    - name: 冶钢原料
+      code: BK1228
+    - name: 冶钢辅料
+      code: BK1372
+    - name: 出版
+      code: BK1218
+    - name: 分立器件
+      code: BK1327
+    - name: 制冷空调设备
+      code: BK1400
+    - name: 动力煤
+      code: BK1493
+    - name: 动物保健Ⅱ
+      code: BK1254
+    - name: 动物保健Ⅲ
+      code: BK1501
+    - name: 包装印刷
+      code: BK1265
+    - name: 化妆品
+      code: BK1252
+    - name: 化妆品制造及其他
+      code: BK1497
+    - name: 化学制剂
+      code: BK1594
+    - name: 化学制品
+      code: BK0538
+    - name: 化学制药
+      code: BK0465
+    - name: 化学原料
+      code: BK1019
+    - name: 化学工程
+      code: BK1476
+    - name: 化学纤维
+      code: BK0471
+    - name: 医疗器械
+      code: BK1041
+    - name: 医疗服务
+      code: BK0727
+    - name: 医疗研发外包
+      code: BK1600
+    - name: 医疗美容
+      code: BK1253
+    - name: 医疗耗材
+      code: BK1604
+    - name: 医疗设备
+      code: BK1605
+    - name: 医美服务
+      code: BK1499
+    - name: 医美耗材
+      code: BK1500
+    - name: 医药商业
+      code: BK1042
+    - name: 医药流通
+      code: BK1607
+    - name: 医药生物
+      code: BK1216
+    - name: 医院
+      code: BK1601
+    - name: 半导体
+      code: BK1036
+    - name: 半导体材料
+      code: BK1325
+    - name: 半导体设备
+      code: BK1326
+    - name: 卫浴制品
+      code: BK1541
+    - name: 卫浴电器
+      code: BK1452
+    - name: 印制电路板
+      code: BK1340
+    - name: 印刷
+      code: BK1534
+    - name: 印刷包装机械
+      code: BK1406
+    - name: 印染
+      code: BK1351
+    - name: 原料药
+      code: BK1595
+    - name: 原材料供应链服务
+      code: BK1490
+    - name: 厨卫电器
+      code: BK1240
+    - name: 厨房小家电
+      code: BK1457
+    - name: 厨房电器
+      code: BK1451
+    - name: 合成树脂
+      code: BK1438
+    - name: 品牌化妆品
+      code: BK1498
+    - name: 品牌消费电子
+      code: BK1337
+    - name: 商业地产
+      code: BK1345
+    - name: 商业物业经营
+      code: BK1554
+    - name: 商用车
+      code: BK1264
+    - name: 商用载客车
+      code: BK1531
+    - name: 商用载货车
+      code: BK1530
+    - name: 商贸零售
+      code: BK1213
+    - name: 啤酒
+      code: BK1577
+    - name: 园林工程
+      code: BK1473
+    - name: 固废治理
+      code: BK1389
+    - name: 国有大型银行Ⅲ
+      code: BK1611
+    - name: 国防军工
+      code: BK1204
+    - name: 国际工程
+      code: BK1475
+    - name: 图片媒体
+      code: BK1297
+    - name: 地面兵装Ⅱ
+      code: BK1229
+    - name: 地面兵装Ⅲ
+      code: BK1382
+    - name: 垂直应用软件
+      code: BK1447
+    - name: 城商行Ⅲ
+      code: BK1609
+    - name: 培训教育
+      code: BK1557
+    - name: 基建市政工程
+      code: BK1472
+    - name: 基础化工
+      code: BK1206
+    - name: 基础建设
+      code: BK1247
+    - name: 塑料
+      code: BK0454
+    - name: 塑料包装
+      code: BK1533
+    - name: 复合肥
+      code: BK1433
+    - name: 多业态零售
+      code: BK1553
+    - name: 多元金融
+      code: BK0738
+    - name: 大众出版
+      code: BK1289
+    - name: 大宗用纸
+      code: BK1544
+    - name: 大气治理
+      code: BK1388
+    - name: 娱乐用品
+      code: BK1543
+    - name: 学历教育
+      code: BK1558
+    - name: 安防设备
+      code: BK1445
+    - name: 定制家居
+      code: BK1539
+    - name: 宠物食品
+      code: BK1507
+    - name: 家居用品
+      code: BK0440
+    - name: 家用电器
+      code: BK0456
+    - name: 家电零部件Ⅱ
+      code: BK1242
+    - name: 家电零部件Ⅲ
+      code: BK1455
+    - name: 家纺
+      code: BK1353
+    - name: 小家电
+      code: BK1244
+    - name: 小金属
+      code: BK1027
+    - name: 工业金属
+      code: BK1287
+    - name: 工控设备
+      code: BK1407
+    - name: 工程咨询服务Ⅱ
+      code: BK0726
+    - name: 工程咨询服务Ⅲ
+      code: BK1471
+    - name: 工程机械
+      code: BK0739
+    - name: 工程机械器件
+      code: BK1392
+    - name: 工程机械整机
+      code: BK1393
+    - name: 广告媒体
+      code: BK1292
+    - name: 广告营销
+      code: BK1220
+    - name: 底盘与发动机系统
+      code: BK1526
+    - name: 建筑材料
+      code: BK1208
+    - name: 建筑装饰
+      code: BK1209
+    - name: 彩电
+      code: BK1453
+    - name: 影视动漫制作
+      code: BK1299
+    - name: 影视院线
+      code: BK1222
+    - name: 快递
+      code: BK1489
+    - name: 成品家居
+      code: BK1537
+    - name: 房产租赁经纪
+      code: BK1341
+    - name: 房地产
+      code: BK1202
+    - name: 房地产开发
+      code: BK0451
+    - name: 房地产服务
+      code: BK1045
+    - name: 房地产综合服务
+      code: BK1342
+    - name: 房屋建设Ⅱ
+      code: BK1246
+    - name: 房屋建设Ⅲ
+      code: BK1470
+    - name: 摩托车
+      code: BK1521
+    - name: 摩托车及其他
+      code: BK1263
+    - name: 改性塑料
+      code: BK1437
+    - name: 教育
+      code: BK0740
+    - name: 教育出版
+      code: BK1290
+    - name: 教育运营及其他
+      code: BK1556
+    - name: 数字媒体
+      code: BK1221
+    - name: 数字芯片设计
+      code: BK1331
+    - name: 文化用品
+      code: BK1542
+    - name: 文娱用品
+      code: BK1266
+    - name: 文字媒体
+      code: BK1298
+    - name: 旅游及景区
+      code: BK1272
+    - name: 旅游综合
+      code: BK1561
+    - name: 旅游零售Ⅱ
+      code: BK1269
+    - name: 旅游零售Ⅲ
+      code: BK1549
+    - name: 无机盐
+      code: BK1422
+    - name: 普钢
+      code: BK1226
+    - name: 有机硅
+      code: BK1431
+    - name: 有色金属
+      code: BK0478
+    - name: 服装家纺
+      code: BK1225
+    - name: 期货
+      code: BK1361
+    - name: 机器人
+      code: BK1408
+    - name: 机场
+      code: BK1480
+    - name: 机床工具
+      code: BK1395
+    - name: 机械设备
+      code: BK1205
+    - name: 板材
+      code: BK1367
+    - name: 林业Ⅱ
+      code: BK1255
+    - name: 林业Ⅲ
+      code: BK1502
+    - name: 果蔬加工
+      code: BK1503
+    - name: 核力发电
+      code: BK1376
+    - name: 检测服务
+      code: BK1566
+    - name: 棉纺
+      code: BK1349
+    - name: 楼宇设备
+      code: BK1402
+    - name: 模拟芯片设计
+      code: BK1330
+    - name: 横向通用软件
+      code: BK1448
+    - name: 橡胶
+      code: BK1018
+    - name: 橡胶助剂
+      code: BK1443
+    - name: 民爆制品
+      code: BK1427
+    - name: 氟化工
+      code: BK1424
+    - name: 氨纶
+      code: BK1412
+    - name: 氮肥
+      code: BK1432
+    - name: 氯碱
+      code: BK1418
+    - name: 水产养殖
+      code: BK1514
+    - name: 水产饲料
+      code: BK1509
+    - name: 水力发电
+      code: BK1380
+    - name: 水务及水治理
+      code: BK1390
+    - name: 水泥
+      code: BK0424
+    - name: 水泥制品
+      code: BK1463
+    - name: 水泥制造
+      code: BK1464
+    - name: 汽车
+      code: BK1211
+    - name: 汽车服务
+      code: BK1016
+    - name: 汽车电子电气系统
+      code: BK1529
+    - name: 汽车经销商
+      code: BK1523
+    - name: 汽车综合服务
+      code: BK1524
+    - name: 汽车零部件
+      code: BK0481
+    - name: 油品石化贸易
+      code: BK1571
+    - name: 油服工程
+      code: BK1275
+    - name: 油气及炼化工程
+      code: BK1572
+    - name: 油气开采Ⅱ
+      code: BK1276
+    - name: 油气开采Ⅲ
+      code: BK1574
+    - name: 油田服务
+      code: BK1573
+    - name: 洗护用品
+      code: BK1496
+    - name: 海洋捕捞
+      code: BK1513
+    - name: 涂料
+      code: BK1469
+    - name: 涂料油墨
+      code: BK1430
+    - name: 消费电子
+      code: BK1037
+    - name: 消费电子零部件及组装
+      code: BK1338
+    - name: 涤纶
+      code: BK1413
+    - name: 清洁小家电
+      code: BK1459
+    - name: 渔业
+      code: BK1260
+    - name: 港口
+      code: BK1481
+    - name: 游戏Ⅱ
+      code: BK1046
+    - name: 游戏Ⅲ
+      code: BK1301
+    - name: 激光设备
+      code: BK1409
+    - name: 火力发电
+      code: BK1377
+    - name: 火电设备
+      code: BK1321
+    - name: 炭黑
+      code: BK1442
+    - name: 炼化及贸易
+      code: BK1274
+    - name: 炼油化工
+      code: BK1569
+    - name: 烘焙食品
+      code: BK1582
+    - name: 热力服务
+      code: BK1379
+    - name: 焦炭Ⅱ
+      code: BK1249
+    - name: 焦炭Ⅲ
+      code: BK1492
+    - name: 焦煤
+      code: BK1494
+    - name: 煤化工
+      code: BK1419
+    - name: 煤炭
+      code: BK0437
+    - name: 煤炭开采
+      code: BK1250
+    - name: 照明设备Ⅱ
+      code: BK1245
+    - name: 照明设备Ⅲ
+      code: BK1460
+    - name: 熟食
+      code: BK1584
+    - name: 燃料电池
+      code: BK1305
+    - name: 燃气Ⅱ
+      code: BK1028
+    - name: 燃气Ⅲ
+      code: BK1381
+    - name: 物业管理
+      code: BK1343
+    - name: 物流
+      code: BK0422
+    - name: 特种纸
+      code: BK1545
+    - name: 特钢Ⅱ
+      code: BK1227
+    - name: 特钢Ⅲ
+      code: BK1370
+    - name: 环保
+      code: BK0728
+    - name: 环保设备Ⅱ
+      code: BK1234
+    - name: 环保设备Ⅲ
+      code: BK1387
+    - name: 环境治理
+      code: BK1235
+    - name: 玻璃制造
+      code: BK1461
+    - name: 玻璃玻纤
+      code: BK0546
+    - name: 玻纤制造
+      code: BK1462
+    - name: 瓷砖地板
+      code: BK1538
+    - name: 生活用纸
+      code: BK1495
+    - name: 生物制品
+      code: BK1044
+    - name: 生猪养殖
+      code: BK1512
+    - name: 电信运营商
+      code: BK1587
+    - name: 电力
+      code: BK0428
+    - name: 电力设备
+      code: BK1200
+    - name: 电动乘用车
+      code: BK1519
+    - name: 电商服务
+      code: BK1546
+    - name: 电子
+      code: BK1201
+    - name: 电子化学品Ⅱ
+      code: BK1039
+    - name: 电子化学品Ⅲ
+      code: BK1332
+    - name: 电工仪器仪表
+      code: BK1308
+    - name: 电机Ⅱ
+      code: BK1030
+    - name: 电机Ⅲ
+      code: BK1307
+    - name: 电池
+      code: BK1033
+    - name: 电池化学品
+      code: BK1302
+    - name: 电网自动化设备
+      code: BK1309
+    - name: 电网设备
+      code: BK0457
+    - name: 电能综合服务
+      code: BK1373
+    - name: 电视广播Ⅱ
+      code: BK1219
+    - name: 电视广播Ⅲ
+      code: BK1291
+    - name: 畜禽饲料
+      code: BK1508
+    - name: 疫苗
+      code: BK1598
+    - name: 白色家电
+      code: BK1239
+    - name: 白酒Ⅱ
+      code: BK1277
+    - name: 白酒Ⅲ
+      code: BK1575
+    - name: 白银
+      code: BK1616
+    - name: 百货
+      code: BK1551
+    - name: 石油石化
+      code: BK0464
+    - name: 硅料硅片
+      code: BK1319
+    - name: 磁性材料
+      code: BK1618
+    - name: 磨具磨料
+      code: BK1397
+    - name: 磷肥及磷化工
+      code: BK1435
+    - name: 社会服务
+      code: BK1214
+    - name: 种子
+      code: BK1518
+    - name: 种植业
+      code: BK1261
+    - name: 租赁
+      code: BK1365
+    - name: 稀土
+      code: BK1626
+    - name: 空调
+      code: BK1450
+    - name: 端到端供应链服务
+      code: BK1491
+    - name: 管材
+      code: BK1466
+    - name: 粘胶
+      code: BK1416
+    - name: 粮油加工
+      code: BK1504
+    - name: 粮食种植
+      code: BK1515
+    - name: 纯碱
+      code: BK1417
+    - name: 纸包装
+      code: BK1535
+    - name: 纺织制造
+      code: BK1224
+    - name: 纺织化学制品
+      code: BK1423
+    - name: 纺织服装设备
+      code: BK1401
+    - name: 纺织服饰
+      code: BK0436
+    - name: 纺织鞋类制造
+      code: BK1347
+    - name: 线下药店
+      code: BK1606
+    - name: 线缆部件及其他
+      code: BK1312
+    - name: 综合
+      code: BK1217
+    - name: 综合Ⅱ
+      code: BK0539
+    - name: 综合Ⅲ
+      code: BK1627
+    - name: 综合乘用车
+      code: BK1520
+    - name: 综合包装
+      code: BK1536
+    - name: 综合环境治理
+      code: BK1391
+    - name: 综合电力设备商
+      code: BK1323
+    - name: 综合电商
+      code: BK1548
+    - name: 美容护理
+      code: BK1035
+    - name: 耐火材料
+      code: BK1467
+    - name: 聚氨酯
+      code: BK1426
+    - name: 肉制品
+      code: BK1580
+    - name: 肉鸡养殖
+      code: BK1511
+    - name: 股份制银行Ⅲ
+      code: BK1610
+    - name: 胶黏剂及胶带
+      code: BK1425
+    - name: 能源及重型设备
+      code: BK1403
+    - name: 能源金属
+      code: BK1015
+    - name: 膜材料
+      code: BK1439
+    - name: 自动化设备
+      code: BK1237
+    - name: 自然景区
+      code: BK1563
+    - name: 航天装备Ⅱ
+      code: BK1232
+    - name: 航天装备Ⅲ
+      code: BK1385
+    - name: 航海装备Ⅱ
+      code: BK1230
+    - name: 航海装备Ⅲ
+      code: BK1383
+    - name: 航空机场
+      code: BK0420
+    - name: 航空装备Ⅱ
+      code: BK1231
+    - name: 航空装备Ⅲ
+      code: BK1384
+    - name: 航空运输
+      code: BK1479
+    - name: 航运
+      code: BK1482
+    - name: 航运港口
+      code: BK0450
+    - name: 营销代理
+      code: BK1293
+    - name: 蓄电池及其他电池
+      code: BK1306
+    - name: 血液制品
+      code: BK1597
+    - name: 被动元件
+      code: BK1339
+    - name: 装修建材
+      code: BK0476
+    - name: 装修装饰Ⅱ
+      code: BK0725
+    - name: 装修装饰Ⅲ
+      code: BK1478
+    - name: 视频媒体
+      code: BK1296
+    - name: 计算机
+      code: BK1207
+    - name: 计算机设备
+      code: BK0735
+    - name: 证券Ⅱ
+      code: BK0473
+    - name: 证券Ⅲ
+      code: BK1366
+    - name: 诊断服务
+      code: BK1602
+    - name: 调味发酵品Ⅱ
+      code: BK1278
+    - name: 调味发酵品Ⅲ
+      code: BK1576
+    - name: 贵金属
+      code: BK0732
+    - name: 贸易Ⅱ
+      code: BK0484
+    - name: 贸易Ⅲ
+      code: BK1550
+    - name: 资产管理
+      code: BK1364
+    - name: 超市
+      code: BK1552
+    - name: 跨境物流
+      code: BK1488
+    - name: 跨境电商
+      code: BK1547
+    - name: 车身附件及饰件
+      code: BK1525
+    - name: 轨交设备Ⅱ
+      code: BK1236
+    - name: 轨交设备Ⅲ
+      code: BK1394
+    - name: 轮胎轮毂
+      code: BK1527
+    - name: 软件开发
+      code: BK0737
+    - name: 软饮料
+      code: BK1586
+    - name: 轻工制造
+      code: BK1212
+    - name: 辅料
+      code: BK1348
+    - name: 输变电设备
+      code: BK1311
+    - name: 运动服装
+      code: BK1355
+    - name: 逆变器
+      code: BK1320
+    - name: 通信
+      code: BK1215
+    - name: 通信工程及服务
+      code: BK1588
+    - name: 通信应用增值服务
+      code: BK1589
+    - name: 通信服务
+      code: BK0736
+    - name: 通信线缆及配套
+      code: BK1592
+    - name: 通信终端及配件
+      code: BK1593
+    - name: 通信网络设备及器件
+      code: BK1591
+    - name: 通信设备
+      code: BK0448
+    - name: 通用设备
+      code: BK0545
+    - name: 造纸
+      code: BK1267
+    - name: 配电设备
+      code: BK1310
+    - name: 酒店
+      code: BK1560
+    - name: 酒店餐饮
+      code: BK1271
+    - name: 金属制品
+      code: BK1396
+    - name: 金属包装
+      code: BK1532
+    - name: 金属新材料
+      code: BK1288
+    - name: 金融信息服务
+      code: BK1360
+    - name: 金融控股
+      code: BK1359
+    - name: 钛白粉
+      code: BK1421
+    - name: 钟表珠宝
+      code: BK1357
+    - name: 钢结构
+      code: BK1474
+    - name: 钢铁
+      code: BK0479
+    - name: 钢铁管材
+      code: BK1368
+    - name: 钨
+      code: BK1625
+    - name: 钴
+      code: BK1620
+    - name: 钼
+      code: BK1623
+    - name: 钾肥
+      code: BK1434
+    - name: 铁矿石
+      code: BK1371
+    - name: 铁路公路
+      code: BK0421
+    - name: 铁路运输
+      code: BK1485
+    - name: 铅锌
+      code: BK1614
+    - name: 铜
+      code: BK1615
+    - name: 铝
+      code: BK1613
+    - name: 银行
+      code: BK1283
+    - name: 银行Ⅱ
+      code: BK0475
+    - name: 锂
+      code: BK1621
+    - name: 锂电专用设备
+      code: BK1304
+    - name: 锂电池
+      code: BK1303
+    - name: 锦纶
+      code: BK1414
+    - name: 镍
+      code: BK1622
+    - name: 长材
+      code: BK1369
+    - name: 门户网站
+      code: BK1294
+    - name: 防水材料
+      code: BK1465
+    - name: 院线
+      code: BK1300
+    - name: 集成电路制造
+      code: BK1329
+    - name: 集成电路封测
+      code: BK1328
+    - name: 零食
+      code: BK1583
+    - name: 非白酒
+      code: BK1279
+    - name: 非运动服装
+      code: BK1352
+    - name: 非金属材料Ⅱ
+      code: BK1020
+    - name: 非金属材料Ⅲ
+      code: BK1411
+    - name: 非银金融
+      code: BK1203
+    - name: 面板
+      code: BK1335
+    - name: 鞋帽及其他
+      code: BK1354
+    - name: 预加工食品
+      code: BK1581
+    - name: 风力发电
+      code: BK1374
+    - name: 风电整机
+      code: BK1314
+    - name: 风电设备
+      code: BK1032
+    - name: 风电零部件
+      code: BK1313
+    - name: 食品加工
+      code: BK1280
+    - name: 食品及饲料添加剂
+      code: BK1429
+    - name: 食品饮料
+      code: BK0438
+    - name: 食用菌
+      code: BK1517
+    - name: 餐饮
+      code: BK1559
+    - name: 饮料乳品
+      code: BK1282
+    - name: 饰品
+      code: BK0734
+    - name: 饲料
+      code: BK1258
+    - name: 高速公路
+      code: BK1483
+    - name: 黄金
+      code: BK1617
+    - name: 黑色家电
+      code: BK1241
+em_only:
+  - LED
+  - 专业工程
+  - 专业服务
+  - 专业连锁Ⅱ
+  - 专业连锁Ⅲ
+  - 个护用品
+  - 乘用车
+  - 乳品
+  - 交通运输
+  - 产业地产
+  - 人力资源服务
+  - 人工景区
+  - 仪器仪表
+  - 会展服务
+  - 住宅开发
+  - 体外诊断
+  - 体育Ⅱ
+  - 体育Ⅲ
+  - 保健品
+  - 信托
+  - 光伏主材
+  - 光伏发电
+  - 光伏辅材
+  - 公交
+  - 公用事业
+  - 公路货运
+  - 其他专业工程
+  - 其他专业服务
+  - 其他养殖
+  - 其他建材Ⅲ
+  - 其他数字媒体
+  - 其他石化
+  - 其他种植业
+  - 其他纺织
+  - 其他能源发电
+  - 其他运输设备
+  - 其他酒类
+  - 其他饰品
+  - 农商行Ⅲ
+  - 农林牧渔
+  - 农用机械
+  - 农药
+  - 冰洗
+  - 冶钢原料
+  - 冶钢辅料
+  - 出版
+  - 分立器件
+  - 制冷空调设备
+  - 动力煤
+  - 动物保健Ⅱ
+  - 动物保健Ⅲ
+  - 化妆品
+  - 化妆品制造及其他
+  - 化学工程
+  - 医疗研发外包
+  - 医疗美容
+  - 医疗耗材
+  - 医疗设备
+  - 医美耗材
+  - 医药流通
+  - 医药生物
+  - 医院
+  - 卫浴制品
+  - 印制电路板
+  - 印刷包装机械
+  - 印染
+  - 原料药
+  - 原材料供应链服务
+  - 合成树脂
+  - 品牌化妆品
+  - 商业地产
+  - 商业物业经营
+  - 商用车
+  - 商用载客车
+  - 商用载货车
+  - 啤酒
+  - 园林工程
+  - 固废治理
+  - 国防军工
+  - 国际工程
+  - 图片媒体
+  - 地面兵装Ⅱ
+  - 地面兵装Ⅲ
+  - 垂直应用软件
+  - 城商行Ⅲ
+  - 基建市政工程
+  - 基础化工
+  - 基础建设
+  - 塑料包装
+  - 复合肥
+  - 大众出版
+  - 大宗用纸
+  - 大气治理
+  - 娱乐用品
+  - 安防设备
+  - 定制家居
+  - 宠物食品
+  - 家用电器
+  - 家电零部件Ⅱ
+  - 家电零部件Ⅲ
+  - 工控设备
+  - 广告媒体
+  - 广告营销
+  - 底盘与发动机系统
+  - 彩电
+  - 影视动漫制作
+  - 快递
+  - 成品家居
+  - 房产租赁经纪
+  - 房屋建设Ⅱ
+  - 房屋建设Ⅲ
+  - 摩托车
+  - 摩托车及其他
+  - 改性塑料
+  - 数字媒体
+  - 数字芯片设计
+  - 文化用品
+  - 文娱用品
+  - 文字媒体
+  - 旅游及景区
+  - 无机盐
+  - 普钢
+  - 有机硅
+  - 有色金属
+  - 期货
+  - 机器人
+  - 机床工具
+  - 机械设备
+  - 板材
+  - 果蔬加工
+  - 核力发电
+  - 检测服务
+  - 棉纺
+  - 楼宇设备
+  - 模拟芯片设计
+  - 横向通用软件
+  - 橡胶助剂
+  - 民爆制品
+  - 氟化工
+  - 氨纶
+  - 氮肥
+  - 氯碱
+  - 水产养殖
+  - 水产饲料
+  - 水力发电
+  - 水务及水治理
+  - 水泥
+  - 水泥制品
+  - 水泥制造
+  - 汽车
+  - 汽车电子电气系统
+  - 汽车经销商
+  - 油服工程
+  - 油气及炼化工程
+  - 油田服务
+  - 洗护用品
+  - 海洋捕捞
+  - 涂料
+  - 涂料油墨
+  - 涤纶
+  - 渔业
+  - 火力发电
+  - 炭黑
+  - 炼油化工
+  - 烘焙食品
+  - 热力服务
+  - 焦炭Ⅱ
+  - 焦炭Ⅲ
+  - 焦煤
+  - 煤化工
+  - 照明设备Ⅱ
+  - 照明设备Ⅲ
+  - 熟食
+  - 物业管理
+  - 特种纸
+  - 特钢Ⅱ
+  - 特钢Ⅲ
+  - 玻璃制造
+  - 玻纤制造
+  - 瓷砖地板
+  - 生活用纸
+  - 生猪养殖
+  - 电信运营商
+  - 电动乘用车
+  - 电商服务
+  - 电子
+  - 电工仪器仪表
+  - 电视广播Ⅱ
+  - 电视广播Ⅲ
+  - 畜禽饲料
+  - 疫苗
+  - 白银
+  - 百货
+  - 石油石化
+  - 硅料硅片
+  - 磁性材料
+  - 磨具磨料
+  - 磷肥及磷化工
+  - 种子
+  - 租赁
+  - 稀土
+  - 空调
+  - 端到端供应链服务
+  - 管材
+  - 粘胶
+  - 粮油加工
+  - 粮食种植
+  - 纯碱
+  - 纸包装
+  - 纺织服装设备
+  - 纺织服饰
+  - 线下药店
+  - 线缆部件及其他
+  - 耐火材料
+  - 聚氨酯
+  - 肉制品
+  - 肉鸡养殖
+  - 胶黏剂及胶带
+  - 能源及重型设备
+  - 膜材料
+  - 自然景区
+  - 航天装备Ⅱ
+  - 航天装备Ⅲ
+  - 航海装备Ⅱ
+  - 航海装备Ⅲ
+  - 航空机场
+  - 航空装备Ⅱ
+  - 航空装备Ⅲ
+  - 航空运输
+  - 航运
+  - 航运港口
+  - 营销代理
+  - 血液制品
+  - 装修建材
+  - 装修装饰Ⅱ
+  - 装修装饰Ⅲ
+  - 视频媒体
+  - 计算机
+  - 诊断服务
+  - 调味发酵品Ⅱ
+  - 调味发酵品Ⅲ
+  - 资产管理
+  - 超市
+  - 跨境电商
+  - 车身附件及饰件
+  - 轮胎轮毂
+  - 软饮料
+  - 轻工制造
+  - 辅料
+  - 输变电设备
+  - 运动服装
+  - 逆变器
+  - 通信
+  - 通信应用增值服务
+  - 通信线缆及配套
+  - 通信终端及配件
+  - 通信网络设备及器件
+  - 酒店餐饮
+  - 金属制品
+  - 金属包装
+  - 金融信息服务
+  - 金融控股
+  - 钛白粉
+  - 钟表珠宝
+  - 钢结构
+  - 钨
+  - 钴
+  - 钼
+  - 钾肥
+  - 铁矿石
+  - 铁路公路
+  - 铅锌
+  - 铜
+  - 铝
+  - 锂
+  - 锦纶
+  - 镍
+  - 长材
+  - 门户网站
+  - 防水材料
+  - 集成电路制造
+  - 集成电路封测
+  - 零食
+  - 非运动服装
+  - 非银金融
+  - 面板
+  - 鞋帽及其他
+  - 预加工食品
+  - 风力发电
+  - 风电整机
+  - 风电零部件
+  - 食品及饲料添加剂
+  - 食品饮料
+  - 食用菌
+  - 餐饮
+  - 饮料乳品
+  - 饰品
+  - 饲料
+  - 高速公路
+  - 黄金
 aliases:
+  IT服务: # 同花顺
+    - IT服务Ⅱ # 东财
+    - IT服务Ⅲ # 东财
+  专用设备: # 同花顺
+    - 专用设备 # 同名
+    - 其他专用设备 # 东财
+    - 激光设备 # 东财
+    - 锂电专用设备 # 东财
+  中药: # 同花顺
+    - 中药Ⅱ # 东财
+    - 中药Ⅲ # 东财
+  互联网电商: # 同花顺
+    - 互联网电商 # 同名
+    - 综合电商 # 东财
+  保险: # 同花顺
+    - 保险Ⅱ # 东财
+    - 保险Ⅲ # 东财
   元件: # 同花顺
-    - 元件 # 东财 jbxx
-  电子化学品:
-    - 电子化学品Ⅱ
+    - 元件 # 同名
+    - 被动元件 # 东财
+  光伏设备: # 同花顺
+    - 光伏加工设备 # 东财
+    - 光伏电池组件 # 东财
+    - 光伏设备 # 同名
+  光学光电子: # 同花顺
+    - 光学元件 # 东财
+    - 光学光电子 # 同名
+  公路铁路运输: # 同花顺
+    - 铁路运输 # 东财
+  其他电子: # 同花顺
+    - 其他电子Ⅱ # 东财
+    - 其他电子Ⅲ # 东财
+  其他电源设备: # 同花顺
+    - 其他电源设备Ⅱ # 东财
+    - 其他电源设备Ⅲ # 东财
+    - 火电设备 # 东财
+  其他社会服务: # 同花顺
+    - 工程咨询服务 # 东财
+    - 工程咨询服务Ⅱ # 东财
+    - 工程咨询服务Ⅲ # 东财
+    - 社会服务 # 东财
+  养殖业: # 同花顺
+    - 养殖业 # 同名
+  军工电子: # 同花顺
+    - 军工电子Ⅱ # 东财
+    - 军工电子Ⅲ # 东财
+  军工装备: # 同花顺
+    []
+  农产品加工: # 同花顺
+    - 其他农产品加工 # 东财
+    - 农产品加工 # 同名
+  农化制品: # 同花顺
+    - 农化制品 # 同名
+  包装印刷: # 同花顺
+    - 包装印刷 # 同名
+    - 印刷 # 东财
+    - 综合包装 # 东财
+  化学制品: # 同花顺
+    - 其他化学制品 # 东财
+    - 化学制品 # 同名
+    - 纺织化学制品 # 东财
+  化学制药: # 同花顺
+    - 化学制剂 # 东财
+    - 化学制药 # 同名
+  化学原料: # 同花顺
+    - 其他化学原料 # 东财
+    - 化学原料 # 同名
+  化学纤维: # 同花顺
+    - 其他化学纤维 # 东财
+    - 化学纤维 # 同名
+  医疗器械: # 同花顺
+    - 医疗器械 # 同名
+  医疗服务: # 同花顺
+    - 其他医疗服务 # 东财
+    - 医疗服务 # 同名
+    - 医美服务 # 东财
+  医药商业: # 同花顺
+    - 医药商业 # 同名
+  半导体: # 同花顺
+    - 半导体 # 同名
+    - 半导体材料 # 东财
+    - 半导体设备 # 东财
+  厨卫电器: # 同花顺
+    - 卫浴电器 # 东财
+    - 厨卫电器 # 同名
+    - 厨房电器 # 东财
+  塑料制品: # 同花顺
+    - 其他塑料制品 # 东财
+    - 塑料 # 东财
+  多元金融: # 同花顺
+    - 多元金融 # 同名
+  家居用品: # 同花顺
+    - 其他家居用品 # 东财
+    - 家居用品 # 同名
+  小家电: # 同花顺
+    - 个护小家电 # 东财
+    - 厨房小家电 # 东财
+    - 小家电 # 同名
+    - 清洁小家电 # 东财
+  小金属: # 同花顺
+    - 其他小金属 # 东财
+    - 小金属 # 同名
+  工业金属: # 同花顺
+    - 工业金属 # 同名
+  工程机械: # 同花顺
+    - 工程机械 # 同名
+    - 工程机械器件 # 东财
+    - 工程机械整机 # 东财
+  建筑材料: # 同花顺
+    - 建筑材料 # 同名
+  建筑装饰: # 同花顺
+    - 建筑装饰 # 同名
+  影视院线: # 同花顺
+    - 影视院线 # 同名
+    - 院线 # 东财
+  房地产: # 同花顺
+    - 房地产 # 同名
+    - 房地产开发 # 东财
+    - 房地产服务 # 东财
+    - 房地产综合服务 # 东财
+  教育: # 同花顺
+    - 培训教育 # 东财
+    - 学历教育 # 东财
+    - 教育 # 同名
+    - 教育出版 # 东财
+    - 教育运营及其他 # 东财
+  文化传媒: # 同花顺
+    - 传媒 # 东财
+  旅游及酒店: # 同花顺
+    - 旅游综合 # 东财
+    - 酒店 # 东财
+  服装家纺: # 同花顺
+    - 家纺 # 东财
+    - 服装家纺 # 同名
+  机场航运: # 同花顺
+    - 机场 # 东财
+  橡胶制品: # 同花顺
+    - 其他橡胶制品 # 东财
+    - 橡胶 # 东财
+  汽车整车: # 同花顺
+    - 综合乘用车 # 东财
+  汽车服务及其他: # 同花顺
+    - 汽车服务 # 东财
+    - 汽车综合服务 # 东财
+  汽车零部件: # 同花顺
+    - 其他汽车零部件 # 东财
+    - 汽车零部件 # 同名
+  油气开采及服务: # 同花顺
+    - 油气开采Ⅱ # 东财
+    - 油气开采Ⅲ # 东财
+  消费电子: # 同花顺
+    - 品牌消费电子 # 东财
+    - 消费电子 # 同名
+    - 消费电子零部件及组装 # 东财
+  港口航运: # 同花顺
+    - 港口 # 东财
+  游戏: # 同花顺
+    - 游戏Ⅱ # 东财
+    - 游戏Ⅲ # 东财
+  煤炭开采加工: # 同花顺
+    - 煤炭 # 东财
+    - 煤炭开采 # 东财
+  燃气: # 同花顺
+    - 燃气Ⅱ # 东财
+    - 燃气Ⅲ # 东财
+  物流: # 同花顺
+    - 仓储物流 # 东财
+    - 物流 # 同名
+    - 跨境物流 # 东财
+  环保设备: # 同花顺
+    - 环保设备Ⅱ # 东财
+    - 环保设备Ⅲ # 东财
+  环境治理: # 同花顺
+    - 环保 # 东财
+    - 环境治理 # 同名
+    - 综合环境治理 # 东财
+  生物制品: # 同花顺
+    - 其他生物制品 # 东财
+    - 生物制品 # 同名
+  电力: # 同花顺
+    - 电力 # 同名
+    - 电能综合服务 # 东财
+  电子化学品: # 同花顺
+    - 电子化学品Ⅱ # 东财
+    - 电子化学品Ⅲ # 东财
+  电机: # 同花顺
+    - 电机Ⅱ # 东财
+    - 电机Ⅲ # 东财
+  电池: # 同花顺
+    - 燃料电池 # 东财
+    - 电池 # 同名
+    - 电池化学品 # 东财
+    - 蓄电池及其他电池 # 东财
+    - 锂电池 # 东财
+  电网设备: # 同花顺
+    - 电力设备 # 东财
+    - 电网设备 # 同名
+    - 综合电力设备商 # 东财
+    - 配电设备 # 东财
+  白色家电: # 同花顺
+    - 白色家电 # 同名
+  白酒: # 同花顺
+    - 白酒Ⅱ # 东财
+    - 白酒Ⅲ # 东财
+  石油加工贸易: # 同花顺
+    []
+  种植业与林业: # 同花顺
+    - 农业综合Ⅱ # 东财
+    - 农业综合Ⅲ # 东财
+    - 林业Ⅱ # 东财
+    - 林业Ⅲ # 东财
+    - 种植业 # 东财
+  纺织制造: # 同花顺
+    - 纺织制造 # 同名
+    - 纺织鞋类制造 # 东财
+  综合: # 同花顺
+    - 综合 # 同名
+    - 综合Ⅱ # 东财
+    - 综合Ⅲ # 东财
+  美容护理: # 同花顺
+    - 美容护理 # 同名
+  能源金属: # 同花顺
+    - 能源金属 # 同名
+  自动化设备: # 同花顺
+    - 其他自动化设备 # 东财
+    - 电网自动化设备 # 东财
+    - 自动化设备 # 同名
+  计算机设备: # 同花顺
+    - 其他计算机设备 # 东财
+    - 计算机设备 # 同名
+  证券: # 同花顺
+    - 证券Ⅱ # 东财
+    - 证券Ⅲ # 东财
+  贵金属: # 同花顺
+    - 贵金属 # 同名
+  贸易: # 同花顺
+    - 油品石化贸易 # 东财
+    - 炼化及贸易 # 东财
+    - 贸易Ⅱ # 东财
+    - 贸易Ⅲ # 东财
+  轨交设备: # 同花顺
+    - 轨交设备Ⅱ # 东财
+    - 轨交设备Ⅲ # 东财
+  软件开发: # 同花顺
+    - 软件开发 # 同名
+  通信服务: # 同花顺
+    - 通信工程及服务 # 东财
+    - 通信服务 # 同名
+  通信设备: # 同花顺
+    - 其他通信设备 # 东财
+    - 通信设备 # 同名
+  通用设备: # 同花顺
+    - 其他通用设备 # 东财
+    - 通用设备 # 同名
+  造纸: # 同花顺
+    - 造纸 # 同名
+  金属新材料: # 同花顺
+    - 其他金属新材料 # 东财
+    - 金属新材料 # 同名
+  钢铁: # 同花顺
+    - 钢铁 # 同名
+    - 钢铁管材 # 东财
+  银行: # 同花顺
+    - 国有大型银行Ⅲ # 东财
+    - 股份制银行Ⅲ # 东财
+    - 银行 # 同名
+    - 银行Ⅱ # 东财
+  零售: # 同花顺
+    - 一般零售 # 东财
+    - 商贸零售 # 东财
+    - 多业态零售 # 东财
+    - 旅游零售Ⅱ # 东财
+    - 旅游零售Ⅲ # 东财
+  非金属材料: # 同花顺
+    - 玻璃玻纤 # 东财
+    - 非金属材料Ⅱ # 东财
+    - 非金属材料Ⅲ # 东财
+  风电设备: # 同花顺
+    - 风电设备 # 同名
+  食品加工制造: # 同花顺
+    - 休闲食品 # 东财
+    - 食品加工 # 东财
+  饮料制造: # 同花顺
+    - 非白酒 # 东财
+  黑色家电: # 同花顺
+    - 其他家电Ⅱ # 东财
+    - 其他家电Ⅲ # 东财
+    - 其他黑色家电 # 东财
+    - 黑色家电 # 同名

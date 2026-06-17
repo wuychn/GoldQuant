@@ -1,8 +1,9 @@
 """行业映射：东财 jbxx「行业」→ 同花顺 hyylb「板块」。
 
 映射文件 quant/config/industry_aliases.yml 约定：
-  - 键（aliases 下的 key）→ 同花顺行业榜「板块」名
-  - 列表项 → 东财 jbxx「行业」/ 东财行业板块名
+  - catalog — 两侧 API 全量行业清单（维护用，评分不读）
+  - em_only — 东财暂未匹配同花顺的条目（维护用）
+  - aliases — 键为同花顺板块名，值为东财别名列表（评分用）
 """
 
 from __future__ import annotations

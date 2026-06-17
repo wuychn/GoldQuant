@@ -143,8 +143,10 @@ def cmfb(symbol):
     return dataframe_to_records(ak.stock_cyq_em(symbol=str(symbol), adjust=""))[-5:]
 
 def hy():
-    """东方财富行业"""
-    return dataframe_to_records(ak.stock_board_industry_name_em())
+    """东方财富行业板块全量（直连 push2 API）。"""
+    from app.utils.industry_board_fetch import fetch_em_industry_board
+
+    return fetch_em_industry_board()
 
 def hist(symbol, period='daily', *, start_date=None, end_date=None):
     """

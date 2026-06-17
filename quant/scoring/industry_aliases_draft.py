@@ -1,4 +1,8 @@
-"""自动生成东财 jbxx「行业」→ 同花顺「板块」映射，写回包内配置文件。
+"""自动生成东财 ↔ 同花顺行业映射，写回包内配置文件。
+
+数据源（直连 API，全量）：
+  - 东财：app.utils.dfcf_util.hy / industry_board_fetch.fetch_em_industry_board
+  - 同花顺：app.utils.ths_util.hyylb_all / ths_industry_names
 
 输出：quant/config/industry_aliases.yml
 元数据：~/.quant/cache/industry_aliases_draft_meta.json
@@ -16,7 +20,14 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
-from app.utils.dataframe import dataframe_to_records
+from app.utils.dfcf_util import hy as fetch_em_hy
+from app.utils.ths_util import hyylb_all, ths_industry_names
+from quant.scoring.industry_alias_rules import (
+    MANUAL_HINTS,
+    apply_alias_corrections,
+    recompute_em_only,
+    substring_match_allowed,
+)
 from quant.scoring.industry_aliases import package_industry_aliases_path, reload_industry_aliases_cache
 from quant.store.paths import ensure_layout, quant_cache_file
 from quant.timeutil import cn_datetime_str
@@ -26,14 +37,6 @@ logger = logging.getLogger(__name__)
 _META_NAME = "industry_aliases_draft_meta.json"
 _ROMAN_SUFFIX = re.compile(r"[ⅡⅢⅣIV]+$")
 _STRIP_SUFFIXES = ("行业", "板块")
-
-# jbxx 缓存与同花顺板块核对后仍无法自动匹配的兜底（勿凭常识乱填）
-_MANUAL_HINTS: dict[str, str] = {
-    "休闲食品": "食品加工制造",
-    "玻璃玻纤": "非金属材料",
-    "工程咨询服务Ⅱ": "其他社会服务",
-    "工程咨询服务": "其他社会服务",
-}
 
 
 def normalize_industry_name(name: str) -> str:
@@ -46,35 +49,38 @@ def normalize_industry_name(name: str) -> str:
 
 
 def fetch_ths_industry_names(*, retries: int = 3) -> list[str]:
-    import akshare as ak
-
+    """同花顺行业「板块」名全量（一览表优先，名称表兜底）。"""
     last_err: Exception | None = None
     for i in range(max(1, retries)):
         try:
-            rows = dataframe_to_records(ak.stock_board_industry_summary_ths())
+            summary = hyylb_all()
             names = sorted(
-                {
-                    str(r.get("板块", "")).strip()
-                    for r in rows
-                    if str(r.get("板块", "")).strip()
-                }
+                {str(r.get("板块", "")).strip() for r in summary if str(r.get("板块", "")).strip()}
             )
             if names:
                 return names
         except Exception as exc:
             last_err = exc
-            logger.warning("拉取同花顺行业榜失败 retry=%d err=%s", i + 1, exc)
+            logger.warning("拉取同花顺行业一览 retry=%d err=%s", i + 1, exc)
             time.sleep(2)
-    raise RuntimeError("无法拉取同花顺行业一览表") from last_err
+    for i in range(max(1, retries)):
+        try:
+            rows = ths_industry_names()
+            names = sorted({str(r.get("name", "")).strip() for r in rows if str(r.get("name", "")).strip()})
+            if names:
+                return names
+        except Exception as exc:
+            last_err = exc
+            logger.warning("拉取同花顺行业名称 retry=%d err=%s", i + 1, exc)
+            time.sleep(2)
+    raise RuntimeError("无法拉取同花顺行业列表") from last_err
 
 
 def fetch_em_board_names(*, retries: int = 3) -> list[str]:
-    import akshare as ak
-
     last_err: Exception | None = None
     for i in range(max(1, retries)):
         try:
-            rows = dataframe_to_records(ak.stock_board_industry_name_em())
+            rows = fetch_em_hy()
             names = sorted(
                 {
                     str(r.get("板块名称", "")).strip()
@@ -86,7 +92,7 @@ def fetch_em_board_names(*, retries: int = 3) -> list[str]:
                 return names
         except Exception as exc:
             last_err = exc
-            logger.warning("拉取东财行业板块列表失败 retry=%d err=%s", i + 1, exc)
+            logger.warning("拉取东财行业板块 retry=%d err=%s", i + 1, exc)
             time.sleep(2)
     logger.warning("东财行业板块列表不可用，将仅使用 jbxx 缓存等行业名")
     return []
@@ -129,7 +135,12 @@ def propose_ths_match(
     if not em:
         return None, "empty", 0.0
     if em in ths_set:
-        return None, "exact", 1.0
+        return em, "exact", 1.0
+
+    if em in MANUAL_HINTS:
+        hint = MANUAL_HINTS[em]
+        if hint in ths_set:
+            return hint, "manual_hint", 0.99
 
     norm = normalize_industry_name(em)
     if norm in ths_set:
@@ -140,8 +151,11 @@ def propose_ths_match(
         ths_norm = normalize_industry_name(ths)
         if len(ths) < 2:
             continue
-        if ths in em or em in ths or ths_norm in norm or norm in ths_norm:
-            substring_hits.append(ths)
+        if not (ths in em or em in ths or ths_norm in norm or norm in ths_norm):
+            continue
+        if not substring_match_allowed(em, ths):
+            continue
+        substring_hits.append(ths)
     if len(substring_hits) == 1:
         return substring_hits[0], "substring", 0.88
     if len(substring_hits) > 1:
@@ -168,39 +182,45 @@ def build_alias_draft(
     *,
     min_score: float = 0.72,
 ) -> tuple[dict[str, list[str]], dict[str, Any]]:
+    """构建完整映射：每个同花顺行业为键（含同名、空映射）；另附 em_only。"""
     ths_set = set(ths_names)
-    ths_to_em: dict[str, list[str]] = {}
+    ths_to_em: dict[str, list[str]] = {ths: [] for ths in ths_names}
     mapping_detail: list[dict[str, Any]] = []
-    unmapped: list[str] = []
+    em_only: list[str] = []
     exact_matches: list[str] = []
 
     for em in sorted(set(em_names)):
         ths, method, score = propose_ths_match(em, ths_names, ths_set)
-        if ths is None and em in _MANUAL_HINTS:
-            hint = _MANUAL_HINTS[em]
+        if ths is None and em in MANUAL_HINTS:
+            hint = MANUAL_HINTS[em]
             if hint in ths_set and em != hint:
                 ths, method, score = hint, "manual_hint", 0.99
+
+        if ths and not substring_match_allowed(em, ths) and method not in ("manual_hint", "exact"):
+            ths, method, score = None, "blocked", 0.0
+
         if method == "exact":
             exact_matches.append(em)
+            bucket = ths_to_em.setdefault(em, [])
+            if em not in bucket:
+                bucket.append(em)
+            mapping_detail.append({"em": em, "ths": em, "method": method, "score": 1.0})
             continue
+
         if ths is None or score < min_score:
-            unmapped.append(em)
-            mapping_detail.append(
-                {"em": em, "ths": None, "method": method, "score": round(score, 3)}
-            )
+            em_only.append(em)
+            mapping_detail.append({"em": em, "ths": None, "method": method, "score": round(score, 3)})
             continue
-        if em == ths:
-            exact_matches.append(em)
-            continue
+
         ths_to_em.setdefault(ths, [])
         if em not in ths_to_em[ths]:
             ths_to_em[ths].append(em)
-        mapping_detail.append(
-            {"em": em, "ths": ths, "method": method, "score": round(score, 3)}
-        )
+        mapping_detail.append({"em": em, "ths": ths, "method": method, "score": round(score, 3)})
 
     for ths in ths_to_em:
         ths_to_em[ths].sort()
+
+    ths_only = sorted(t for t in ths_names if not ths_to_em.get(t) and t not in set(em_names))
 
     meta = {
         "generated_at": cn_datetime_str(),
@@ -209,59 +229,17 @@ def build_alias_draft(
         "alias_groups": len(ths_to_em),
         "alias_entries": sum(len(v) for v in ths_to_em.values()),
         "exact_matches": sorted(exact_matches),
-        "unmapped_em": sorted(unmapped),
+        "em_only": sorted(em_only),
+        "ths_only": ths_only,
+        "unmapped_em": sorted(em_only),
         "mappings": mapping_detail,
     }
     return ths_to_em, meta
 
 
-def _yaml_dump_aliases(aliases: dict[str, list[str]], meta: dict[str, Any]) -> str:
-    lines = [
-        "# 行业名称映射（仅行业域；概念不做映射，概念与行业互不交叉）",
-        "#",
-        "# 编写约定（aliases 块）：",
-        "#   键 key   → 同花顺：行业一览表 hyylb「板块」名（行业榜 canonical，评分数据侧）",
-        "#   列表项   → 东财：jbxx「行业」或东财行业板块名（个股 enrich 侧）",
-        "#",
-        f"# generated_at: {meta.get('generated_at', '')}",
-        f"# ths={meta.get('ths_count', 0)} em_input={meta.get('em_input_count', 0)} "
-        f"aliases={meta.get('alias_entries', 0)} unmapped={len(meta.get('unmapped_em') or [])}",
-        "# 刷新：python -m quant industry_aliases_draft",
-        "aliases:",
-    ]
-    if not aliases:
-        pass
-    else:
-        for ths in sorted(aliases):
-            lines.append(f"  {ths}: # 同花顺")
-            for em in aliases[ths]:
-                lines.append(f"    - {em} # 东财")
-    return "\n".join(lines) + "\n"
-
-
-def generate_industry_aliases_draft(*, min_score: float = 0.72) -> Path:
-    ensure_layout()
-    ths_names = fetch_ths_industry_names()
-    em_board = fetch_em_board_names()
-    jbxx_names = load_jbxx_industry_names()
-    em_names = sorted(set(em_board) | set(jbxx_names))
-
-    aliases, meta = build_alias_draft(ths_names, em_names, min_score=min_score)
-
-    meta["sources"] = {
-        "ths": len(ths_names),
-        "em_board": len(em_board),
-        "jbxx_cache": len(jbxx_names),
-    }
-
-    out_path = package_industry_aliases_path()
-    existing_raw = {}
-    if out_path.is_file():
-        from quant.scoring.industry_aliases import _load_yaml
-
-        existing_raw = _load_yaml(out_path)
+def _merge_alias_blocks(*blocks: dict[str, Any]) -> dict[str, list[str]]:
     merged: dict[str, list[str]] = {}
-    for block in (existing_raw.get("aliases") or {}, aliases):
+    for block in blocks:
         if not isinstance(block, dict):
             continue
         for ths, ems in block.items():
@@ -276,16 +254,201 @@ def generate_industry_aliases_draft(*, min_score: float = 0.72) -> Path:
                         bucket.append(name)
     for key in merged:
         merged[key].sort()
-    aliases = merged
-    meta["alias_entries"] = sum(len(v) for v in aliases.values())
-    meta["alias_groups"] = len(aliases)
+    return merged
+
+
+def _yaml_quote(s: str) -> str:
+    if not s:
+        return '""'
+    if any(c in s for c in ":{}[]#&*!|>'\"%@`"):
+        return json.dumps(s, ensure_ascii=False)
+    return s
+
+
+def _yaml_dump_full(
+    aliases: dict[str, list[str]],
+    meta: dict[str, Any],
+    catalog: dict[str, Any],
+    em_only: list[str],
+) -> str:
+    lines = [
+        "# 行业名称映射（仅行业域；概念不做映射，概念与行业互不交叉）",
+        "#",
+        "# 编写约定：",
+        "#   catalog.ths / catalog.em — 两侧 API 全量行业清单",
+        "#   aliases 键 → 同花顺「板块」名（评分 canonical）",
+        "#   aliases 值 → 东财 jbxx「行业」/ 东财板块名（含同名、异名；空列表表示暂无东财对应）",
+        "#   em_only — 东财侧暂未匹配到同花顺的条目",
+        "#",
+        f"# generated_at: {meta.get('generated_at', '')}",
+        f"# ths={meta.get('ths_count', 0)} em_input={meta.get('em_input_count', 0)} "
+        f"aliases={meta.get('alias_entries', 0)} em_only={len(em_only)} ths_only={len(meta.get('ths_only') or [])}",
+        "# 刷新：python -m quant industry_aliases_draft",
+        "catalog:",
+        f"  generated_at: {meta.get('generated_at', '')}",
+        "  ths:",
+    ]
+    for row in catalog.get("ths") or []:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name", "")).strip()
+        code = str(row.get("code", "")).strip()
+        if not name:
+            continue
+        if code:
+            lines.append(f"    - name: {_yaml_quote(name)}")
+            lines.append(f"      code: {_yaml_quote(code)}")
+        else:
+            lines.append(f"    - name: {_yaml_quote(name)}")
+    lines.append("  em:")
+    for row in catalog.get("em") or []:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name", "")).strip()
+        code = str(row.get("code", "")).strip()
+        if not name:
+            continue
+        if code:
+            lines.append(f"    - name: {_yaml_quote(name)}")
+            lines.append(f"      code: {_yaml_quote(code)}")
+        else:
+            lines.append(f"    - name: {_yaml_quote(name)}")
+    lines.append("em_only:")
+    if em_only:
+        for name in em_only:
+            lines.append(f"  - {_yaml_quote(name)}")
+    else:
+        lines.append("  []")
+    lines.append("aliases:")
+    for ths in sorted(aliases):
+        lines.append(f"  {_yaml_quote(ths)}: # 同花顺")
+        items = aliases[ths]
+        if not items:
+            lines.append("    []")
+            continue
+        for em in items:
+            tag = "同名" if em == ths else "东财"
+            lines.append(f"    - {_yaml_quote(em)} # {tag}")
+    return "\n".join(lines) + "\n"
+
+
+def _build_catalog(ths_summary: list[dict], ths_name_rows: list[dict], em_rows: list[dict]) -> dict[str, Any]:
+    code_by_name: dict[str, str] = {}
+    for row in ths_name_rows:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name", "")).strip()
+        code = str(row.get("code", "")).strip()
+        if name and code:
+            code_by_name[name] = code
+
+    ths_catalog: list[dict[str, str]] = []
+    seen_ths: set[str] = set()
+    for row in ths_summary:
+        name = str(row.get("板块", "")).strip()
+        if not name or name in seen_ths:
+            continue
+        seen_ths.add(name)
+        ths_catalog.append({"name": name, "code": code_by_name.get(name, "")})
+    for row in ths_name_rows:
+        name = str(row.get("name", "")).strip()
+        if not name or name in seen_ths:
+            continue
+        seen_ths.add(name)
+        ths_catalog.append({"name": name, "code": str(row.get("code", "")).strip()})
+    ths_catalog.sort(key=lambda x: x["name"])
+
+    em_catalog: list[dict[str, str]] = []
+    seen_em: set[str] = set()
+    for row in em_rows:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("板块名称", "")).strip()
+        code = str(row.get("板块代码", "")).strip()
+        if not name or name in seen_em:
+            continue
+        seen_em.add(name)
+        em_catalog.append({"name": name, "code": code})
+    em_catalog.sort(key=lambda x: x["name"])
+
+    return {"ths": ths_catalog, "em": em_catalog}
+
+
+def generate_industry_aliases_draft(*, min_score: float = 0.72) -> Path:
+    ensure_layout()
+    ths_summary = hyylb_all()
+    ths_name_rows = ths_industry_names()
+    em_rows = fetch_em_hy()
+
+    ths_names = fetch_ths_industry_names()
+    em_board = [str(r.get("板块名称", "")).strip() for r in em_rows if str(r.get("板块名称", "")).strip()]
+    jbxx_names = load_jbxx_industry_names()
+    em_names = sorted(set(em_board) | set(jbxx_names))
+
+    aliases, meta = build_alias_draft(ths_names, em_names, min_score=min_score)
+    catalog = _build_catalog(ths_summary, ths_name_rows, em_rows)
+
+    meta["sources"] = {
+        "ths_summary": len(ths_summary),
+        "ths_names": len(ths_name_rows),
+        "em_board": len(em_board),
+        "jbxx_cache": len(jbxx_names),
+    }
+
+    out_path = package_industry_aliases_path()
+    existing_raw = {}
+    if out_path.is_file():
+        from quant.scoring.industry_aliases import _load_yaml
+
+        existing_raw = _load_yaml(out_path)
+
+    merged = _merge_alias_blocks(existing_raw.get("aliases") or {}, aliases)
+    for ths in ths_names:
+        merged.setdefault(ths, [])
+    apply_alias_corrections(merged)
+
+    em_catalog_names = [str(r.get("name", "")).strip() for r in catalog.get("em") or []]
+    em_only = recompute_em_only(merged, em_catalog_names)
+
+    meta["alias_entries"] = sum(len(v) for v in merged.values())
+    meta["alias_groups"] = len(merged)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(_yaml_dump_aliases(aliases, meta), encoding="utf-8")
+    out_path.write_text(
+        _yaml_dump_full(merged, meta, catalog, em_only),
+        encoding="utf-8",
+    )
 
     meta_path = quant_cache_file(_META_NAME)
     meta_path.parent.mkdir(parents=True, exist_ok=True)
     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    reload_industry_aliases_cache()
+    return out_path
+
+
+def repair_industry_aliases_file() -> Path:
+    """仅对现有 industry_aliases.yml 应用人工规则，不重拉 API。"""
+    from quant.scoring.industry_aliases import _load_yaml
+
+    out_path = package_industry_aliases_path()
+    raw = _load_yaml(out_path)
+    aliases = raw.get("aliases") or {}
+    if not isinstance(aliases, dict):
+        aliases = {}
+    merged = {str(k): list(v) if isinstance(v, list) else [] for k, v in aliases.items()}
+    apply_alias_corrections(merged)
+    catalog = raw.get("catalog") or {}
+    em_catalog_names = [str(r.get("name", "")).strip() for r in catalog.get("em") or [] if isinstance(r, dict)]
+    em_only = recompute_em_only(merged, em_catalog_names)
+    meta = {
+        "generated_at": cn_datetime_str(),
+        "ths_count": len(catalog.get("ths") or []),
+        "em_input_count": len(em_catalog_names),
+        "alias_entries": sum(len(v) for v in merged.values()),
+        "alias_groups": len(merged),
+        "repaired": True,
+    }
+    out_path.write_text(_yaml_dump_full(merged, meta, catalog, em_only), encoding="utf-8")
     reload_industry_aliases_cache()
     return out_path
 
@@ -297,11 +460,12 @@ def main() -> None:
     print(f"行业映射已写入: {path}")
     print(
         f"同花顺 {meta['ths_count']} | 东财输入 {meta['em_input_count']} | "
-        f"映射 {meta['alias_entries']} | 未匹配 {len(meta.get('unmapped_em') or [])}"
+        f"映射项 {meta['alias_entries']} | em_only {len(meta.get('em_only') or [])} | "
+        f"ths_only {len(meta.get('ths_only') or [])}"
     )
-    unmapped = meta.get("unmapped_em") or []
-    if unmapped:
-        print("未匹配（需人工确认）:", "、".join(unmapped[:20]))
+    em_only = meta.get("em_only") or []
+    if em_only:
+        print("东财未匹配（需人工确认）:", "、".join(em_only[:25]))
 
 
 if __name__ == "__main__":
