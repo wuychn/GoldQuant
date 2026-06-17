@@ -61,6 +61,8 @@ def jbxx(symbol):
     基本信息（东财 push2 API，直接解析 ``data``，规避 akshare DataFrame 列数 bug）。
     """
     return _fetch_stock_individual_info_em(str(symbol))
+    # 下面是原来的，akshare有问题，以后修复了切换过去
+    # return list_to_dict(dataframe_to_records(ak.stock_individual_info_em(symbol=str(symbol))))
 
 
 def pk(symbol):
