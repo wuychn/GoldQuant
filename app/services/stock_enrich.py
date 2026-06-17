@@ -17,6 +17,7 @@ from app.utils.quant_archive import (
 )
 from app.utils.quant_market_enrich import stock_intraday_minute_zh
 from app.utils.ths_util import ggzjl, wcxg
+from app.utils.ths_funds_fetch import ThsFundsFetchError
 from app.utils.error_log import log_caught_error
 from quant.progress_log import log_progress, log_progress_count
 
@@ -298,7 +299,11 @@ async def _ggzjl(symbol: str) -> dict | None:
         v_["总流出"] = f"{r['title']['zlc']} 万元"
         v_["净额"] = f"{r['title']['je']} 万元"
         return v_
-    except Exception:
+    except ThsFundsFetchError as exc:
+        status = f" HTTP {exc.http_status}" if exc.http_status is not None else ""
+        log_caught_error(logger, f"stock_enrich [个股资金流 symbol={symbol!r}{status}]", exc)
+        return None
+    except Exception as exc:
         _log_error(f"个股资金流 symbol={symbol!r}")
         return None
 
@@ -446,6 +451,25 @@ async def enrich_stock_row(
     return item, concept_source
 
 
+def _resolve_enrich_runtime(
+    settings: Settings,
+    progress_scope: str | None,
+    max_concurrency: int | None,
+) -> tuple[int, int | None, int]:
+    """返回 (并发, 分批大小或 None, 批间暂停秒)。"""
+    if progress_scope == "post_market_evening":
+        conc = (
+            max_concurrency
+            if max_concurrency is not None
+            else settings.QUANT_ENRICH_EVENING_CONCURRENCY
+        )
+        batch_size = settings.QUANT_ENRICH_EVENING_BATCH_SIZE
+        pause = settings.QUANT_ENRICH_EVENING_BATCH_PAUSE_SEC
+        return max(1, conc), (batch_size if batch_size > 0 else None), max(0, pause)
+    conc = max_concurrency if max_concurrency is not None else settings.QUANT_ENRICH_CONCURRENCY
+    return max(1, conc), None, 0
+
+
 async def enrich_stock_rows(
     settings: Settings,
     rows: list[dict],
@@ -471,8 +495,15 @@ async def enrich_stock_rows(
     if not indexed:
         return []
 
-    conc = max_concurrency if max_concurrency is not None else settings.QUANT_ENRICH_CONCURRENCY
-    sem = asyncio.Semaphore(max(1, conc))
+    conc, batch_size, batch_pause = _resolve_enrich_runtime(settings, progress_scope, max_concurrency)
+    if batch_size and total > batch_size:
+        chunks: list[list[tuple[int, dict]]] = [
+            indexed[i : i + batch_size] for i in range(0, total, batch_size)
+        ]
+    else:
+        chunks = [indexed]
+
+    sem = asyncio.Semaphore(conc)
     cache_hits = 0
     api_calls = 0
     done = 0
@@ -512,13 +543,33 @@ async def enrich_stock_rows(
                 log_progress_count(progress_scope, progress_label, done, total, detail=code)
         return idx, item, concept_source
 
-    results = await asyncio.gather(*(_one(i, row) for i, row in indexed))
-    results.sort(key=lambda x: x[0])
-    out = [item for _, item, _ in results]
+    all_results: list[tuple[int, dict, ConceptFetchSource | None]] = []
+    n_batches = len(chunks)
+    for batch_idx, chunk in enumerate(chunks):
+        if batch_idx > 0 and batch_pause > 0:
+            if progress_scope:
+                log_progress(
+                    progress_scope,
+                    "enrich 批次间等待",
+                    detail=f"暂停 {batch_pause}s · 即将第 {batch_idx + 1}/{n_batches} 批",
+                )
+            await asyncio.sleep(batch_pause)
+        if n_batches > 1 and progress_scope:
+            log_progress(
+                progress_scope,
+                "enrich 批次开始",
+                detail=f"第 {batch_idx + 1}/{n_batches} 批 · {len(chunk)} 只 · 并发 {conc}",
+            )
+        batch_results = await asyncio.gather(*(_one(i, row) for i, row in chunk))
+        all_results.extend(batch_results)
+
+    all_results.sort(key=lambda x: x[0])
+    out = [item for _, item, _ in all_results]
     if progress_scope and total and (cache_hits or api_calls):
+        batch_note = f"，{n_batches} 批" if n_batches > 1 else ""
         log_progress(
             progress_scope,
             "补概念汇总",
-            detail=f"共 {total} 只，缓存 {cache_hits}，问财 {api_calls}，并发 {conc}",
+            detail=f"共 {total} 只，缓存 {cache_hits}，问财 {api_calls}，并发 {conc}{batch_note}",
         )
     return out

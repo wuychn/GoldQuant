@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from quant.scoring.tech_indicators import stock_daily_change_pct
 
-WATCHLIST_SECTION_TITLE = "八、自选更新"
+WATCHLIST_SECTION_TITLE = "六、自选更新"
 
 
 def stock_code(row: dict) -> str:

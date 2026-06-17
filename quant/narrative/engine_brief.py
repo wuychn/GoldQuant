@@ -74,6 +74,30 @@ def _append_holdings_performance_block(lines: list[str]) -> None:
     lines.append("持仓股表现（第三节须与此一致）：")
 
 
+def _append_theme_board_brief(lines: list[str], payload: dict, *, mode: str) -> None:
+    """概念/行业榜单摘要：盘前或无板块数据时不写；无数据时不写「暂无」占位。"""
+    if mode == "pre_market":
+        return
+    if not payload.get("概念板块") and not payload.get("行业板块"):
+        return
+    concept_gain, concept_fund = board_gain_fund_lists(payload, "概念板块")
+    industry_gain, industry_fund = board_gain_fund_lists(payload, "行业板块")
+    if concept_gain:
+        lines.append(f"当日涨幅概念：{'、'.join(concept_gain[:10])}")
+    if concept_fund:
+        lines.append(f"资金流入概念：{'、'.join(concept_fund[:10])}")
+    if industry_gain:
+        lines.append(f"当日涨幅行业：{'、'.join(industry_gain[:10])}")
+    if industry_fund:
+        lines.append(f"资金流入行业：{'、'.join(industry_fund[:10])}")
+
+
+def _append_main_wave_brief(lines: list[str], accel: list[str]) -> None:
+    if not accel:
+        return
+    lines.append(f"主升波段（{len(accel)}只）：{'、'.join(accel[:12])}")
+
+
 def build_engine_brief(
     ctx: ScoreContext,
     payload: dict,
@@ -84,8 +108,6 @@ def build_engine_brief(
     watchlist_added: list[dict] | None = None,
 ) -> str:
     """组装写作参考块（供 LLM 引用，勿原样复制标签进飞书正文）。"""
-    concept_gain, concept_fund = board_gain_fund_lists(payload, "概念板块")
-    industry_gain, industry_fund = board_gain_fund_lists(payload, "行业板块")
     accel = _collect_main_wave_stocks(ctx, payload)
 
     profit = profit_effect(payload)
@@ -102,12 +124,9 @@ def build_engine_brief(
     lines = [
         BRIEF_PREAMBLE,
         f"赚钱效应：{effect_level}（上证{idx_s}% 上涨{up}/下跌{down} 涨停{zt_cnt}/跌停{dt_cnt} 最高{height}板）",
-        f"当日涨幅概念：{'、'.join(concept_gain[:10]) if concept_gain else '暂无'}",
-        f"资金流入概念：{'、'.join(concept_fund[:10]) if concept_fund else '暂无'}",
-        f"当日涨幅行业：{'、'.join(industry_gain[:10]) if industry_gain else '暂无'}",
-        f"资金流入行业：{'、'.join(industry_fund[:10]) if industry_fund else '暂无'}",
-        f"主升波段（{len(accel)}只）：{'、'.join(accel[:12]) if accel else '暂无'}",
     ]
+    _append_theme_board_brief(lines, payload, mode=mode)
+    _append_main_wave_brief(lines, accel)
     if gates.passed:
         lines.append(f"仓位控制：{format_position_control(payload)}")
     else:
@@ -159,7 +178,7 @@ def build_engine_brief(
 
         pnl = format_today_pnl_summary(payload)
         lines.append("")
-        lines.append("当日盈亏参考（盈亏总结须与此一致，勿夸大）：")
+        lines.append("当日盈亏参考（「总结与展望」须与此一致，勿夸大）：")
         lines.append(pnl)
 
         if watchlist_scores is not None:

@@ -168,6 +168,20 @@ class Settings(BaseSettings):
     QUANT_HIST_SCORING_MAX_BARS: int = Field(default=90, ge=20, le=4000)
     #: 自选/持仓 enrich 并发数（每只含盘口/日 K/分钟/资金流等 IO；过大易触发源站限流）。
     QUANT_ENRICH_CONCURRENCY: int = Field(default=6, ge=1, le=32)
+    #: 晚间复盘 enrich 批内并发；批与批之间暂停见 ``QUANT_ENRICH_EVENING_BATCH_*``。
+    QUANT_ENRICH_EVENING_CONCURRENCY: int = Field(default=6, ge=1, le=32)
+    #: 晚间复盘每批 enrich 只数；0 表示不分批（仍用 ``QUANT_ENRICH_EVENING_CONCURRENCY``）。
+    QUANT_ENRICH_EVENING_BATCH_SIZE: int = Field(default=20, ge=0, le=500)
+    #: 晚间复盘批次间隔秒数（默认 600=10 分钟）。
+    QUANT_ENRICH_EVENING_BATCH_PAUSE_SEC: int = Field(default=600, ge=0, le=7200)
+    #: 同花顺个股实时资金流内存缓存 TTL（秒）。
+    QUANT_THS_FUNDS_CACHE_TTL_SEC: int = Field(default=120, ge=0, le=3600)
+    #: 同花顺个股资金流失败重试次数。
+    QUANT_THS_FUNDS_RETRY_MAX: int = Field(default=3, ge=1, le=10)
+    #: 同花顺个股资金流重试基础退避（秒），实际等待 = base×2^attempt + 累计失败×FAILURE_BACKOFF。
+    QUANT_THS_FUNDS_RETRY_BASE_SEC: float = Field(default=1.0, ge=0.1, le=60.0)
+    #: 每累计一次同花顺资金流失败，后续请求额外等待秒数（失败越多等越久）。
+    QUANT_THS_FUNDS_FAILURE_BACKOFF_SEC: float = Field(default=5.0, ge=0.0, le=120.0)
 
     #: 测试阶段：为 true 时人气榜/涨停统计仅处理前 3 条（仍走实时接口）。
     QUANT_TEST_PHASE: bool = False

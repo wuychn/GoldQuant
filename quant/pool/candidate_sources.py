@@ -36,7 +36,7 @@ async def _prefilter_popularity(settings: Settings, cfg: dict) -> list[dict]:
     from quant.pool.candidate_config import popularity_limit
 
     limit = settings.quant_hot_list_limit() if settings.QUANT_TEST_PHASE else popularity_limit(cfg)
-    raw = await hot_stock(settings, limit)
+    raw = await hot_stock(limit)
     return prefilter_popularity(raw if isinstance(raw, list) else [], cfg=cfg)
 
 

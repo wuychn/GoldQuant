@@ -63,6 +63,18 @@ def error_category(exc: BaseException) -> str:
     except ImportError:
         pass
 
+    try:
+        import httpx
+
+        if isinstance(exc, httpx.TimeoutException):
+            return "请求超时"
+        if isinstance(exc, httpx.HTTPStatusError):
+            return "远程服务器返回错误"
+        if isinstance(exc, httpx.RequestError):
+            return "HTTP 请求失败"
+    except ImportError:
+        pass
+
     if isinstance(exc, TimeoutError):
         return "请求超时"
     if isinstance(exc, ConnectionError):
@@ -90,20 +102,81 @@ def _origin(exc: BaseException) -> tuple[str, int, str]:
     return (_rel_path(frame.f_code.co_filename), tb.tb_lineno, frame.f_code.co_name)
 
 
-def _remote_detail(exc: BaseException, *, max_body: int = 2000) -> str:
+def http_status_from_exception(exc: BaseException) -> int | None:
+    """从异常链提取远端 HTTP 状态码。"""
+    try:
+        from app.utils.ths_funds_fetch import ThsFundsFetchError
+
+        if isinstance(exc, ThsFundsFetchError) and exc.http_status is not None:
+            return exc.http_status
+    except ImportError:
+        pass
+
+    try:
+        import httpx
+
+        if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None:
+            return int(exc.response.status_code)
+    except ImportError:
+        pass
+
     try:
         import requests
 
         if isinstance(exc, requests.exceptions.HTTPError) and exc.response is not None:
-            resp = exc.response
-            body = (resp.text or "").strip()
-            if len(body) > max_body:
-                body = body[:max_body] + "…(truncated)"
-            body_one_line = body.replace("\r", " ").replace("\n", " ")
-            return f"HTTP {resp.status_code} body={body_one_line}"
+            return int(exc.response.status_code)
     except ImportError:
         pass
-    return ""
+
+    try:
+        from fastapi import HTTPException
+
+        if isinstance(exc, HTTPException) and exc.status_code not in (None, 502):
+            return int(exc.status_code)
+    except ImportError:
+        pass
+
+    cause = exc.__cause__
+    if cause is not None and cause is not exc:
+        return http_status_from_exception(cause)
+    return None
+
+
+def _remote_detail(exc: BaseException, *, max_body: int = 2000) -> str:
+    status = http_status_from_exception(exc)
+    body = ""
+
+    try:
+        import httpx
+
+        if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None:
+            body = (exc.response.text or "").strip()
+    except ImportError:
+        pass
+
+    if not body:
+        try:
+            import requests
+
+            if isinstance(exc, requests.exceptions.HTTPError) and exc.response is not None:
+                body = (exc.response.text or "").strip()
+        except ImportError:
+            pass
+
+    if not body and exc.__cause__ is not None:
+        return _remote_detail(exc.__cause__, max_body=max_body)
+
+    if status is None and not body:
+        return ""
+
+    if len(body) > max_body:
+        body = body[:max_body] + "…(truncated)"
+    body_one_line = body.replace("\r", " ").replace("\n", " ") if body else ""
+    if status is not None and body_one_line:
+        return f"HTTP {status} body={body_one_line}"
+    if status is not None:
+        return f"HTTP {status}"
+    return f"body={body_one_line}" if body_one_line else ""
 
 
 def format_http_response_body(text: str, *, max_len: int = 2000) -> str:

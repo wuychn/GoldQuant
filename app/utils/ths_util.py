@@ -163,17 +163,14 @@ async def _request_json(
 # 10jqka API
 # ---------------------------------------------------------------------------
 
-async def call_ths_api(settings: SettingsDep, url: str) -> Any:
+async def call_ths_api(url: str) -> Any:
     """直接调用同花顺接口。"""
     headers = {
-        "User-Agent": settings.THS_DEFAULT_USER_AGENT,
+        "User-Agent": _CHROME_USER_AGENT,
         "Accept": "application/json",
+        "Hexin-V": get_iwencai_hexin_v() # 这个是6月17号才加的，看能不能解决热股有些时候报502的问题
     }
-    # 这里是添加同花顺的请求头，现在同花顺接口的 Cookie 还不知道怎么绕过 TODO
-    # headers = merge_ths_headers_for_url(url, headers)
-    client_kw: dict[str, Any] = {"timeout": settings.HTTP_CLIENT_TIMEOUT}
-    if px := settings.httpx_proxy_url():
-        client_kw["proxy"] = px
+    client_kw: dict[str, Any] = {"timeout": _HTTP_TIMEOUT}
     return await _request_json("GET", url, headers=headers, client_kw=client_kw)
 
 
@@ -370,8 +367,8 @@ def _build_hot_stock_item(stock: dict[str, Any], *, concept_key: str) -> dict[st
     }
 
 
-async def _fetch_hot_list(settings: SettingsDep, list_type: str) -> list[dict[str, Any]]:
-    response = await call_ths_api(settings, _HOT_LIST_URL.format(list_type=list_type))
+async def _fetch_hot_list(list_type: str) -> list[dict[str, Any]]:
+    response = await call_ths_api(_HOT_LIST_URL.format(list_type=list_type))
     return response["data"]["stock_list"]
 
 
@@ -393,10 +390,10 @@ async def stock_fund_flow_individual(symbol, type_):
     return None
 
 
-async def hot_stock(settings, limit=30):
+async def hot_stock(limit=30):
     """同花顺人气榜。"""
     result = []
-    for stock in await _fetch_hot_list(settings, "normal"):
+    for stock in await _fetch_hot_list("normal"):
         if _is_a_share_code(stock["code"]):
             result.append(_build_hot_stock_item(stock, concept_key="所属概念"))
     return result[:limit]
@@ -508,8 +505,10 @@ async def ljqs():
     )
 
 async def ggzjl(symbol):
-    """个股资金流。"""
-    return await call_ths_api_with_header(_STOCK_FUNDS_URL.format(symbol=symbol))
+    """个股资金流（TTL 缓存 + 退避重试）。"""
+    from app.utils.ths_funds_fetch import fetch_stock_funds_cached
+
+    return await fetch_stock_funds_cached(symbol)
 
 
 if __name__ == "__main__":
@@ -524,5 +523,5 @@ if __name__ == "__main__":
     # gnzjl = asyncio.run(stock_fund_flow_concept('3日排行', '流入资金'))
     # print(json.dumps(gnzjl, ensure_ascii=False, indent=2))
 
-    r = asyncio.run(ljqs())
+    r = asyncio.run(hot_stock())
     print(json.dumps(r, ensure_ascii=False, indent=2))

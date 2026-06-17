@@ -62,11 +62,27 @@ _RE_INTERNAL_PHRASES: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"主线复盘"), "大盘概况"),
     (re.compile(r"三、持仓跟踪"), "三、持仓股表现"),
     (re.compile(r"三、持仓监控"), "三、持仓股表现"),
-    (re.compile(r"七、自选更新"), "八、自选更新"),
+    (re.compile(r"四、下午策略"), "四、午后策略"),
+    (re.compile(r"七、自选更新"), "六、自选更新"),
+    (re.compile(r"八、自选更新"), "六、自选更新"),
+    (re.compile(r"五、盈亏总结"), "五、总结与展望"),
+    (re.compile(r"六、经验总结"), "五、总结与展望"),
+    (re.compile(r"七、明日展望与风险提示"), "五、总结与展望"),
+    (re.compile(r"七、明日展望"), "五、总结与展望"),
 ]
 _RE_BLANK_LINES = re.compile(r"\n{3,}")
 _RE_INLINE_OPS_LINE = re.compile(r"(?m)^(?:今日)?操作[：:].+\n?")
 _RE_NO_TRADE_LINE = re.compile(r"(?m)^(?:今日)?无买卖(?:操作)?[。.]?\s*\n?")
+_RE_BRIEF_LABEL_LINES = re.compile(
+    r"(?m)^(?:"
+    r"当日涨幅概念：.*|"
+    r"资金流入概念：.*|"
+    r"当日涨幅行业：.*|"
+    r"资金流入行业：.*|"
+    r"主升波段（\d+只）：.*|"
+    r"（以下为写作参考[^）]*）.*"
+    r")\s*\n?"
+)
 _RE_FALSE_HALF_HOUR = re.compile(
     r"开盘(?:后)?(?:约|已)?半(?:个)?小时|"
     r"半(?:个)?小时(?:行情|走势|来)|"
@@ -121,6 +137,7 @@ def sanitize_feishu_body(text: str, *, push_timestamp: str = "") -> str:
         out = out.replace(p, "")
     for pat, repl in _RE_INTERNAL_PHRASES:
         out = pat.sub(repl, out)
+    out = _RE_BRIEF_LABEL_LINES.sub("", out)
     out = _strip_inline_ops_lines(out)
     out = re.sub(r"(?m)^本轮无操作信号[。.]?.*\n?", "", out)
     out = _fix_false_open_half_hour(out, push_timestamp=push_timestamp)

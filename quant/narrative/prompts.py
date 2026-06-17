@@ -8,6 +8,7 @@ from datetime import datetime
 from quant.config import LLM_OUTPUT_FORMAT
 from quant.narrative.history_context import build_cross_day_context
 from quant.narrative.prompt_common import compose_review_prompt
+from quant.narrative.stock_lines import WATCHLIST_SECTION_TITLE
 from quant.store.state import read_lessons, read_news_summary
 
 
@@ -50,11 +51,15 @@ def prompt_news() -> str:
 
 def prompt_pre_market() -> str:
     return compose_review_prompt(
-        task="撰写盘前三节纯叙述文案；盘前不下单，推送不含「操作」小节。\n",
+        task=(
+            "撰写盘前三节推送正文：聚焦竞价前/开盘初的市场环境与个股准备，"
+            "不下单、不涉及自选变更。\n"
+        ),
         mode="pre_market",
         ops_note=(
-            "勿输出买卖指令、加减仓或「操作」相关表述；"
-            "一至三节分写自选股、持仓股，禁止混为一谈。"
+            "禁止输出买卖、加减仓及「操作」类表述。"
+            "第二节仅写自选股，第三节仅写持仓股，不得混写。"
+            "竞价前成交额可能极低，勿夸大量能；无数据处写「暂无」。"
         ),
         sections="一、大盘概况\n二、自选股开盘分析\n三、持仓股开盘分析",
     )
@@ -63,17 +68,16 @@ def prompt_pre_market() -> str:
 def prompt_during_market() -> str:
     return compose_review_prompt(
         task=(
-            "撰写盘中一至三节纯叙述文案；盘中仅对已入自选个股按策略买卖，"
-            "不新增或删除自选股，正文勿出现「自选更新」。\n"
+            "撰写盘中一至三节推送正文：概括当前盘面、自选股与持仓股表现。"
+            "盘中仅对已入自选个股按策略交易，不调整自选列表。\n"
         ),
         mode="during_market",
         ops_note=(
-            "勿输出买卖指令或自选变更；买卖结果仅由文末「四、操作」段给出，正文一至三节禁止出现"
-            "「操作」「买卖」「加仓」「减仓」「无买卖」等交易动作表述。"
-            "二、自选股表现只写自选股；三、持仓股表现只写持仓股，禁止混写。"
-            "四、操作段由程序拼接：买入侧只谈自选，卖出侧只谈持仓。"
-            "大盘概况须一并交代指数、涨跌家数、成交、概念板块与资金动向，"
-            "勿另设独立「概念复盘」小节。"
+            "禁止在正文一至三节出现「操作」「买卖」「加仓」「减仓」「无买卖」等交易表述；"
+            "买卖结果仅由程序在文末「四、操作」段给出。"
+            "第二节仅写 JSON「自选股」，第三节仅写 JSON「持仓股」，不得混写。"
+            "第一节须交代指数、涨跌家数、成交（注意同时段口径）、概念与资金动向，"
+            "不另设「概念复盘」小节。"
         ),
         sections="一、大盘概况\n二、自选股表现\n三、持仓股表现",
     )
@@ -81,28 +85,36 @@ def prompt_during_market() -> str:
 
 def prompt_lunch_review() -> str:
     return compose_review_prompt(
-        task="撰写午间复盘一至四节纯叙述文案，不要输出自选更新。\n",
+        task=(
+            "撰写午间复盘一至四节推送正文：总结上午盘面与持仓，"
+            "给出午后关注方向；不涉及买卖与自选变更。\n"
+        ),
         mode="post_market_lunch",
         ops_note=(
-            "勿输出买卖指令或自选变更；一至四节禁止出现「操作」「买卖」「加仓」「减仓」"
-            "「无买卖」「今日无买卖操作」等交易动作表述。"
-            "四、下午策略只写午后节奏与关注方向，不写是否下单。"
+            "禁止输出买卖、加减仓及「操作」类表述。"
+            "第二节写自选股上午表现，第三节写持仓股上午表现，第四节写午后策略与风险点，"
+            "第四节只谈节奏与关注点，不写是否下单。"
         ),
-        sections="一、大盘概况\n二、自选股表现\n三、持仓股表现\n四、下午策略",
+        sections="一、大盘概况\n二、自选股表现\n三、持仓股表现\n四、午后策略",
     )
 
 
 def prompt_evening_review() -> str:
+    wl_title = WATCHLIST_SECTION_TITLE
     return compose_review_prompt(
-        task="撰写晚间复盘一至七节纯叙述文案，不要输出自选更新。\n",
+        task=(
+            "撰写晚间复盘一至五节推送正文：全天复盘与收束，"
+            "不输出自选变更（自选结果由程序追加）。\n"
+        ),
         mode="post_market_evening",
         ops_note=(
-            "勿输出买卖指令或自选变更；自选结果以文末「八、自选更新」段为准，正文不要输出自选更新小节。"
-            "一至三、五至七节禁止写买卖动作；买卖复盘仅出现在「四、操作复盘」。"
-            "大盘概况须一并交代指数、涨跌家数、成交、概念板块与资金动向。"
+            f"禁止在正文输出自选变更；自选结果以文末「{wl_title}」为准。"
+            "第一至三节、第五节禁止写买卖动作；买卖复盘仅出现在「四、操作复盘」。"
+            "第一节须交代指数、涨跌家数、全天成交、概念与资金动向。"
+            "第五节须合并盈亏、经验与次日展望，勿再拆为多个一级小节。"
         ),
         sections=(
             "一、大盘概况\n二、自选股表现\n三、持仓股表现\n四、操作复盘\n"
-            "五、盈亏总结\n六、经验总结\n七、明日展望与风险提示"
+            "五、总结与展望"
         ),
     )

@@ -3,7 +3,32 @@
 from __future__ import annotations
 
 from quant.narrative.engine_brief import build_engine_brief
+from quant.narrative.push_sanitize import sanitize_feishu_body
 from quant.scoring.context import ScoreContext
+
+
+def test_engine_brief_pre_market_omits_empty_boards() -> None:
+    payload = {
+        "赚钱效应": {"上涨": 2000, "下跌": 2000, "涨停": 50, "跌停": 10},
+        "大盘指数": [{"名称": "上证指数", "涨跌幅": 0.5}],
+        "涨停统计": {"最高连板": 5},
+    }
+    brief = build_engine_brief(ScoreContext(payload=payload), payload, mode="pre_market")
+    assert "当日涨幅概念" not in brief
+    assert "资金流入行业" not in brief
+
+
+def test_sanitize_strips_brief_label_lines() -> None:
+    body = (
+        "一、大盘概况\n"
+        "当日涨幅概念：暂无。\n"
+        "资金流入概念：暂无。\n"
+        "指数小幅高开。\n"
+    )
+    out = sanitize_feishu_body(body)
+    assert "当日涨幅概念" not in out
+    assert "资金流入概念" not in out
+    assert "指数小幅高开" in out
 
 
 def test_engine_brief_shows_concept_and_industry_boards_separately() -> None:

@@ -530,7 +530,7 @@ async def _hot(settings: SettingsDep, *, progress_scope: str | None = "during_ma
     """盘中人气榜：同花顺排名/连板/概念标签；不问财（仅自选人气匹配与叙述）。"""
     try:
         n = settings.quant_hot_list_limit()
-        raw_hot = await hot_stock(settings, n)
+        raw_hot = await hot_stock(n)
         rows = prefilter_popularity(raw_hot if isinstance(raw_hot, list) else [])
         scope = progress_scope or "during_market"
         log_progress(scope, "人气榜", detail=f"共 {len(rows)} 只")
