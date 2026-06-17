@@ -5,6 +5,7 @@ from __future__ import annotations
 from quant.config import load_scoring_config
 from quant.constants import STRATEGY_NAME
 from quant.scoring.context import ScoreContext
+from quant.scoring.dimensions.day_bar_shape import DayBarShapeScorer
 from quant.scoring.dimensions.concept_theme import ConceptThemeScorer
 from quant.scoring.dimensions.global_macro import GlobalMacroScorer
 from quant.scoring.dimensions.main_wave import MainWaveScorer
@@ -30,6 +31,7 @@ _SCORERS = {
     "concept_theme": ConceptThemeScorer(),
     "stock_history": StockHistoryScorer(),
     "stock_fund_flow": StockFundFlowScorer(),
+    "day_bar_shape": DayBarShapeScorer(),
     "popularity_rank": PopularityRankScorer(),
     "ths_rank_signal": ThsRankSignalScorer(),
     "technical": TechnicalScorer(),

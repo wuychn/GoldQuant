@@ -142,6 +142,9 @@ def cmfb(symbol):
     """
     return dataframe_to_records(ak.stock_cyq_em(symbol=str(symbol), adjust=""))[-5:]
 
+def hy():
+    """东方财富行业"""
+    return dataframe_to_records(ak.stock_board_industry_name_em())
 
 def hist(symbol, period='daily', *, start_date=None, end_date=None):
     """

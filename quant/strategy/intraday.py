@@ -99,6 +99,158 @@ def _minute_momentum_improving(recent: list[dict], relax: float) -> bool:
     return late_sum > need
 
 
+def _minute_close_slope_pct(closes: list[float]) -> float | None:
+    """首尾收盘涨跌幅(%)，衡量近 N 分钟整体斜率（震荡向上：允许中间回撤）。"""
+    if len(closes) < 2:
+        return None
+    base = closes[0]
+    if base <= 0:
+        return None
+    return (closes[-1] - base) / base * 100
+
+
+def _ols_slope_pct(closes: list[float]) -> float | None:
+    """最小二乘斜率：窗口首尾预测涨跌(%)，抗单根异常 K。"""
+    n = len(closes)
+    if n < 2 or closes[0] <= 0:
+        return None
+    x_mean = (n - 1) / 2.0
+    y_mean = sum(closes) / n
+    num = sum((i - x_mean) * (closes[i] - y_mean) for i in range(n))
+    den = sum((i - x_mean) ** 2 for i in range(n))
+    if den <= 0:
+        return None
+    slope_per_bar = num / den
+    return slope_per_bar * (n - 1) / closes[0] * 100
+
+
+def _vwap_window_slope_pct(bars: list[dict], lookback: int) -> float | None:
+    """近 N 分钟：前半段 VWAP → 全段 VWAP 的抬升幅度(%)。"""
+    tail = bars[-lookback:] if bars else []
+    if len(tail) < 2:
+        return None
+    mid = max(1, len(tail) // 2)
+    vw_start = _vwap(tail[:mid])
+    vw_end = _vwap(tail)
+    if not vw_start or not vw_end or vw_start <= 0:
+        return None
+    return (vw_end - vw_start) / vw_start * 100
+
+
+def _higher_lows_ok(closes: list[float], *, half: int) -> bool:
+    """震荡向上：近 half 根最低价不低于前 half 根。"""
+    need = half * 2
+    if len(closes) < need:
+        return False
+    recent = closes[-half:]
+    prior = closes[-2 * half : -half]
+    return min(recent) >= min(prior)
+
+
+def _momentum_stack_cfg(intra: dict[str, Any]) -> dict[str, Any]:
+    ms = dict(intra.get("momentum_stack") or {})
+    ms.setdefault("enabled", True)
+    ms.setdefault("endpoint_slope_minutes", intra.get("slope_lookback_minutes", 5))
+    ms.setdefault("min_endpoint_slope_pct", intra.get("min_slope_pct", 0.0))
+    ms.setdefault("slope_warmup_bars", 10)
+    ms.setdefault("min_endpoint_slope_pct_early", -0.05)
+    ms.setdefault("ols_slope_minutes", 5)
+    ms.setdefault("min_ols_slope_pct", 0.0)
+    ms.setdefault("vwap_slope_minutes", 5)
+    ms.setdefault("min_vwap_slope_pct", 0.0)
+    ms.setdefault("dual_short_minutes", 5)
+    ms.setdefault("dual_long_minutes", intra.get("lookback_minutes", 15))
+    ms.setdefault("min_dual_long_slope_pct", -0.10)
+    ms.setdefault("higher_lows_halves", 3)
+    ms.setdefault("require_volume_momentum", True)
+    ms.setdefault("volume_momentum_minutes", 6)
+    ms.setdefault("minute_momentum_relax_ratio", intra.get("minute_momentum_relax_ratio", 0.85))
+    return ms
+
+
+def _momentum_stack_ok(bars: list[dict], intra: dict[str, Any]) -> tuple[bool, str]:
+    """A–F 势头检查叠加：全部通过才允许买入。"""
+    ms = _momentum_stack_cfg(intra)
+    if not ms.get("enabled", True):
+        return True, ""
+
+    if not bars:
+        return False, "无分钟K"
+
+    warmup = max(0, int(ms.get("slope_warmup_bars", 10)))
+    early = len(bars) < warmup
+    min_ep = float(
+        ms.get("min_endpoint_slope_pct_early", -0.05) if early else ms.get("min_endpoint_slope_pct", 0.0)
+    )
+
+    # A 首尾斜率（5 分钟）
+    n_a = max(2, int(ms.get("endpoint_slope_minutes", 5)))
+    closes_a = [b["close"] for b in bars[-n_a:]]
+    slope_a = _minute_close_slope_pct(closes_a)
+    if slope_a is None:
+        return False, f"A:近{n_a}分钟K无效"
+    if slope_a < min_ep:
+        return False, f"A:近{n_a}分钟首尾斜率{slope_a:.2f}%(需≥{min_ep:.2f}%)"
+
+    # B OLS 回归斜率
+    n_b = max(2, int(ms.get("ols_slope_minutes", 5)))
+    closes_b = [b["close"] for b in bars[-n_b:]]
+    slope_b = _ols_slope_pct(closes_b)
+    min_b = float(ms.get("min_ols_slope_pct", 0.0))
+    if slope_b is None:
+        return False, f"B:近{n_b}分钟OLS无效"
+    if slope_b < min_b:
+        return False, f"B:近{n_b}分钟OLS斜率{slope_b:.2f}%(需≥{min_b:.2f}%)"
+
+    # C VWAP 斜率
+    n_c = max(2, int(ms.get("vwap_slope_minutes", 5)))
+    slope_c = _vwap_window_slope_pct(bars, n_c)
+    min_c = float(ms.get("min_vwap_slope_pct", 0.0))
+    if slope_c is None:
+        return False, f"C:近{n_c}分钟VWAP斜率无效"
+    if slope_c < min_c:
+        return False, f"C:近{n_c}分钟VWAP斜率{slope_c:.2f}%(需≥{min_c:.2f}%)"
+
+    # D 双窗口：短端 ≥ min_ep，长端 ≥ min_dual_long
+    n_d_short = max(2, int(ms.get("dual_short_minutes", 5)))
+    n_d_long = max(n_d_short, int(ms.get("dual_long_minutes", 15)))
+    slope_d_long = _minute_close_slope_pct([b["close"] for b in bars[-n_d_long:]])
+    min_d_long = float(ms.get("min_dual_long_slope_pct", -0.10))
+    if slope_d_long is None:
+        return False, f"D:近{n_d_long}分钟斜率无效"
+    if slope_d_long < min_d_long:
+        return False, f"D:近{n_d_long}分钟斜率{slope_d_long:.2f}%(需≥{min_d_long:.2f}%)"
+
+    # E 抬升低点
+    half = max(2, int(ms.get("higher_lows_halves", 3)))
+    closes_all = [b["close"] for b in bars]
+    if not _higher_lows_ok(closes_all, half=half):
+        return False, f"E:近{half * 2}分钟未形成抬升低点"
+
+    # F 量价动能后半段强于前半段
+    if ms.get("require_volume_momentum", True):
+        n_f = max(6, int(ms.get("volume_momentum_minutes", 6)))
+        recent_f = bars[-n_f:]
+        relax = float(ms.get("minute_momentum_relax_ratio", 0.85))
+        if not _minute_momentum_improving(recent_f, relax):
+            return False, "F:近端量价动能未改善"
+
+    return True, "势头A–F通过"
+
+
+def _upward_minute_slope_ok(recent: list[dict], *, lookback: int, min_slope_pct: float) -> tuple[bool, str]:
+    """近 lookback 根分钟 K 收盘斜率须 ≥ min_slope_pct（0=不能整体下行）。"""
+    if len(recent) < lookback:
+        return False, f"分钟K不足{lookback}根"
+    closes = [b["close"] for b in recent[-lookback:]]
+    slope = _minute_close_slope_pct(closes)
+    if slope is None:
+        return False, "分钟收盘无效"
+    if slope < min_slope_pct:
+        return False, f"近{lookback}分钟斜率{slope:.2f}%(需≥{min_slope_pct:.2f}%)"
+    return True, f"近{lookback}分钟斜率{slope:.2f}%"
+
+
 def _intraday_cfg(buy_cfg: dict[str, Any] | None) -> dict[str, Any]:
     c = buy_cfg or {}
     intra = dict(c.get("intraday") or {})
@@ -136,14 +288,19 @@ def intraday_allows_buy(
     lookback = max(3, int(intra.get("lookback_minutes", 15)))
     recent = bars[-lookback:] if bars else []
 
-    # --- 2. 近 N 分钟多数收在 VWAP 上方 ---
+    # --- 2. 势头 A–F 叠加（硬门槛，不可豁免） ---
+    ok_stack, stack_note = _momentum_stack_ok(bars, intra)
+    if not ok_stack:
+        return False, stack_note
+
+    # --- 3. 近 N 分钟多数收在 VWAP 上方 ---
     min_above_ratio = float(intra.get("min_above_vwap_ratio", 0.65))
     if vwap and len(recent) >= 5:
         ratio = _above_vwap_ratio(bars, vwap, lookback)
         if ratio < min_above_ratio:
             return False, f"分时仅{ratio:.0%}在均价上方(需≥{min_above_ratio:.0%})"
 
-    # --- 3. 近 N 分钟走势不能持续下行 ---
+    # --- 4. 近 N 分钟走势不能持续下行 ---
     if len(recent) >= 3:
         closes = [b["close"] for b in recent]
         drop_pct = (closes[-1] - closes[0]) / closes[0] * 100
@@ -156,7 +313,7 @@ def intraday_allows_buy(
         if down_steps / (len(closes) - 1) > max_down_ratio:
             return False, f"近{len(recent)}分钟跌多涨少"
 
-    # --- 4. 资金/动能：强势豁免 OR 净流入改善 OR 分钟动能改善 OR 当前净流入 ---
+    # --- 5. 资金/动能：强势豁免 OR 净流入改善 OR 分钟动能改善 OR 当前净流入 ---
     if intra.get("require_strength_signal", True):
         chg = quote_change_pct(stock)
         skip_min_chg = float(intra.get("skip_strength_min_day_chg", 5.0))
@@ -172,15 +329,13 @@ def intraday_allows_buy(
         min_delta = float(intra.get("fund_improve_min_delta_wan", 50.0))
         net_ok = net is not None and net > 0
         improving = net_flow_improving(code, min_delta_wan=min_delta, current_net=net)
-        relax = float(intra.get("minute_momentum_relax_ratio", 0.85))
-        minute_ok = _minute_momentum_improving(recent, relax)
 
-        if not (strong_day or net_ok or improving or minute_ok):
+        if not (strong_day or net_ok or improving):
             if net is not None and net < 0 and not improving:
                 return False, "净流出且未见改善"
             return False, "分时强势证据不足"
 
-    # --- 5. 日内走弱：距高点回撤 / 当日涨幅 ---
+    # --- 6. 日内走弱：距高点回撤 / 当日涨幅 ---
     high = to_float(pk.get("最高"))
     if high and high > 0:
         dd = (last - high) / high * 100

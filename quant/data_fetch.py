@@ -73,6 +73,11 @@ def fetch_mode(mode: str) -> dict:
     url = f"{BASE_URL}{path}"
     log_progress(mode, "请求 HTTP API", detail=url)
     resp = requests.get(url, timeout=None)
+    if not resp.ok:
+        from app.utils.error_log import format_http_response_body
+
+        body_preview = format_http_response_body(resp.text)
+        log_progress(mode, "HTTP 响应错误", detail=f"status={resp.status_code}\n{body_preview}")
     resp.raise_for_status()
     log_progress_done(mode, "HTTP 响应成功")
     return resp.json()

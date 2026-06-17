@@ -90,17 +90,35 @@ def _origin(exc: BaseException) -> tuple[str, int, str]:
     return (_rel_path(frame.f_code.co_filename), tb.tb_lineno, frame.f_code.co_name)
 
 
-def _remote_detail(exc: BaseException) -> str:
+def _remote_detail(exc: BaseException, *, max_body: int = 2000) -> str:
     try:
         import requests
 
         if isinstance(exc, requests.exceptions.HTTPError) and exc.response is not None:
             resp = exc.response
-            body = (resp.text or "")[:200].replace("\n", " ").strip()
-            return f"HTTP {resp.status_code} {body}"
+            body = (resp.text or "").strip()
+            if len(body) > max_body:
+                body = body[:max_body] + "…(truncated)"
+            body_one_line = body.replace("\r", " ").replace("\n", " ")
+            return f"HTTP {resp.status_code} body={body_one_line}"
     except ImportError:
         pass
     return ""
+
+
+def format_http_response_body(text: str, *, max_len: int = 2000) -> str:
+    """格式化 HTTP 响应体用于日志（优先 JSON）。"""
+    raw = (text or "").strip()
+    if not raw:
+        return "(empty body)"
+    try:
+        parsed = json.loads(raw)
+        formatted = json.dumps(parsed, ensure_ascii=False, indent=2)
+    except (json.JSONDecodeError, TypeError):
+        formatted = raw
+    if len(formatted) > max_len:
+        return formatted[:max_len] + "\n…(truncated)"
+    return formatted
 
 
 def format_error_detail(context: str, exc: BaseException) -> str:
@@ -115,7 +133,12 @@ def format_error_detail(context: str, exc: BaseException) -> str:
     if exc.__cause__ is not None:
         parts.append(f"(原因: {error_category(exc.__cause__)}: {exc.__cause__})")
     parts.append(f"@ {_rel_path(path)}:{line} in {func}()")
-    return " ".join(parts)
+    line_out = " ".join(parts)
+    if remote and "body=" in remote:
+        # 响应体单独一行，避免单行过长难以阅读
+        body_part = remote.split("body=", 1)[-1]
+        line_out = f"{line_out}\n远程响应: {body_part}"
+    return line_out
 
 
 def log_caught_error(

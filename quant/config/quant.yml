@@ -63,6 +63,24 @@ scoring:
     stock_fund_flow:        # 个股资金流
       enabled: true
       weight: 8
+      neutral_score: 50
+      inflow_score: 80
+      min_score: 5
+      outflow_mild_ratio_pct: 0.05   # |净流出|/流通市值(%) 达此档开始明显扣分
+      outflow_heavy_ratio_pct: 0.35 # 达此档接近最低分
+      streak_lookback_days: 5
+      streak_penalty_per_day: 8      # 连续流出：第2日起每日额外扣分
+      streak_max_penalty: 24
+    day_bar_shape:          # 当日收阴、冲高回落
+      enabled: true
+      weight: 5
+      base_score: 85
+      min_score: 15
+      bearish_penalty_max: 22
+      bearish_penalty_scale: 2.5
+      spike_fade_min_pct: 1.5
+      spike_fade_penalty_max: 18
+      spike_fade_penalty_scale: 2.0
     market_index:           # 大盘指数涨跌
       enabled: true
       weight: 3
@@ -281,10 +299,26 @@ gates:
         require_strength_signal: true
         skip_strength_min_day_chg: 5.0
         fund_improve_min_delta_wan: 50
-        minute_momentum_relax_ratio: 0.85
         max_drop_from_high_pct: 2.5
         min_day_change_pct: -1.5
         hard_net_outflow_wan: 8000
+        momentum_stack:               # A–F 势头叠加（全部通过）
+          enabled: true
+          endpoint_slope_minutes: 5   # A 首尾斜率
+          min_endpoint_slope_pct: 0.0
+          slope_warmup_bars: 10       # A 开盘前 N 根放宽
+          min_endpoint_slope_pct_early: -0.05
+          ols_slope_minutes: 5        # B OLS 回归斜率
+          min_ols_slope_pct: 0.0
+          vwap_slope_minutes: 5       # C VWAP 斜率
+          min_vwap_slope_pct: 0.0
+          dual_short_minutes: 5       # D 双窗口（短端含于 A）
+          dual_long_minutes: 15
+          min_dual_long_slope_pct: -0.10
+          higher_lows_halves: 3       # E 近3 vs 前3 抬升低点
+          require_volume_momentum: true  # F 量价后半段强于前半段
+          volume_momentum_minutes: 6
+          minute_momentum_relax_ratio: 0.85
 
   # 卖出：止损 + 日内走弱 + 神奇2点30 最终确认
   sell:

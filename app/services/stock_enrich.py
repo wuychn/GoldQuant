@@ -297,6 +297,19 @@ async def _ggzjl(symbol: str) -> dict | None:
         return None
 
 
+async def _fund_flow_daily(symbol: str, *, days: int = 10) -> list[dict] | None:
+    try:
+        from app.utils.dfcf_util import zj
+
+        rows = await asyncio.to_thread(zj, symbol)
+        if not isinstance(rows, list) or not rows:
+            return None
+        return rows[-days:]
+    except Exception:
+        _log_error(f"个股资金流日线 symbol={symbol!r}")
+        return None
+
+
 async def _attach_concepts_cache_only(
     item: dict[str, Any],
     *,
@@ -390,6 +403,7 @@ async def enrich_stock_row(
         asyncio.to_thread(_sync_call_or_none, "盘口", lambda: pk(symbol)),
         asyncio.to_thread(_load_hist, settings, symbol),
         _ggzjl(symbol),
+        _fund_flow_daily(symbol),
     ]
     if include_pre_snapshot:
         io_tasks.append(
@@ -403,7 +417,8 @@ async def enrich_stock_row(
     pk_raw = io_results[0]
     hist_ = io_results[1]
     zj_raw = io_results[2]
-    pm = io_results[3] if include_pre_snapshot else None
+    zj_daily = io_results[3]
+    pm = io_results[4] if include_pre_snapshot else None
 
     item["盘口"] = pk_raw if isinstance(pk_raw, dict) else {}
     item["历史行情"] = hist_ if isinstance(hist_, list) else []
@@ -418,6 +433,8 @@ async def enrich_stock_row(
 
     if zj_raw:
         item["个股资金流"] = zj_raw
+    if zj_daily:
+        item["个股资金流日线"] = zj_daily
 
     return item, concept_source
 
