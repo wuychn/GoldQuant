@@ -164,6 +164,8 @@ class Settings(BaseSettings):
     QUANT_SPOT_EM_FULL_TABLE: bool = False
     #: 盘前/盘中/盘后接口里「历史行情」日线最多返回条数（从最新往前截），减轻模型上下文；完整 K 线仍在本地归档。
     QUANT_HIST_RESPONSE_MAX_BARS: int = Field(default=48, ge=1, le=4000)
+    #: 候选 enrich / 评分用「历史行情」保留最近 N 根交易日（须 ≥ main_wave choppy 窗口，默认 90）。
+    QUANT_HIST_SCORING_MAX_BARS: int = Field(default=90, ge=20, le=4000)
     #: 自选/持仓 enrich 并发数（每只含盘口/日 K/分钟/资金流等 IO；过大易触发源站限流）。
     QUANT_ENRICH_CONCURRENCY: int = Field(default=6, ge=1, le=32)
 

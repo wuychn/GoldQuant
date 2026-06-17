@@ -85,8 +85,9 @@ def is_trend_choppy(stock: dict, cfg: dict[str, Any]) -> bool:
     """几个月上蹿下跳：路径远大于净涨幅，或涨跌频繁反转。
 
     长期横盘后刚突破：若均线多头且近 N 日净涨幅达标，不因 60 日低 net 误杀。
+    K 线不足 choppy_lookback_days 时，用 min(len, lookback) 窗口仍计算（至少 20 根）。
     """
-    lookback = int(cfg.get("choppy_lookback_days", 60))
+    lookback_cfg = int(cfg.get("choppy_lookback_days", 60))
     max_path_ratio = float(cfg.get("choppy_path_ratio", 3.5))
     max_flip_rate = float(cfg.get("choppy_flip_rate", 0.42))
     min_net_pct = float(cfg.get("choppy_min_net_pct", 5.0))
@@ -95,11 +96,15 @@ def is_trend_choppy(stock: dict, cfg: dict[str, Any]) -> bool:
 
     changes = hist_daily_changes(stock.get("历史行情") or [])
     closes = hist_closes(stock.get("历史行情") or [])
-    if len(changes) < 20 or len(closes) < lookback:
+    if len(changes) < 20 or len(closes) < 20:
         return False
 
-    window = changes[-lookback:]
-    start = closes[-lookback]
+    effective = min(len(closes), lookback_cfg)
+    if effective < 20:
+        return False
+
+    window = changes[-effective:]
+    start = closes[-effective]
     end = closes[-1]
     if start <= 0:
         return False
@@ -294,6 +299,83 @@ def detect_buy_setup(
                 return True, BUY_KIND_PULLBACK, "主升波段回调至均线区企稳"
 
     return False, "", "波段内未触发买点"
+
+
+def main_wave_score_penalties(
+    stock: dict,
+    cfg: dict[str, Any],
+    *,
+    phase: str,
+) -> tuple[float, dict[str, Any]]:
+    """主升浪评分软扣分：V 型暴拉、路径质量差、涨幅过于集中在短窗口、发散过热。"""
+    closes = hist_closes(stock.get("历史行情") or [])
+    if len(closes) < 20:
+        return 0.0, {}
+
+    total = 0.0
+    detail: dict[str, Any] = {}
+
+    spread_days = int(cfg.get("spread_accel_days", 5))
+    spread_now = ma_spread_pct(closes)
+    spread_prev = ma_spread_pct(closes[:-spread_days]) if len(closes) >= 20 + spread_days else None
+
+    prev_max = float(cfg.get("v_reversal_spread_prev_max", 0.5))
+    min_jump = float(cfg.get("v_reversal_min_jump_pct", 12.0))
+    v_max = float(cfg.get("penalty_v_reversal_max", 22.0))
+    if (
+        spread_now is not None
+        and spread_prev is not None
+        and spread_prev <= prev_max
+        and spread_now >= float(cfg.get("min_ma_spread_pct", 0.8))
+    ):
+        jump = spread_now - spread_prev
+        if jump >= min_jump:
+            p = min(v_max, (jump - min_jump) * 0.6 + 8.0)
+            total += p
+            detail["V型反转扣分"] = round(p, 1)
+
+    lookback = min(len(closes), int(cfg.get("choppy_penalty_lookback", cfg.get("choppy_lookback_days", 60))))
+    changes = hist_daily_changes(stock.get("历史行情") or [])
+    if lookback >= 20 and len(changes) >= lookback:
+        window = changes[-lookback:]
+        start = closes[-lookback]
+        end = closes[-1]
+        if start > 0:
+            net = (end - start) / start * 100
+            path = sum(abs(c) for c in window)
+            path_ratio = path / max(abs(net), 1.0)
+            path_start = float(cfg.get("penalty_path_ratio_start", 2.2))
+            path_max = float(cfg.get("penalty_path_ratio_max", 18.0))
+            if path_ratio > path_start:
+                p = min(path_max, (path_ratio - path_start) * 8.0)
+                total += p
+                detail["路径质量扣分"] = round(p, 1)
+                detail["路径净幅比"] = round(path_ratio, 2)
+
+    if len(closes) >= 30 and closes[-30] > 0:
+        net30 = (closes[-1] - closes[-30]) / closes[-30] * 100
+        net10 = (closes[-1] - closes[-10]) / closes[-10] * 100 if closes[-10] > 0 else 0.0
+        share = float(cfg.get("spike_10d_share_of_30d", 0.55))
+        spike_max = float(cfg.get("penalty_spike_concentration", 15.0))
+        if net30 > 5.0 and net10 > 0 and net10 / net30 > share:
+            p = min(spike_max, (net10 / net30 - share) * 40.0)
+            total += p
+            detail["短窗暴拉扣分"] = round(p, 1)
+
+    overheat_pct = float(cfg.get("penalty_spread_overheat_pct", 22.0))
+    overheat_max = float(cfg.get("penalty_spread_overheat_max", 10.0))
+    if spread_now is not None and spread_now > overheat_pct:
+        p = min(overheat_max, (spread_now - overheat_pct) * 0.8)
+        total += p
+        detail["发散过热扣分"] = round(p, 1)
+
+    if phase == PHASE_ACCEL and spread_prev is not None and spread_prev <= prev_max:
+        accel_cap = float(cfg.get("penalty_parabolic_accel_max", 12.0))
+        if accel_cap > 0:
+            total += accel_cap
+            detail["暴拉加速降档"] = round(accel_cap, 1)
+
+    return total, detail
 
 
 def detect_sell_setup(

@@ -37,6 +37,18 @@ scoring:
     main_wave:              # 主升浪加速段形态 + 买点
       enabled: true
       weight: 22
+      accel_stack_buy_bonus: false   # 加速段不叠加买点 +12（避免重复奖励暴拉）
+      penalty_v_reversal_max: 22     # 5 日前发散≤阈值且短期拉开发散
+      v_reversal_spread_prev_max: 0.5
+      v_reversal_min_jump_pct: 12
+      penalty_path_ratio_start: 2.2  # 路径/|净涨幅| 超此开始扣分
+      penalty_path_ratio_max: 18
+      choppy_penalty_lookback: 60
+      penalty_spike_concentration: 15
+      spike_10d_share_of_30d: 0.55   # 近10日涨幅占近30日净涨比例过高
+      penalty_spread_overheat_pct: 22
+      penalty_spread_overheat_max: 10
+      penalty_parabolic_accel_max: 12
     concept_theme:          # 个股概念与板块概念权重共振
       enabled: true
       weight: 18

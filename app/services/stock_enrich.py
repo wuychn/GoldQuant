@@ -101,7 +101,13 @@ def _rows_last_n_trade_days(rows: list, *, n: int, date_key: str = "日期") -> 
     return [r for d, r in dated if oldest <= d <= anchor]
 
 
-def _load_hist(settings: Settings, symbol: str) -> list:
+def _hist_max_bars(settings: Settings, hist_max_bars: int | None) -> int:
+    if hist_max_bars is not None and hist_max_bars > 0:
+        return hist_max_bars
+    return max(20, int(settings.QUANT_HIST_SCORING_MAX_BARS))
+
+
+def _load_hist(settings: Settings, symbol: str, *, hist_max_bars: int | None = None) -> list:
     if settings.QUANT_ARCHIVE_ENABLED:
         start_d = daily_hist_fetch_start_date(settings, symbol)
         hist_api = _sync_call_or_none(
@@ -124,7 +130,7 @@ def _load_hist(settings: Settings, symbol: str) -> list:
         )
     if not hist_:
         hist_ = []
-    return _rows_last_n_trade_days(hist_, n=30)
+    return _rows_last_n_trade_days(hist_, n=_hist_max_bars(settings, hist_max_bars))
 
 
 def _parse_existing_concepts(item: dict) -> list[str] | None:
@@ -364,6 +370,7 @@ async def enrich_stock_row(
     row: dict[str, Any],
     *,
     include_pre_snapshot: bool = False,
+    hist_max_bars: int | None = None,
     concept_cache: dict[str, list[str] | None] | None = None,
     concept_file_cache=None,
     skip_wencai: bool = False,
@@ -401,7 +408,7 @@ async def enrich_stock_row(
 
     io_tasks: list[Any] = [
         asyncio.to_thread(_sync_call_or_none, "盘口", lambda: pk(symbol)),
-        asyncio.to_thread(_load_hist, settings, symbol),
+        asyncio.to_thread(_load_hist, settings, symbol, hist_max_bars=hist_max_bars),
         _ggzjl(symbol),
         _fund_flow_daily(symbol),
     ]
@@ -444,6 +451,7 @@ async def enrich_stock_rows(
     rows: list[dict],
     *,
     include_pre_snapshot: bool = False,
+    hist_max_bars: int | None = None,
     skip_wencai: bool = False,
     skip_jbxx: bool = False,
     concept_cache: dict[str, list[str] | None] | None = None,
@@ -477,6 +485,7 @@ async def enrich_stock_rows(
                 settings,
                 row,
                 include_pre_snapshot=include_pre_snapshot,
+                hist_max_bars=hist_max_bars,
                 concept_cache=cache,
                 concept_file_cache=day_cache,
                 skip_wencai=skip_wencai,
