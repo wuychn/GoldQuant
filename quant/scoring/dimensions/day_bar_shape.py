@@ -42,8 +42,9 @@ def score_day_bar_shape(stock: dict, *, cfg: dict[str, Any] | None = None) -> tu
     if last < open_px:
         body_pct = (open_px - last) / open_px * 100
         max_pen = float(c.get("bearish_penalty_max", 22))
+        min_pen = float(c.get("bearish_penalty_min", 0))
         scale = float(c.get("bearish_penalty_scale", 2.5))
-        pen = min(max_pen, body_pct * scale)
+        pen = min(max_pen, max(min_pen, body_pct * scale))
         score -= pen
         detail.update(
             {

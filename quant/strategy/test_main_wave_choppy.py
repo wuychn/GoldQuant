@@ -5,6 +5,7 @@ from __future__ import annotations
 import unittest
 
 from quant.strategy.main_wave import is_trend_choppy, ma_bull_stack
+from quant.strategy.trend import PHASE_PREPARING_UP, PHASE_UP, quantify_trend
 
 
 def _hist(closes: list[float]) -> list[dict]:
@@ -43,6 +44,41 @@ class TrendChoppyTests(unittest.TestCase):
         stock = _stock(closes, ma5=10.0, ma10=10.1, ma20=10.2, )
         cfg = {"choppy_lookback_days": 60, "choppy_min_net_pct": 5.0}
         self.assertTrue(is_trend_choppy(stock, cfg))
+
+    def test_main_wave_breakout_with_intraday_surge_not_choppy(self) -> None:
+        """国瓷类：月内爬升后加速，盘中大涨 + 均线多头 → 主升浪，非震荡无序。"""
+        closes = [30.0 + i * 0.25 + (0.4 if i % 3 == 0 else -0.2) for i in range(45)]
+        for _ in range(14):
+            closes.append(closes[-1] * 1.045)
+        hist_last = closes[-1]
+        live = round(hist_last * 1.1447, 2)
+        stock = _stock(
+            closes,
+            ma5=live * 0.93,
+            ma10=live * 0.86,
+            ma20=live * 0.74,
+        )
+        stock["盘口"]["最新"] = live
+        stock["盘口"]["涨幅"] = 14.47
+        cfg = {
+            "choppy_lookback_days": 60,
+            "choppy_min_net_pct": 5.0,
+            "choppy_recent_days": 20,
+            "choppy_recent_min_net_pct": 3.0,
+            "choppy_strong_net_pct": 12.0,
+            "choppy_strong_recent_net_pct": 8.0,
+            "choppy_strong_day_chg_pct": 5.0,
+            "min_ma_spread_pct": 0.8,
+            "spread_accel_days": 5,
+            "spread_accel_min_pct": 0.12,
+            "trend_peak_spread_days": 15,
+            "pullback_spread_ratio": 0.55,
+            "trend_ma20_floor": 0.985,
+            "accel_price_ma5_ratio": 0.97,
+        }
+        self.assertFalse(is_trend_choppy(stock, cfg))
+        phase, note, _ = quantify_trend(stock, cfg)
+        self.assertIn(phase, (PHASE_UP, PHASE_PREPARING_UP), msg=note)
 
 
 if __name__ == "__main__":

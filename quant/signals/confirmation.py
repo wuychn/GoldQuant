@@ -296,7 +296,12 @@ def _try_execute(
     if sig.action == "买入" and conf.get("verify_before_execute") and ctx is not None:
         from quant.signals.buy import verify_buy_signal_still_valid
 
-        if not verify_buy_signal_still_valid(sig.code, ctx, mode=ctx.mode or "during_market"):
+        if not verify_buy_signal_still_valid(
+            sig.code,
+            ctx,
+            mode=ctx.mode or "during_market",
+            signal_kind=kind,
+        ):
             return None, "持续确认完成但买点已失效，暂不成交"
 
     kind = sig.signal_kind or "默认"

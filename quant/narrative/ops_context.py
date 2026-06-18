@@ -127,13 +127,13 @@ def _skip_reason_for_watchlist_stock(
     if score.total < threshold:
         return f"{name}：强度还不够，再观察"
 
-    ok, _kind, setup_reason = detect_buy_setup(stock, ctx, mw_cfg)
+    ok, kind, setup_reason = detect_buy_setup(stock, ctx, mw_cfg)
     if not ok:
         note = _simplify_reason(setup_reason) or "买点未出"
         return f"{name}：{note}"
 
     if mode == "during_market":
-        ok_intra, intra_note = intraday_allows_buy(stock, buy_cfg)
+        ok_intra, intra_note = intraday_allows_buy(stock, buy_cfg, buy_kind=kind)
         if not ok_intra:
             note = _simplify_reason(intra_note) or "分时偏弱，先不接"
             return f"{name}：{note}"

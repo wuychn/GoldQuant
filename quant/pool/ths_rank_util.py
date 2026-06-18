@@ -85,6 +85,24 @@ def format_ths_rank_watchlist_reason(tags: list[str] | None) -> str:
     return "；".join(parts)
 
 
+def format_ths_rank_tags_brief(tags: list[str] | None) -> list[str]:
+    """形态榜标签简化为类别名列表，如 ['创新高', '量价齐升']。"""
+    out: list[str] = []
+    seen: set[str] = set()
+    for tag in tags or []:
+        t = str(tag).strip()
+        if not t:
+            continue
+        cat = tag_category(t)
+        if cat in seen:
+            continue
+        seen.add(cat)
+        out.append(cat)
+    order = {c: i for i, c in enumerate(_CATEGORY_ORDER)}
+    out.sort(key=lambda c: order.get(c, 99))
+    return out
+
+
 def merge_ths_rank_rows_by_code(
     *,
     entries: list[tuple[str, str | None, str]] | None = None,

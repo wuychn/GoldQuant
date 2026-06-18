@@ -4,7 +4,7 @@
 ----------------
 1. 标的池（板块、ST）
 2. 止损冷却期
-3. 全局门禁（熔断、每日亏损、连续缩量）
+3. 全局门禁（熔断、每日亏损）
 
 全局门禁不通过时不开新仓；卖出信号仍可由 signals/sell 独立触发。
 """
@@ -15,7 +15,6 @@ from dataclasses import dataclass, field
 
 from quant.config import load_gates_config
 from quant.constants import STRATEGY_NAME
-from quant.market.turnover import load_completed_day_turnovers
 from quant.narrative.push_style import profit_effect_level
 from quant.scoring.context import ScoreContext, index_change, infer_regime
 from quant.store.state import (
@@ -61,7 +60,6 @@ class GateReport:
         labels = {
             "极端熔断": "大盘急跌",
             "每日亏损限额": "当日亏损偏大",
-            "连续缩量": "成交持续萎缩",
             "标的池": "标的不在范围",
             "止损冷却": "止损后冷却",
             "当日卖出冷却": "当日已卖出",
@@ -89,7 +87,7 @@ def _symbol_ok(code: str, name: str, cfg: dict) -> GateResult:
 
 
 def check_global_gates(ctx: ScoreContext) -> GateReport:
-    """全局前置：极端熔断、每日亏损限额、连续缩量。"""
+    """全局前置：极端熔断、每日亏损限额。"""
     cfg = load_gates_config()
     results: list[GateResult] = []
 
@@ -109,20 +107,6 @@ def check_global_gates(ctx: ScoreContext) -> GateReport:
         results.append(
             GateResult(False, "每日亏损限额", f"当日亏损约{pct:.2f}%，超过{abs(limit):.1f}%上限")
         )
-
-    shrink_days = int(cb.get("shrink_volume_days", 3))
-    shrink_ratio = float(cb.get("shrink_volume_ratio", 0.8))
-    # 连续缩量：比较最近 N 个已收盘日的全市场成交额（evening 归档），
-    # 不用「上证-收盘价」（那是指数点位）也不拿盘中累计与全天混比。
-    amounts = load_completed_day_turnovers(count=shrink_days)
-    if len(amounts) == shrink_days and amounts[0] > 0:
-        if (
-            all(amounts[i] > amounts[i + 1] for i in range(len(amounts) - 1))
-            and amounts[-1] < amounts[0] * shrink_ratio
-        ):
-            results.append(
-                GateResult(False, "连续缩量", f"近{shrink_days}日成交额持续萎缩")
-            )
 
     if not results:
         results.append(GateResult(True, "全局门禁"))

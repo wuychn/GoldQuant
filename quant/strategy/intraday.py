@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from quant.constants import BUY_KIND_ASCENT, BUY_KIND_PULLBACK
 from quant.scoring.tech_indicators import (
     quote_avg_price,
     quote_change_pct,
@@ -75,30 +76,6 @@ def _vwap(bars: list[dict]) -> float | None:
     return num / den if den > 0 else None
 
 
-def _above_vwap_ratio(bars: list[dict], vwap: float, lookback: int) -> float:
-    recent = bars[-lookback:] if bars else []
-    if not recent or vwap <= 0:
-        return 0.0
-    above = sum(1 for b in recent if b["close"] >= vwap)
-    return above / len(recent)
-
-
-def _minute_momentum_improving(recent: list[dict], relax: float) -> bool:
-    if len(recent) < 6:
-        return False
-    flows = [(b["close"] - b["open"]) * b["vol"] for b in recent]
-    mid = len(flows) // 2
-    early_sum = sum(flows[:mid])
-    late_sum = sum(flows[mid:])
-    if early_sum > 0:
-        need = early_sum * relax
-    elif early_sum < 0:
-        need = early_sum / relax
-    else:
-        need = 0.0
-    return late_sum > need
-
-
 def _minute_close_slope_pct(closes: list[float]) -> float | None:
     """首尾收盘涨跌幅(%)，衡量近 N 分钟整体斜率（震荡向上：允许中间回撤）。"""
     if len(closes) < 2:
@@ -124,131 +101,126 @@ def _ols_slope_pct(closes: list[float]) -> float | None:
     return slope_per_bar * (n - 1) / closes[0] * 100
 
 
-def _vwap_window_slope_pct(bars: list[dict], lookback: int) -> float | None:
-    """近 N 分钟：前半段 VWAP → 全段 VWAP 的抬升幅度(%)。"""
-    tail = bars[-lookback:] if bars else []
-    if len(tail) < 2:
-        return None
-    mid = max(1, len(tail) // 2)
-    vw_start = _vwap(tail[:mid])
-    vw_end = _vwap(tail)
-    if not vw_start or not vw_end or vw_start <= 0:
-        return None
-    return (vw_end - vw_start) / vw_start * 100
+def _momentum_groups_cfg(intra: dict[str, Any]) -> dict[str, Any]:
+    mg = dict(intra.get("momentum_groups") or {})
+    mg.setdefault("enabled", True)
+    mg.setdefault("slope_minutes", 5)
+    mg.setdefault("slope_warmup_bars", 10)
+    mg.setdefault("min_endpoint_slope_pct", 0.0)
+    mg.setdefault("min_endpoint_slope_pct_early", -0.05)
+    mg.setdefault("min_ols_slope_pct", 0.0)
+    mg.setdefault("pullback_min_endpoint_slope_pct", -0.15)
+    mg.setdefault("pullback_min_ols_slope_pct", -0.15)
+    mg.setdefault("ascent_relax_on_strong_day", True)
+    mg.setdefault("ascent_relax_min_day_chg", 5.0)
+    return mg
 
 
-def _higher_lows_ok(closes: list[float], *, half: int) -> bool:
-    """震荡向上：近 half 根最低价不低于前 half 根。"""
-    need = half * 2
-    if len(closes) < need:
-        return False
-    recent = closes[-half:]
-    prior = closes[-2 * half : -half]
-    return min(recent) >= min(prior)
+def _strength_signal_ok(
+    stock: dict,
+    intra: dict[str, Any],
+    *,
+    code: str,
+    last: float,
+    vwap: float | None,
+) -> tuple[bool, str]:
+    chg = quote_change_pct(stock)
+    skip_min_chg = float(intra.get("skip_strength_min_day_chg", 5.0))
+    strong_day = (
+        chg is not None
+        and chg >= skip_min_chg
+        and vwap
+        and last >= vwap
+    )
+    flow = stock.get("个股资金流") or {}
+    net = _parse_amount_wan(flow.get("净额")) if isinstance(flow, dict) else None
+    min_delta = float(intra.get("fund_improve_min_delta_wan", 50.0))
+    net_ok = net is not None and net > 0
+    improving = net_flow_improving(code, min_delta_wan=min_delta, current_net=net)
+    if strong_day:
+        return True, "当日强势"
+    if net_ok:
+        return True, "净流入"
+    if improving:
+        return True, "流出收敛"
+    if net is not None and net < 0:
+        return False, "净流出且未见改善"
+    return False, "分时强势证据不足"
 
 
-def _momentum_stack_cfg(intra: dict[str, Any]) -> dict[str, Any]:
-    ms = dict(intra.get("momentum_stack") or {})
-    ms.setdefault("enabled", True)
-    ms.setdefault("endpoint_slope_minutes", intra.get("slope_lookback_minutes", 5))
-    ms.setdefault("min_endpoint_slope_pct", intra.get("min_slope_pct", 0.0))
-    ms.setdefault("slope_warmup_bars", 10)
-    ms.setdefault("min_endpoint_slope_pct_early", -0.05)
-    ms.setdefault("ols_slope_minutes", 5)
-    ms.setdefault("min_ols_slope_pct", 0.0)
-    ms.setdefault("vwap_slope_minutes", 5)
-    ms.setdefault("min_vwap_slope_pct", 0.0)
-    ms.setdefault("dual_short_minutes", 5)
-    ms.setdefault("dual_long_minutes", intra.get("lookback_minutes", 15))
-    ms.setdefault("min_dual_long_slope_pct", -0.10)
-    ms.setdefault("higher_lows_halves", 3)
-    ms.setdefault("require_volume_momentum", True)
-    ms.setdefault("volume_momentum_minutes", 6)
-    ms.setdefault("minute_momentum_relax_ratio", intra.get("minute_momentum_relax_ratio", 0.85))
-    return ms
-
-
-def _momentum_stack_ok(bars: list[dict], intra: dict[str, Any]) -> tuple[bool, str]:
-    """A–F 势头检查叠加：全部通过才允许买入。"""
-    ms = _momentum_stack_cfg(intra)
-    if not ms.get("enabled", True):
-        return True, ""
-
+def _momentum_group2_ok(bars: list[dict], intra: dict[str, Any], *, buy_kind: str) -> tuple[bool, str]:
+    mg = _momentum_groups_cfg(intra)
     if not bars:
         return False, "无分钟K"
-
-    warmup = max(0, int(ms.get("slope_warmup_bars", 10)))
+    n = max(2, int(mg.get("slope_minutes", 5)))
+    warmup = max(0, int(mg.get("slope_warmup_bars", 10)))
     early = len(bars) < warmup
-    min_ep = float(
-        ms.get("min_endpoint_slope_pct_early", -0.05) if early else ms.get("min_endpoint_slope_pct", 0.0)
-    )
+    if buy_kind == BUY_KIND_PULLBACK:
+        min_ep = float(mg.get("pullback_min_endpoint_slope_pct", -0.15))
+        min_ols = float(mg.get("pullback_min_ols_slope_pct", -0.15))
+    elif early:
+        min_ep = float(mg.get("min_endpoint_slope_pct_early", -0.05))
+        min_ols = float(mg.get("min_ols_slope_pct", 0.0))
+    else:
+        min_ep = float(mg.get("min_endpoint_slope_pct", 0.0))
+        min_ols = float(mg.get("min_ols_slope_pct", 0.0))
 
-    # A 首尾斜率（5 分钟）
-    n_a = max(2, int(ms.get("endpoint_slope_minutes", 5)))
-    closes_a = [b["close"] for b in bars[-n_a:]]
-    slope_a = _minute_close_slope_pct(closes_a)
-    if slope_a is None:
-        return False, f"A:近{n_a}分钟K无效"
-    if slope_a < min_ep:
-        return False, f"A:近{n_a}分钟首尾斜率{slope_a:.2f}%(需≥{min_ep:.2f}%)"
-
-    # B OLS 回归斜率
-    n_b = max(2, int(ms.get("ols_slope_minutes", 5)))
-    closes_b = [b["close"] for b in bars[-n_b:]]
-    slope_b = _ols_slope_pct(closes_b)
-    min_b = float(ms.get("min_ols_slope_pct", 0.0))
-    if slope_b is None:
-        return False, f"B:近{n_b}分钟OLS无效"
-    if slope_b < min_b:
-        return False, f"B:近{n_b}分钟OLS斜率{slope_b:.2f}%(需≥{min_b:.2f}%)"
-
-    # C VWAP 斜率
-    n_c = max(2, int(ms.get("vwap_slope_minutes", 5)))
-    slope_c = _vwap_window_slope_pct(bars, n_c)
-    min_c = float(ms.get("min_vwap_slope_pct", 0.0))
-    if slope_c is None:
-        return False, f"C:近{n_c}分钟VWAP斜率无效"
-    if slope_c < min_c:
-        return False, f"C:近{n_c}分钟VWAP斜率{slope_c:.2f}%(需≥{min_c:.2f}%)"
-
-    # D 双窗口：短端 ≥ min_ep，长端 ≥ min_dual_long
-    n_d_short = max(2, int(ms.get("dual_short_minutes", 5)))
-    n_d_long = max(n_d_short, int(ms.get("dual_long_minutes", 15)))
-    slope_d_long = _minute_close_slope_pct([b["close"] for b in bars[-n_d_long:]])
-    min_d_long = float(ms.get("min_dual_long_slope_pct", -0.10))
-    if slope_d_long is None:
-        return False, f"D:近{n_d_long}分钟斜率无效"
-    if slope_d_long < min_d_long:
-        return False, f"D:近{n_d_long}分钟斜率{slope_d_long:.2f}%(需≥{min_d_long:.2f}%)"
-
-    # E 抬升低点
-    half = max(2, int(ms.get("higher_lows_halves", 3)))
-    closes_all = [b["close"] for b in bars]
-    if not _higher_lows_ok(closes_all, half=half):
-        return False, f"E:近{half * 2}分钟未形成抬升低点"
-
-    # F 量价动能后半段强于前半段
-    if ms.get("require_volume_momentum", True):
-        n_f = max(6, int(ms.get("volume_momentum_minutes", 6)))
-        recent_f = bars[-n_f:]
-        relax = float(ms.get("minute_momentum_relax_ratio", 0.85))
-        if not _minute_momentum_improving(recent_f, relax):
-            return False, "F:近端量价动能未改善"
-
-    return True, "势头A–F通过"
+    closes = [b["close"] for b in bars[-n:]]
+    slope_ep = _minute_close_slope_pct(closes)
+    slope_ols = _ols_slope_pct(closes)
+    if slope_ep is not None and slope_ep >= min_ep:
+        return True, f"近{n}分钟首尾斜率{slope_ep:.2f}%"
+    if slope_ols is not None and slope_ols >= min_ols:
+        return True, f"近{n}分钟OLS斜率{slope_ols:.2f}%"
+    ep_s = f"{slope_ep:.2f}" if slope_ep is not None else "—"
+    ols_s = f"{slope_ols:.2f}" if slope_ols is not None else "—"
+    return False, f"动量不足(首尾{ep_s}% OLS{ols_s}%, 需≥{min_ep:.2f}/{min_ols:.2f}%)"
 
 
-def _upward_minute_slope_ok(recent: list[dict], *, lookback: int, min_slope_pct: float) -> tuple[bool, str]:
-    """近 lookback 根分钟 K 收盘斜率须 ≥ min_slope_pct（0=不能整体下行）。"""
-    if len(recent) < lookback:
-        return False, f"分钟K不足{lookback}根"
-    closes = [b["close"] for b in recent[-lookback:]]
-    slope = _minute_close_slope_pct(closes)
-    if slope is None:
-        return False, "分钟收盘无效"
-    if slope < min_slope_pct:
-        return False, f"近{lookback}分钟斜率{slope:.2f}%(需≥{min_slope_pct:.2f}%)"
-    return True, f"近{lookback}分钟斜率{slope:.2f}%"
+def _drawdown_from_high_cfg(intra: dict[str, Any]) -> dict[str, Any]:
+    raw = intra.get("drawdown_from_high")
+    if isinstance(raw, (int, float)):
+        return {"default_pct": float(raw), "require_below_avg": True}
+    return dict(raw or {})
+
+
+def resolve_max_drop_from_high_pct(
+    intra: dict[str, Any],
+    *,
+    buy_kind: str = "",
+    day_chg: float | None = None,
+) -> float:
+    """按买点类型 / 当日强度分档解析距日内高点回撤上限(%)。"""
+    dd = _drawdown_from_high_cfg(intra)
+    by_kind = dd.get("by_buy_kind") or {}
+    pct = float(by_kind.get(buy_kind) if buy_kind in by_kind else dd.get("default_pct", 3.0))
+    strong_chg = float(dd.get("strong_day_chg_pct", 5.0))
+    if day_chg is not None and day_chg >= strong_chg:
+        pct = max(pct, float(dd.get("strong_day_pct", 5.0)))
+    return pct
+
+
+def _high_drawdown_blocks_buy(
+    *,
+    last: float,
+    high: float,
+    vwap: float | None,
+    avg_margin_pct: float,
+    intra: dict[str, Any],
+    buy_kind: str,
+    day_chg: float | None,
+) -> tuple[bool, str]:
+    dd = _drawdown_from_high_cfg(intra)
+    max_dd = resolve_max_drop_from_high_pct(intra, buy_kind=buy_kind, day_chg=day_chg)
+    drawdown = (last - high) / high * 100
+    if drawdown >= -max_dd:
+        return False, ""
+    require_below = bool(dd.get("require_below_avg", True))
+    if require_below and vwap:
+        floor = vwap * (1 + avg_margin_pct / 100)
+        if last >= floor:
+            return False, ""
+    return True, f"距日内高点回撤{abs(drawdown):.2f}%过大(上限{max_dd:.1f}%)"
 
 
 def _intraday_cfg(buy_cfg: dict[str, Any] | None) -> dict[str, Any]:
@@ -258,11 +230,52 @@ def _intraday_cfg(buy_cfg: dict[str, Any] | None) -> dict[str, Any]:
     return intra
 
 
+def _momentum_groups_ok(
+    stock: dict,
+    bars: list[dict],
+    intra: dict[str, Any],
+    *,
+    code: str,
+    last: float,
+    vwap: float | None,
+    buy_kind: str,
+) -> tuple[bool, str]:
+    """三组确认：组间 AND，组内 OR；上升途中有强势日可 1+(2|3)。"""
+    mg = _momentum_groups_cfg(intra)
+    if not mg.get("enabled", True):
+        return True, ""
+
+    ok2, note2 = _momentum_group2_ok(bars, intra, buy_kind=buy_kind)
+    ok3, note3 = _strength_signal_ok(stock, intra, code=code, last=last, vwap=vwap)
+
+    chg = quote_change_pct(stock)
+    relax = (
+        buy_kind == BUY_KIND_ASCENT
+        and mg.get("ascent_relax_on_strong_day", True)
+        and chg is not None
+        and chg >= float(mg.get("ascent_relax_min_day_chg", 5.0))
+    )
+    if relax:
+        if ok2 or ok3:
+            part = note2 if ok2 else note3
+            return True, f"强势日放宽({part})"
+        return False, f"强势日仍须动量或资金({note2}; {note3})"
+
+    if not ok2:
+        return False, note2
+    if not ok3:
+        return False, note3
+    return True, f"{note2}; {note3}"
+
+
 def intraday_allows_buy(
     stock: dict,
     buy_cfg: dict[str, Any] | None = None,
+    *,
+    buy_kind: str = "",
+    lightweight: bool = False,
 ) -> tuple[bool, str]:
-    """盘中买入前置：均价上方占比 + 近端走势 + 资金改善（可负但收敛）。"""
+    """盘中买入前置：位置 + 动量/资金分组 + 分档回撤红线。"""
     intra = _intraday_cfg(buy_cfg)
     if not intra.get("enabled", True):
         return True, ""
@@ -276,74 +289,58 @@ def intraday_allows_buy(
     bars = _session_minute_bars(stock)
     avg = quote_avg_price(stock) or _vwap(bars)
     vwap = avg or _vwap(bars)
+    margin = float(intra.get("avg_margin_pct", 0.0))
+    chg = quote_change_pct(stock)
 
-    # --- 1. 现价须在分时均价上方 ---
+    # --- 组1：现价须在分时均价上方 ---
     if intra.get("require_above_avg", True):
-        margin = float(intra.get("avg_margin_pct", 0.0))
         floor = vwap * (1 + margin / 100) if vwap else None
         if floor is None or last < floor:
             avg_s = f"{vwap:.2f}" if vwap else "—"
             return False, f"现价{last:.2f}低于分时均价{avg_s}"
 
-    lookback = max(3, int(intra.get("lookback_minutes", 15)))
-    recent = bars[-lookback:] if bars else []
+    if lightweight:
+        high = to_float(pk.get("最高"))
+        if high and high > 0:
+            blocked, msg = _high_drawdown_blocks_buy(
+                last=last,
+                high=high,
+                vwap=vwap,
+                avg_margin_pct=margin,
+                intra=intra,
+                buy_kind=buy_kind,
+                day_chg=chg,
+            )
+            if blocked:
+                return False, msg
+        return True, "分时轻量再验通过"
 
-    # --- 2. 势头 A–F 叠加（硬门槛，不可豁免） ---
-    ok_stack, stack_note = _momentum_stack_ok(bars, intra)
-    if not ok_stack:
-        return False, stack_note
+    ok_groups, group_note = _momentum_groups_ok(
+        stock,
+        bars,
+        intra,
+        code=code,
+        last=last,
+        vwap=vwap,
+        buy_kind=buy_kind,
+    )
+    if not ok_groups:
+        return False, group_note
 
-    # --- 3. 近 N 分钟多数收在 VWAP 上方 ---
-    min_above_ratio = float(intra.get("min_above_vwap_ratio", 0.65))
-    if vwap and len(recent) >= 5:
-        ratio = _above_vwap_ratio(bars, vwap, lookback)
-        if ratio < min_above_ratio:
-            return False, f"分时仅{ratio:.0%}在均价上方(需≥{min_above_ratio:.0%})"
-
-    # --- 4. 近 N 分钟走势不能持续下行 ---
-    if len(recent) >= 3:
-        closes = [b["close"] for b in recent]
-        drop_pct = (closes[-1] - closes[0]) / closes[0] * 100
-        max_drop = float(intra.get("max_recent_drop_pct", 0.35))
-        if drop_pct < -max_drop:
-            return False, f"近{len(recent)}分钟走势下行({drop_pct:.2f}%)"
-
-        down_steps = sum(1 for i in range(1, len(closes)) if closes[i] < closes[i - 1])
-        max_down_ratio = float(intra.get("max_down_bars_ratio", 0.55))
-        if down_steps / (len(closes) - 1) > max_down_ratio:
-            return False, f"近{len(recent)}分钟跌多涨少"
-
-    # --- 5. 资金/动能：强势豁免 OR 净流入改善 OR 分钟动能改善 OR 当前净流入 ---
-    if intra.get("require_strength_signal", True):
-        chg = quote_change_pct(stock)
-        skip_min_chg = float(intra.get("skip_strength_min_day_chg", 5.0))
-        strong_day = (
-            chg is not None
-            and chg >= skip_min_chg
-            and vwap
-            and last >= vwap
-        )
-
-        flow = stock.get("个股资金流") or {}
-        net = _parse_amount_wan(flow.get("净额")) if isinstance(flow, dict) else None
-        min_delta = float(intra.get("fund_improve_min_delta_wan", 50.0))
-        net_ok = net is not None and net > 0
-        improving = net_flow_improving(code, min_delta_wan=min_delta, current_net=net)
-
-        if not (strong_day or net_ok or improving):
-            if net is not None and net < 0 and not improving:
-                return False, "净流出且未见改善"
-            return False, "分时强势证据不足"
-
-    # --- 6. 日内走弱：距高点回撤 / 当日涨幅 ---
     high = to_float(pk.get("最高"))
     if high and high > 0:
-        dd = (last - high) / high * 100
-        max_dd = float(intra.get("max_drop_from_high_pct", 2.5))
-        if dd < -max_dd:
-            return False, f"距日内高点回撤{abs(dd):.2f}%过大"
+        blocked, msg = _high_drawdown_blocks_buy(
+            last=last,
+            high=high,
+            vwap=vwap,
+            avg_margin_pct=margin,
+            intra=intra,
+            buy_kind=buy_kind,
+            day_chg=chg,
+        )
+        if blocked:
+            return False, msg
 
-    chg = quote_change_pct(stock)
     min_chg = float(intra.get("min_day_change_pct", -1.5))
     if chg is not None and chg < min_chg:
         return False, f"当日涨幅{chg:.2f}%偏弱"
@@ -355,7 +352,7 @@ def intraday_allows_buy(
         if net is not None and net < -hard:
             return False, f"当日净流出{abs(net):.0f}万过大"
 
-    return True, "分时强势"
+    return True, group_note or "分时确认通过"
 
 
 def _intraday_weakness_cfg(sell_cfg: dict[str, Any] | None) -> dict[str, Any]:

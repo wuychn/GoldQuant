@@ -1,7 +1,8 @@
-"""买入阈值与追高线：强市动态放宽。"""
+"""买入阈值与追高线：强市 / 买点类型动态放宽。"""
 
 from __future__ import annotations
 
+from quant.constants import BUY_KIND_ASCENT
 from quant.scoring.context import index_change, profit_effect
 
 
@@ -39,9 +40,21 @@ def effective_buy_threshold(base: float, payload: dict, buy_cfg: dict) -> float:
     return base
 
 
-def effective_max_change_pct(buy_cfg: dict, payload: dict) -> float:
-    base = float(buy_cfg.get("max_change_pct", 8.0))
+def effective_max_change_pct(
+    buy_cfg: dict,
+    payload: dict,
+    *,
+    buy_kind: str = "",
+    score: float = 0.0,
+) -> float:
+    by_kind = buy_cfg.get("max_change_by_kind") or {}
+    if buy_kind and buy_kind in by_kind:
+        base = float(by_kind[buy_kind])
+    else:
+        base = float(buy_cfg.get("max_change_pct", 8.0))
     sm = buy_cfg.get("strong_market") or {}
     if is_strong_market(payload, buy_cfg):
-        return float(sm.get("max_change_pct", base))
+        base = max(base, float(sm.get("max_change_pct", base)))
+    if buy_kind == BUY_KIND_ASCENT and score >= float(buy_cfg.get("ascent_high_score", 78)):
+        base = max(base, float(buy_cfg.get("ascent_high_score_max_chg", 9.5)))
     return base

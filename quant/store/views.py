@@ -11,15 +11,16 @@ def render_optional_md(rows: list[dict]) -> str:
         lines.append("（空）")
         return "\n".join(lines) + "\n"
     for i, r in enumerate(rows, 1):
+        reason = str(r.get("加入自选原因") or "").strip()
+        if reason:
+            lines.append(f"{i}. {reason}")
+            continue
         name = r.get("股票名称", "")
         code = r.get("股票代码", "")
         tag = r.get("战法", STRATEGY_NAME)
         score = r.get("评分")
-        reason = r.get("加入自选原因", "")
         score_part = f" 评分{score}" if score is not None else ""
         lines.append(f"{i}. {name}（{code}）[{tag}]{score_part}")
-        if reason:
-            lines.append(f"   {reason}")
     return "\n".join(lines) + "\n"
 
 

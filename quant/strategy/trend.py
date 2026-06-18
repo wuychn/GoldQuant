@@ -57,9 +57,6 @@ def quantify_trend(
     if not last or last <= 0:
         return PHASE_DOWN, "无有效现价", detail
 
-    if is_trend_choppy(stock, c):
-        return PHASE_DOWN, "震荡无序", detail
-
     ma20_floor = float(c.get("trend_ma20_floor", 0.985))
     ma5_break = float(c.get("ma5_break_ratio", 0.995))
 
@@ -106,6 +103,9 @@ def quantify_trend(
     if ok_trend:
         detail["趋势有效"] = True
         return PHASE_PREPARING_UP, note_t, detail
+
+    if is_trend_choppy(stock, c):
+        return PHASE_DOWN, "震荡无序", detail
 
     return PHASE_WEAK, "未满足主升趋势", detail
 

@@ -18,6 +18,7 @@ from quant.scoring.tech_indicators import (
     mas_from_stock,
     quote_avg_price,
     quote_change_pct,
+    quote_last_price,
     quote_open_price,
 )
 
@@ -81,10 +82,58 @@ def is_spread_accelerating(closes: list[float], cfg: dict[str, Any]) -> bool:
     return spread_now >= min_spread and spread_now >= spread_prev + accel_delta
 
 
+def _live_end_price(stock: dict, closes: list[float]) -> float | None:
+    """趋势判定终点价：盘口现价优先，否则最近一根日 K 收盘。"""
+    live = quote_last_price(stock)
+    if live is not None and live > 0:
+        return live
+    return closes[-1] if closes else None
+
+
+def _main_wave_choppy_exempt(
+    stock: dict,
+    cfg: dict[str, Any],
+    *,
+    end: float,
+    closes: list[float],
+    net: float,
+    recent_net: float,
+) -> bool:
+    """明确主升浪/突破结构时不判震荡无序（避免 path/flip 误杀）。"""
+    m = _mas(stock)
+    if not end or end <= 0:
+        return False
+
+    strong_net = float(cfg.get("choppy_strong_net_pct", 12.0))
+    strong_recent = float(cfg.get("choppy_strong_recent_net_pct", 8.0))
+    recent_min = float(cfg.get("choppy_recent_min_net_pct", 3.0))
+    if net >= strong_net or recent_net >= strong_recent:
+        return True
+
+    if ma_bull_stack(m) and recent_net >= recent_min:
+        return True
+    if ma_bull_stack(m) and is_spread_accelerating(closes, cfg):
+        return True
+
+    high_days = int(cfg.get("choppy_high_break_days", 60))
+    high_ratio = float(cfg.get("choppy_high_break_ratio", 0.97))
+    tail = closes[-min(len(closes), high_days) :] if closes else []
+    if tail and end >= max(tail) * high_ratio and ma_bull_stack(m) and recent_net > 0:
+        return True
+
+    day_chg = quote_change_pct(stock)
+    min_day = float(cfg.get("choppy_strong_day_chg_pct", 5.0))
+    ma5 = m.get("ma5")
+    if day_chg is not None and day_chg >= min_day and ma_bull_stack(m) and ma5 and end >= ma5:
+        return True
+
+    return False
+
+
 def is_trend_choppy(stock: dict, cfg: dict[str, Any]) -> bool:
     """几个月上蹿下跳：路径远大于净涨幅，或涨跌频繁反转。
 
-    长期横盘后刚突破：若均线多头且近 N 日净涨幅达标，不因 60 日低 net 误杀。
+    长期横盘后刚突破、或盘中主升：纳入现价与主升浪豁免，避免误杀。
     K 线不足 choppy_lookback_days 时，用 min(len, lookback) 窗口仍计算（至少 20 根）。
     """
     lookback_cfg = int(cfg.get("choppy_lookback_days", 60))
@@ -92,7 +141,6 @@ def is_trend_choppy(stock: dict, cfg: dict[str, Any]) -> bool:
     max_flip_rate = float(cfg.get("choppy_flip_rate", 0.42))
     min_net_pct = float(cfg.get("choppy_min_net_pct", 5.0))
     recent_days = int(cfg.get("choppy_recent_days", 20))
-    recent_min_net = float(cfg.get("choppy_recent_min_net_pct", 3.0))
 
     changes = hist_daily_changes(stock.get("历史行情") or [])
     closes = hist_closes(stock.get("历史行情") or [])
@@ -103,24 +151,31 @@ def is_trend_choppy(stock: dict, cfg: dict[str, Any]) -> bool:
     if effective < 20:
         return False
 
+    end = _live_end_price(stock, closes)
+    if end is None or end <= 0:
+        return False
+
     window = changes[-effective:]
     start = closes[-effective]
-    end = closes[-1]
     if start <= 0:
         return False
     net = (end - start) / start * 100
 
-    low_net_choppy = False
+    recent_net = 0.0
+    if len(closes) >= recent_days and closes[-recent_days] > 0:
+        recent_net = (end - closes[-recent_days]) / closes[-recent_days] * 100
+
+    if _main_wave_choppy_exempt(
+        stock,
+        cfg,
+        end=end,
+        closes=closes,
+        net=net,
+        recent_net=recent_net,
+    ):
+        return False
+
     if net < min_net_pct:
-        m = _mas(stock)
-        recent_net = 0.0
-        if len(closes) >= recent_days and closes[-recent_days] > 0:
-            recent_net = (closes[-1] - closes[-recent_days]) / closes[-recent_days] * 100
-        if ma_bull_stack(m) and recent_net >= recent_min_net:
-            low_net_choppy = False
-        else:
-            low_net_choppy = True
-    if low_net_choppy:
         return True
 
     path = sum(abs(c) for c in window)

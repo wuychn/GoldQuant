@@ -1,4 +1,4 @@
-"""个股资金流维度：净流入加分；净流出按占流通市值比例扣分；连续流出加重。"""
+"""个股资金流维度：净流入为正分；净流出为负分，流出占比越大、连续流出越久负分越大。"""
 
 from __future__ import annotations
 
@@ -48,7 +48,6 @@ def _daily_net_yuan(row: dict) -> float | None:
             return float(v)
         wan = _parse_amount(v)
         if wan is not None:
-            # 带「万」字样视为万元
             if "万" in str(v):
                 return wan * 10_000.0
             return wan
@@ -70,37 +69,47 @@ def _consecutive_outflow_days(daily: list[dict]) -> int:
     return streak
 
 
-def _score_outflow_by_ratio(
+def _outflow_ratio_penalty_magnitude(
     ratio_pct: float,
     *,
-    neutral: float,
-    mild_pct: float,
     heavy_pct: float,
-    min_score: float,
+    max_penalty: float,
 ) -> float:
-    """ratio_pct = |净流出| / 流通市值 × 100。"""
-    if ratio_pct <= 0:
-        return neutral
-    if ratio_pct <= mild_pct:
-        t = ratio_pct / mild_pct if mild_pct > 0 else 1.0
-        return neutral - t * (neutral - 40.0)
-    if ratio_pct >= heavy_pct:
-        return min_score
-    span = heavy_pct - mild_pct
-    t = (ratio_pct - mild_pct) / span if span > 0 else 1.0
-    return 40.0 - t * (40.0 - min_score)
+    """按 |净流出|/流通市值 计算附加惩罚幅度（正数，计分时再取负）。"""
+    if ratio_pct <= 0 or max_penalty <= 0:
+        return 0.0
+    if heavy_pct <= 0:
+        return max_penalty
+    t = min(1.0, ratio_pct / heavy_pct)
+    return t * max_penalty
+
+
+def _streak_penalty_magnitude(
+    streak: int,
+    *,
+    per_day: float,
+    streak_max: float,
+) -> float:
+    if streak <= 0 or per_day <= 0:
+        return 0.0
+    return min(streak_max, streak * per_day)
 
 
 def score_stock_fund_flow(stock: dict, *, cfg: dict[str, Any] | None = None) -> tuple[float, dict[str, Any]]:
     c = cfg or (load_scoring_config().get("dimensions") or {}).get("stock_fund_flow") or {}
-    neutral = float(c.get("neutral_score", 50))
+    neutral = float(c.get("neutral_score", 0))
     inflow_score = float(c.get("inflow_score", 80))
-    min_score = float(c.get("min_score", 5))
-    mild_pct = float(c.get("outflow_mild_ratio_pct", 0.05))
-    heavy_pct = float(c.get("outflow_heavy_ratio_pct", 0.35))
-    streak_penalty = float(c.get("streak_penalty_per_day", 8))
-    streak_max = float(c.get("streak_max_penalty", 24))
+    inflow_max = float(c.get("inflow_max_score", 95))
+    inflow_boost_cap = float(c.get("inflow_boost_cap", 15))
+    mild_pct = float(c.get("outflow_mild_ratio_pct", 0.025))
+    heavy_pct = float(c.get("outflow_heavy_ratio_pct", 0.12))
+    any_outflow_penalty = float(c.get("outflow_any_penalty", 12))
+    ratio_penalty_max = float(c.get("outflow_ratio_penalty_max", 75))
+    streak_penalty = float(c.get("streak_penalty_per_day", 15))
+    streak_max = float(c.get("streak_max_penalty", 60))
     streak_lookback = max(1, int(c.get("streak_lookback_days", 5)))
+    score_min = float(c.get("score_min", -100))
+    score_max = float(c.get("score_max", 95))
 
     flow = stock.get("个股资金流") or {}
     if not isinstance(flow, dict) or not flow:
@@ -113,40 +122,44 @@ def score_stock_fund_flow(stock: dict, *, cfg: dict[str, Any] | None = None) -> 
     float_mv = _float_market_cap_yuan(stock)
     ratio_pct = abs(net_yuan) / float_mv * 100 if float_mv and net_yuan < 0 else 0.0
 
+    ratio_mag = 0.0
+    streak_mag = 0.0
+    streak = 0
+
     if net_yuan > 0:
-        base = inflow_score
-        if float_mv and float_mv > 0:
+        score = inflow_score
+        if float_mv and float_mv > 0 and mild_pct > 0:
             inflow_ratio = net_yuan / float_mv * 100
-            boost = min(15.0, inflow_ratio / mild_pct * 5.0) if mild_pct > 0 else 0.0
-            base = min(95.0, inflow_score + boost)
-        score = base
+            boost = min(inflow_boost_cap, inflow_ratio / mild_pct * 5.0)
+            score = min(inflow_max, inflow_score + boost)
     elif net_yuan < 0:
-        score = _score_outflow_by_ratio(
+        daily_raw = stock.get("个股资金流日线") or []
+        daily = [r for r in daily_raw if isinstance(r, dict)][-streak_lookback:]
+        streak = _consecutive_outflow_days(daily) if daily else 1
+        ratio_mag = _outflow_ratio_penalty_magnitude(
             ratio_pct,
-            neutral=neutral,
-            mild_pct=mild_pct,
             heavy_pct=heavy_pct,
-            min_score=min_score,
+            max_penalty=ratio_penalty_max,
         )
+        streak_mag = _streak_penalty_magnitude(
+            streak,
+            per_day=streak_penalty,
+            streak_max=streak_max,
+        )
+        score = -(any_outflow_penalty + ratio_mag + streak_mag)
     else:
         score = neutral
 
-    daily_raw = stock.get("个股资金流日线") or []
-    daily = [r for r in daily_raw if isinstance(r, dict)][-streak_lookback:]
-    streak = _consecutive_outflow_days(daily) if daily else (1 if net_yuan < 0 else 0)
-    extra = 0.0
-    if streak > 1 and net_yuan < 0:
-        extra = min(streak_max, (streak - 1) * streak_penalty)
-        score -= extra
-
-    score = clamp(score, lo=min_score, hi=95.0)
+    score = clamp(score, lo=score_min, hi=score_max)
     detail = {
         "净额": round(net_yuan / 10_000.0, 2),
         "净额单位": "万元",
         "流通市值": float_mv,
         "流出占流通市值": round(ratio_pct, 4) if ratio_pct else 0.0,
+        "流出基础惩罚": round(any_outflow_penalty, 2) if net_yuan < 0 else 0.0,
+        "流出占比惩罚": round(ratio_mag, 2) if net_yuan < 0 else 0.0,
         "连续流出天数": streak,
-        "连续流出加扣": round(extra, 2),
+        "连续流出惩罚": round(streak_mag, 2) if net_yuan < 0 else 0.0,
     }
     return score, detail
 

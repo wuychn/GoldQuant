@@ -72,24 +72,30 @@ scoring:
       ma_diverge_weight: 0.35     # 均线发散向上子分权重
       weekly_monthly_weight: 0.25 # 周/月线向上子分权重
       min_ma_spread_pct: 0.8      # MA5 相对 MA20 最小发散(%)
-    stock_fund_flow:        # 个股资金流
+    stock_fund_flow:        # 个股资金流：流入为正分，流出为负分
+      enabled: true
+      weight: 11
+      neutral_score: 0
+      inflow_score: 80
+      inflow_max_score: 95
+      inflow_boost_cap: 15
+      outflow_any_penalty: 12        # 任意当日净流出基础惩罚（正数幅度，维度分为负）
+      outflow_mild_ratio_pct: 0.025  # 流入加分 / 占比惩罚参考档
+      outflow_heavy_ratio_pct: 0.12  # |净流出|/流通市值(%) 达此档占比惩罚触顶
+      outflow_ratio_penalty_max: 75  # 按占流通比附加惩罚上限（正数幅度）
+      streak_lookback_days: 5
+      streak_penalty_per_day: 15     # 连续流出：每多 1 日附加惩罚（含当日计 1 天）
+      streak_max_penalty: 60
+      score_min: -100
+      score_max: 95
+    day_bar_shape:          # 当日收阴、冲高回落（晚间加自选：收阴加重惩罚）
       enabled: true
       weight: 8
-      neutral_score: 50
-      inflow_score: 80
-      min_score: 5
-      outflow_mild_ratio_pct: 0.05   # |净流出|/流通市值(%) 达此档开始明显扣分
-      outflow_heavy_ratio_pct: 0.35 # 达此档接近最低分
-      streak_lookback_days: 5
-      streak_penalty_per_day: 8      # 连续流出：第2日起每日额外扣分
-      streak_max_penalty: 24
-    day_bar_shape:          # 当日收阴、冲高回落
-      enabled: true
-      weight: 5
-      base_score: 85
-      min_score: 15
-      bearish_penalty_max: 22
-      bearish_penalty_scale: 2.5
+      base_score: 82
+      min_score: 8
+      bearish_penalty_min: 15        # 任意收阴至少扣（维度内）
+      bearish_penalty_max: 38
+      bearish_penalty_scale: 4.5
       spike_fade_min_pct: 1.5
       spike_fade_penalty_max: 18
       spike_fade_penalty_scale: 2.0
@@ -149,11 +155,9 @@ gates:
     exclude_st: true                # 排除 ST
     min_listing_days: 60            # 最短上市天数（预留）
 
-  # 全局熔断：指数大跌、连续缩量
+  # 全局熔断：指数大跌
   circuit_breaker:
     index_drop_pct: -2.0            # 上证涨跌幅 ≤ 此值 → 禁止新开仓
-    shrink_volume_days: 3           # 连续缩量观察天数
-    shrink_volume_ratio: 0.8        # 末量/首量 < 此比例视为缩量
 
   daily_loss_limit_pct: -3.0        # 当日已实现盈亏占总资产 ≤ 此值 → 禁止新开仓
   stoploss_cooldown_days: 3         # 止损卖出后 N 日内不再买同代码
@@ -179,10 +183,10 @@ gates:
         persistence_minutes: 10
         min_consecutive_runs: 2
       上升途中:
-        persistence_minutes: 10
-        min_consecutive_runs: 2
+        persistence_minutes: 5
+        min_consecutive_runs: 1
       回调企稳:
-        persistence_minutes: 10
+        persistence_minutes: 15
         min_consecutive_runs: 2
       # 破5日线 / 趋势衰竭 / 评分走弱：卖出侧仍偏长确认
       破5日线:
@@ -263,6 +267,11 @@ gates:
     choppy_min_net_pct: 5.0         # 回看期内净涨幅低于此视为无趋势
     choppy_recent_days: 20          # 突破豁免：近 N 日净涨幅
     choppy_recent_min_net_pct: 3.0  # 突破豁免：近 N 日净涨幅下限（%）
+    choppy_strong_net_pct: 12.0     # 回看净涨幅≥此值 → 主升浪，不判震荡无序
+    choppy_strong_recent_net_pct: 8.0  # 近 N 日净涨幅≥此值 → 主升浪豁免
+    choppy_strong_day_chg_pct: 5.0  # 当日涨幅≥此值且均线多头 → 豁免（盘中用现价）
+    choppy_high_break_days: 60      # 现价接近 N 日高点 + 多头 → 豁免
+    choppy_high_break_ratio: 0.97
     trend_ma20_floor: 0.985         # 趋势有效：现价不低于 MA20×此值
     trend_peak_spread_days: 15      # 近 N 日峰值发散（回调期 spread 可收窄）
     pullback_spread_ratio: 0.55     # 回调期允许的发散度下限 = min_spread×此值
@@ -292,7 +301,12 @@ gates:
     pre_market:
       max_change_pct: 8.0           # 盘前模式允许的最大涨幅(%)
     during_market:
-      max_change_pct: 8.0           # 盘中模式允许的最大涨幅(%)
+      max_change_pct: 8.0           # 盘中默认涨幅上限(%)
+      max_change_by_kind:
+        回调企稳: 8.0
+        上升途中: 9.5
+      ascent_high_score: 78           # 上升途中且评分≥此值可再放宽
+      ascent_high_score_max_chg: 10.0
       strong_market:                # 强市动态放宽（独立于仓位档位 infer_regime）
         enabled: true
         index_min_pct: 1.0          # 上证涨幅 ≥ 此值
@@ -304,33 +318,29 @@ gates:
         enabled: true
         require_above_avg: true
         avg_margin_pct: 0.0
-        lookback_minutes: 15
-        min_above_vwap_ratio: 0.65
-        max_recent_drop_pct: 0.35
-        max_down_bars_ratio: 0.55
-        require_strength_signal: true
         skip_strength_min_day_chg: 5.0
         fund_improve_min_delta_wan: 50
-        max_drop_from_high_pct: 2.5
         min_day_change_pct: -1.5
         hard_net_outflow_wan: 8000
-        momentum_stack:               # A–F 势头叠加（全部通过）
+        drawdown_from_high:           # 距日内高点回撤上限(%)；非写死，按买点/强度分档
+          default_pct: 3.0
+          by_buy_kind:
+            回调企稳: 3.0
+            上升途中: 4.0
+          strong_day_chg_pct: 5.0     # 当日涨幅≥此值时用 strong_day_pct
+          strong_day_pct: 5.0
+          require_below_avg: true     # true=仅「回撤超限且跌破均价」才拒买
+        momentum_groups:              # 三组：组间 AND，组内 OR
           enabled: true
-          endpoint_slope_minutes: 5   # A 首尾斜率
+          slope_minutes: 5
+          slope_warmup_bars: 10
           min_endpoint_slope_pct: 0.0
-          slope_warmup_bars: 10       # A 开盘前 N 根放宽
           min_endpoint_slope_pct_early: -0.05
-          ols_slope_minutes: 5        # B OLS 回归斜率
           min_ols_slope_pct: 0.0
-          vwap_slope_minutes: 5       # C VWAP 斜率
-          min_vwap_slope_pct: 0.0
-          dual_short_minutes: 5       # D 双窗口（短端含于 A）
-          dual_long_minutes: 15
-          min_dual_long_slope_pct: -0.10
-          higher_lows_halves: 3       # E 近3 vs 前3 抬升低点
-          require_volume_momentum: true  # F 量价后半段强于前半段
-          volume_momentum_minutes: 6
-          minute_momentum_relax_ratio: 0.85
+          pullback_min_endpoint_slope_pct: -0.15
+          pullback_min_ols_slope_pct: -0.15
+          ascent_relax_on_strong_day: true   # 上升途中+强势日：组1 + (动量|资金)
+          ascent_relax_min_day_chg: 5.0
 
   # 卖出：止损 + 日内走弱 + 神奇2点30 最终确认
   sell:

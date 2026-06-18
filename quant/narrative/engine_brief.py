@@ -15,7 +15,7 @@ from quant.narrative.history_context import (
 )
 from quant.narrative.stock_lines import (
     format_optional_performance_lines,
-    format_score_bullet,
+    format_watchlist_reason_bullet,
     name_code_label,
     stock_code,
     stock_name,
@@ -213,7 +213,7 @@ def build_engine_brief(
             lines.append("自选股表现范围（不含本轮新入选）：")
             if pre_existing:
                 for r in pre_existing:
-                    lines.append(format_score_bullet(r))
+                    lines.append(format_watchlist_reason_bullet(r))
             else:
                 lines.append("· 暂无")
             if watchlist_added:

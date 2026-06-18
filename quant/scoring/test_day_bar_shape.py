@@ -32,7 +32,7 @@ class DayBarShapeTests(unittest.TestCase):
         s, d = score_day_bar_shape(stock)
         self.assertFalse(d.get("收阴"))
         self.assertFalse(d.get("冲高回落"))
-        self.assertGreaterEqual(s, 84)
+        self.assertGreaterEqual(s, 81)
 
 
 if __name__ == "__main__":

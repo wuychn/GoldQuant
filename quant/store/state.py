@@ -135,17 +135,83 @@ def get_holdings() -> list[dict]:
     return read_jsonl(state_file("holding.jsonl"))
 
 
+_HOLDING_META_KEYS = (
+    "股票代码",
+    "股票名称",
+    "买入价",
+    "成本价",
+    "成本",
+    "买入时间",
+    "买入原因",
+    "买入类型",
+    "战法",
+    "持仓股数",
+    "股数",
+)
+
+
+def _holding_cost_price(row: dict) -> float | None:
+    for key in ("买入价", "成本价", "成本"):
+        try:
+            v = float(row.get(key) or 0)
+        except (TypeError, ValueError):
+            continue
+        if v > 0:
+            return v
+    return None
+
+
+def _holding_quantity(row: dict) -> int:
+    for key in ("持仓股数", "股数"):
+        try:
+            q = int(float(row.get(key) or 0))
+        except (TypeError, ValueError):
+            continue
+        if q > 0:
+            return q
+    return 0
+
+
+def merge_holding_meta(enriched: dict, state_row: dict) -> dict:
+    """行情 enrich 行叠加 state 持仓元数据（成本、股数等）。"""
+    out = _apply_stock_key_aliases(dict(enriched))
+    src = _apply_stock_key_aliases(state_row)
+    for key in _HOLDING_META_KEYS:
+        val = src.get(key)
+        if val not in (None, ""):
+            out[key] = val
+    cost = _holding_cost_price(src)
+    if cost is not None:
+        out["买入价"] = cost
+    qty = _holding_quantity(src)
+    if qty > 0:
+        out["持仓股数"] = qty
+    return out
+
+
 def resolve_payload_holdings(payload: dict | None = None) -> list[dict]:
-    """持仓列表：优先 payload「持仓股」，为空则读 state/holding.jsonl。"""
-    if payload:
-        rows = payload.get("持仓股")
-        if isinstance(rows, list) and rows:
-            return _normalize_rows([r for r in rows if isinstance(r, dict)])
-    return get_holdings()
+    """持仓列表：payload 与 state 按代码合并，state 元数据优先。"""
+    payload_rows = _normalize_rows(
+        [r for r in ((payload or {}).get("持仓股") or []) if isinstance(r, dict)]
+    )
+    if not payload_rows:
+        return get_holdings()
+
+    state_by_code = {str(r.get("股票代码", "")).strip(): r for r in get_holdings()}
+    out: list[dict] = []
+    for row in payload_rows:
+        code = str(row.get("股票代码", "")).strip()
+        if not code:
+            continue
+        if code in state_by_code:
+            out.append(merge_holding_meta(row, state_by_code[code]))
+        else:
+            out.append(row)
+    return out
 
 
 def merge_payload_holdings(payload: dict) -> dict:
-    """保证 payload「持仓股」与 state/holding.jsonl 一致，避免推送误判空仓。"""
+    """保证 payload「持仓股」与 state/holding.jsonl 一致，并保留成本/股数。"""
     state_rows = get_holdings()
     raw = payload.get("持仓股")
     payload_rows = raw if isinstance(raw, list) else []
@@ -162,9 +228,13 @@ def merge_payload_holdings(payload: dict) -> dict:
         if code:
             by_code[code] = norm
 
-    for row in state_rows:
-        code = str(row.get("股票代码", "")).strip()
-        if code and code not in by_code:
+    state_by_code = {str(r.get("股票代码", "")).strip(): r for r in state_rows}
+    for code, row in state_by_code.items():
+        if not code:
+            continue
+        if code in by_code:
+            by_code[code] = merge_holding_meta(by_code[code], row)
+        else:
             by_code[code] = row
 
     if not by_code:

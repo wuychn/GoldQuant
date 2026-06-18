@@ -51,7 +51,6 @@ def _evaluate_buy_candidate(
     buy_cfg: dict,
     held: set[str],
     buy_threshold: float,
-    max_change_pct: float,
 ) -> _BuyCandidate | None:
     """单只自选股买入评估；未通过任一门禁则 None。"""
     code = str(stock.get("股票代码", "")).strip()
@@ -81,11 +80,17 @@ def _evaluate_buy_candidate(
         chg = float(pk.get("涨幅", 0) or 0)
     except (TypeError, ValueError):
         chg = 0
+    max_change_pct = effective_max_change_pct(
+        buy_cfg,
+        ctx.payload,
+        buy_kind=kind,
+        score=score.total,
+    )
     if chg >= max_change_pct:
         return None
 
     if mode == "during_market":
-        ok_intra, intra_note = intraday_allows_buy(stock, buy_cfg)
+        ok_intra, intra_note = intraday_allows_buy(stock, buy_cfg, buy_kind=kind)
         if not ok_intra:
             return None
     else:
@@ -111,8 +116,14 @@ def _stock_from_payload(payload: dict, code: str) -> dict | None:
     return None
 
 
-def verify_buy_signal_still_valid(code: str, ctx: ScoreContext, *, mode: str = "during_market") -> bool:
-    """持续确认成交前再验：趋势/评分/涨幅/分时须仍满足。"""
+def verify_buy_signal_still_valid(
+    code: str,
+    ctx: ScoreContext,
+    *,
+    mode: str = "during_market",
+    signal_kind: str = "",
+) -> bool:
+    """持续确认成交前再验：结构 + 涨幅 + 分时轻量确认。"""
     stock = _stock_from_payload(ctx.payload, code)
     if not stock:
         return False
@@ -120,25 +131,30 @@ def verify_buy_signal_still_valid(code: str, ctx: ScoreContext, *, mode: str = "
     buy_cfg = (load_gates_config().get("buy") or {}).get(
         "during_market" if mode == "during_market" else "pre_market"
     ) or {}
-    engine = ScoringEngine()
-    base_threshold = float(engine.config.get("buy_threshold", 72))
-    buy_threshold = effective_buy_threshold(base_threshold, ctx.payload, buy_cfg)
-    max_change_pct = effective_max_change_pct(buy_cfg, ctx.payload)
-    held = {str(h.get("股票代码", "")).strip() for h in get_holdings()}
-    return (
-        _evaluate_buy_candidate(
-            stock,
-            ctx,
-            mode=mode,
-            engine=engine,
-            mw_cfg=mw_cfg,
-            buy_cfg=buy_cfg,
-            held=held,
-            buy_threshold=buy_threshold,
-            max_change_pct=max_change_pct,
-        )
-        is not None
+    if not trend_allows_buy(stock, mw_cfg)[0]:
+        return False
+    ok, kind, _ = detect_buy_setup(stock, ctx, mw_cfg)
+    if not ok:
+        return False
+    if signal_kind and kind != signal_kind:
+        return False
+    pk = stock.get("盘口") if isinstance(stock.get("盘口"), dict) else {}
+    try:
+        chg = float(pk.get("涨幅", 0) or 0)
+    except (TypeError, ValueError):
+        chg = 0
+    max_change_pct = effective_max_change_pct(buy_cfg, ctx.payload, buy_kind=kind)
+    if chg >= max_change_pct:
+        return False
+    if mode != "during_market":
+        return True
+    ok_intra, _ = intraday_allows_buy(
+        stock,
+        buy_cfg,
+        buy_kind=kind,
+        lightweight=True,
     )
+    return ok_intra
 
 
 def generate_buy_signals(ctx: ScoreContext, *, mode: str) -> list[TradeSignal]:
@@ -157,7 +173,6 @@ def generate_buy_signals(ctx: ScoreContext, *, mode: str) -> list[TradeSignal]:
     engine = ScoringEngine()
     base_threshold = float(engine.config.get("buy_threshold", 72))
     buy_threshold = effective_buy_threshold(base_threshold, ctx.payload, buy_cfg)
-    max_change_pct = effective_max_change_pct(buy_cfg, ctx.payload)
 
     held = {str(h.get("股票代码", "")).strip() for h in get_holdings()}
     limits = position_limits(ctx)
@@ -179,7 +194,6 @@ def generate_buy_signals(ctx: ScoreContext, *, mode: str) -> list[TradeSignal]:
             buy_cfg=buy_cfg,
             held=held,
             buy_threshold=buy_threshold,
-            max_change_pct=max_change_pct,
         )
         if candidate is None:
             continue

@@ -327,8 +327,14 @@ async def _enrich_optional_and_holding_from_rows(
     )
     by_code = {_code(r): r for r in enriched if isinstance(r, dict) and _code(r)}
 
+    from quant.store.state import merge_holding_meta
+
     zxg = [by_code[c] for r in optional if isinstance(r, dict) and (c := _code(r)) in by_code]
-    ccg = [by_code[c] for r in holding if isinstance(r, dict) and (c := _code(r)) in by_code]
+    ccg = [
+        merge_holding_meta(by_code[c], r)
+        for r in holding
+        if isinstance(r, dict) and (c := _code(r)) in by_code
+    ]
 
     if progress_scope:
         log_progress(
@@ -687,7 +693,7 @@ async def during_market(settings: SettingsDep, background_tasks: BackgroundTasks
     optional = optional if isinstance(optional, list) else []
     holding = holding if isinstance(holding, list) else []
 
-    log_progress(scope, "并行拉取大盘/概念/涨停/人气 + enrich 自选/持仓")
+    log_progress(scope, "并行拉取大盘/概念/行业四榜/涨停/人气 + enrich 自选/持仓")
     macro_task = asyncio.gather(
         _dpzs(),
         _zqxy(market_phase="intraday"),
@@ -696,11 +702,23 @@ async def during_market(settings: SettingsDep, background_tasks: BackgroundTasks
             "行业-涨跌幅",
         ),
         _stock_fund_flow_concept_or_none(
+            "跌幅前十概念 | ths.stock_fund_flow_concept",
+            "行业-涨跌幅",
+            False,
+        ),
+        _stock_fund_flow_concept_or_none(
             "资金流入前十概念 | ths.stock_fund_flow_concept",
             "净额",
         ),
+        _stock_fund_flow_concept_or_none(
+            "资金流出前十概念 | ths.stock_fund_flow_concept",
+            "净额",
+            False,
+        ),
         _industry_board_or_none("行业涨幅榜 | ths.hyylb", "涨跌幅", True),
+        _industry_board_or_none("行业跌幅榜 | ths.hyylb", "涨跌幅", False),
         _industry_board_or_none("行业资金流入榜 | ths.hyylb", "净流入", True),
+        _industry_board_or_none("行业资金流出榜 | ths.hyylb", "净流入", False),
         _ztgk(settings, True),
         _hot(settings),
     )
@@ -714,12 +732,25 @@ async def during_market(settings: SettingsDep, background_tasks: BackgroundTasks
         skip_jbxx=True,
     )
     (
-        (dpzs, zqxy_, jrzfqsgn, jrzjlrqsgn, hy_gain, hy_fund, zttj, hot_),
+        (
+            dpzs,
+            zqxy_,
+            jrzfqsgn,
+            jrdfqsgn,
+            jrzjlrqsgn,
+            jrzjlcqsgn,
+            hy_gain,
+            hy_loss,
+            hy_fund,
+            hy_fund_out,
+            zttj,
+            hot_,
+        ),
         (zxg_, ccg_),
     ) = await asyncio.gather(macro_task, enrich_task)
 
-    gn_bk = _merge_concept_boards(jrzfqsgn, jrzjlrqsgn, None, None)
-    hy_bk = _merge_industry_boards(hy_gain, hy_fund)
+    gn_bk = _merge_concept_boards(jrzfqsgn, jrzjlrqsgn, jrdfqsgn, jrzjlcqsgn)
+    hy_bk = _merge_industry_boards(hy_gain, hy_fund, hy_loss, hy_fund_out)
 
     result = {
         "大盘指数": dpzs,

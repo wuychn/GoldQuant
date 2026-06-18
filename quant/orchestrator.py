@@ -16,16 +16,15 @@ from app.core.config import get_settings
 
 from quant.data_fetch import fetch_mode, fixture_path_for_mode, unwrap_payload
 from quant.progress_log import configure_progress_logging, log_progress, log_progress_done, log_progress_error
-from quant.timeutil import cn_today
+from quant.timeutil import cn_datetime_str, cn_today
 from quant.constants import STRATEGY_NAME
 from quant.execution.executor import ExecutedTrade, execute_signals
+from quant.narrative.during_market_push import build_during_market_push
 from quant.narrative.engine_brief import build_engine_brief
-from quant.narrative.ops_context import build_no_trade_note
-from quant.narrative.stock_lines import build_watchlist_push_section
+from quant.narrative.stock_lines import build_watchlist_human_reason, build_watchlist_push_section
 from quant.narrative.llm import call_llm
 from quant.narrative.prompts import (
     build_user_msg,
-    prompt_during_market,
     prompt_evening_review,
     prompt_lunch_review,
     prompt_news,
@@ -33,7 +32,7 @@ from quant.narrative.prompts import (
 )
 from quant.pool.builder import build_candidates
 from quant.scoring.theme_tracker import update_concept_tracker_state
-from quant.pool.ths_rank_util import format_ths_rank_watchlist_reason, stock_ths_rank_tags
+from quant.pool.ths_rank_util import stock_ths_rank_tags
 from quant.narrative.push_sanitize import sanitize_feishu_body
 from quant.push.feishu import get_token, send_msg
 from quant.push.format import format_push_message
@@ -99,29 +98,6 @@ def _build_operation_section(
     return "\n".join(lines)
 
 
-def _watchlist_add_reason(score, candidate_row: dict) -> str:
-    parts = [f"评分{score.total:.1f}"]
-    raw_source = candidate_row.get("候选来源")
-    if isinstance(raw_source, list):
-        sources = [str(s).strip() for s in raw_source if str(s).strip()]
-    else:
-        sources = [str(raw_source).strip()] if str(raw_source or "").strip() else []
-    ths_tags = stock_ths_rank_tags(candidate_row)
-    if ths_tags:
-        ths_reason = format_ths_rank_watchlist_reason(ths_tags)
-        if ths_reason:
-            parts.append(ths_reason)
-    if "涨停池" in sources:
-        boards = candidate_row.get("连板数")
-        parts.append(f"涨停池(连板{boards})" if boards is not None else "涨停池")
-    if "人气榜" in sources:
-        rank = candidate_row.get("人气排名")
-        parts.append(f"人气榜(排名{rank})" if rank is not None else "人气榜")
-    if not sources:
-        parts.append("候选池达标")
-    return "；".join(parts)
-
-
 def _update_watchlist_evening(ctx: ScoreContext) -> tuple[list[dict], list[dict], str, list]:
     """晚间复盘：达标写入自选；未达标但末次入选≤N 个交易日仍保留，超期移出。"""
     scope = "post_market_evening"
@@ -150,7 +126,7 @@ def _update_watchlist_evening(ctx: ScoreContext) -> tuple[list[dict], list[dict]
             "股票名称": s.name,
             "战法": STRATEGY_NAME,
             "评分": round(s.total, 2),
-            "加入自选原因": _watchlist_add_reason(s, cand),
+            "加入自选原因": build_watchlist_human_reason(s, cand),
         }
         ths_tags = stock_ths_rank_tags(cand)
         if ths_tags:
@@ -239,7 +215,7 @@ def _sync_account_for_brief(payload: dict) -> None:
     refresh_account_market_value(holdings_for_pnl(payload))
 
 
-def process_during_market(raw: dict) -> str:
+def process_during_market(raw: dict, *, timestamp: str = "") -> str:
     scope = "during_market"
     log_progress(scope, "开始盘中分析")
     payload = _prepare_payload(raw, mode=scope)
@@ -265,29 +241,11 @@ def process_during_market(raw: dict) -> str:
         },
     )
 
-    narrative = call_llm(
-        prompt_during_market(),
-        build_user_msg(
-            payload,
-            mode="during_market",
-            engine_brief=build_engine_brief(ctx, payload, mode="during_market"),
-        ),
-        max_tokens=7000,
-    )
-    no_trade = (
-        ""
-        if executed
-        else build_no_trade_note(
-            ctx,
-            mode="during_market",
-            raw_buy=raw_buy,
-            raw_sell=raw_sell,
-            audit=audit,
-        )
-    )
-    ops = _build_operation_section(executed, section="四、操作", no_trade_detail=no_trade)
+    log_progress(scope, "模板化推送文案")
+    ts = timestamp or cn_datetime_str()
+    body = build_during_market_push(payload, timestamp=ts, raw_buy=raw_buy, raw_sell=raw_sell)
     log_progress_done(scope, "盘中分析完成", detail=f"成交 {len(executed)} 笔")
-    return narrative.rstrip() + "\n\n" + ops
+    return body
 
 
 def process_lunch_review(raw: dict) -> str:
@@ -389,7 +347,7 @@ def run_mode(mode: str, timestamp: str) -> None:
         elif mode == "pre_market":
             body = process_pre_market(raw)
         elif mode == "during_market":
-            body = process_during_market(raw)
+            body = process_during_market(raw, timestamp=timestamp)
         elif mode == "post_market_lunch":
             body = process_lunch_review(raw)
         elif mode == "post_market_evening":
@@ -404,7 +362,10 @@ def run_mode(mode: str, timestamp: str) -> None:
         body = f"服务异常，请稍后重试。({e})"
 
     log_progress(mode, "保存复盘文案")
-    message = format_push_message(label, timestamp, sanitize_feishu_body(body, push_timestamp=timestamp))
+    if mode == "during_market":
+        message = sanitize_feishu_body(body, push_timestamp=timestamp).strip() + "\n"
+    else:
+        message = format_push_message(label, timestamp, sanitize_feishu_body(body, push_timestamp=timestamp))
     save_review(mode, message)
 
     if mode == "post_market_evening":
