@@ -26,10 +26,20 @@ from quant.timeutil import parse_cn_datetime_str
 
 _RED = "🔴"
 _GREEN = "🟢"
-_SECTION = "━━━━ {title} ━━━━"
+_ICON_TITLE = "📡"
+_ICON_MARKET = "📊"
+_ICON_HOLD = "💼"
+_ICON_SIGNAL = "🚨"
+_ICON_WATCH = "👀"
+_ICON_INDUSTRY = "🏭"
+_ICON_CONCEPT = "💡"
 _BOARD_BRIEF_N = 3
 _WATCHLIST_ANOMALY_N = 8
 _WEEKDAYS = "一二三四五六日"
+
+
+def _section_heading(icon: str, title: str) -> str:
+    return f"{icon} {title}"
 
 _INDEX_LABELS = {
     "000001": ("上证", "上证"),
@@ -225,12 +235,12 @@ def _format_title_line(payload: dict, timestamp: str) -> str:
     wd = _weekday_label(dt)
     tone = _market_tone_note(payload)
     if wd and tone:
-        return f"📡 盘中 {hm}（{wd}）· {tone}"
+        return _section_heading(_ICON_TITLE, f"盘中 {hm}（{wd}）· {tone}")
     if wd:
-        return f"📡 盘中 {hm}（{wd}）"
+        return _section_heading(_ICON_TITLE, f"盘中 {hm}（{wd}）")
     if tone:
-        return f"📡 盘中 {hm} · {tone}"
-    return f"📡 盘中 {hm}"
+        return _section_heading(_ICON_TITLE, f"盘中 {hm} · {tone}")
+    return _section_heading(_ICON_TITLE, f"盘中 {hm}")
 
 
 def _theme_name(row: dict) -> str:
@@ -297,6 +307,7 @@ def _fmt_gain_brief_items(rows: list[dict]) -> list[str]:
 def _format_board_brief_section(
     lines: list[str],
     *,
+    icon: str,
     title: str,
     block: dict,
     section: str,
@@ -324,7 +335,7 @@ def _format_board_brief_section(
         body.append("跌幅：" + "  ".join(loss_parts))
     if not body:
         return
-    lines.append(_SECTION.format(title=title))
+    lines.append(_section_heading(icon, title))
     lines.extend(body)
     lines.append("")
 
@@ -372,10 +383,10 @@ def _format_watchlist_anomaly_lines(payload: dict) -> tuple[str, list[str]]:
     rows = [r for r in (payload.get("自选股") or []) if isinstance(r, dict)]
     total = len(rows)
     if not rows:
-        return _SECTION.format(title="自选异动"), ["暂无自选股"]
+        return _section_heading(_ICON_WATCH, "自选异动"), ["暂无自选股"]
     ranked = sorted(rows, key=_watchlist_anomaly_score, reverse=True)
     picked = ranked[:_WATCHLIST_ANOMALY_N]
-    title = _SECTION.format(title=f"自选异动（{len(picked)}/{total}）")
+    title = _section_heading(_ICON_WATCH, f"自选异动（{len(picked)}/{total}）")
     lines: list[str] = []
     for row in picked:
         name = stock_name(row)
@@ -441,9 +452,9 @@ def _holdings_summary(holdings: list[dict], *, total_assets: float) -> str:
 def _format_holding_lines(payload: dict) -> tuple[str, list[str]]:
     holdings = resolve_payload_holdings(payload)
     if not holdings:
-        return _SECTION.format(title="持仓"), ["暂无持仓"]
+        return _section_heading(_ICON_HOLD, "持仓"), ["暂无持仓"]
     total_assets = _portfolio_total_assets(holdings)
-    header = _SECTION.format(title=_holdings_summary(holdings, total_assets=total_assets))
+    header = _section_heading(_ICON_HOLD, _holdings_summary(holdings, total_assets=total_assets))
     lines: list[str] = []
     for h in holdings:
         name = stock_name(h) or str(h.get("股票代码", "")).strip()
@@ -489,7 +500,7 @@ def _format_signal_lines(
     ctx: ScoreContext | None = None,
     mode: str = "during_market",
 ) -> list[str]:
-    lines: list[str] = ["🚨 买卖信号"]
+    lines: list[str] = [_section_heading(_ICON_SIGNAL, "买卖信号")]
     if raw_buy or raw_sell:
         for sig in raw_buy:
             trigger = _signal_trigger_text(sig)
@@ -539,7 +550,7 @@ def build_during_market_push(
     payload = merge_payload_holdings(dict(payload))
     lines: list[str] = [
         _format_title_line(payload, timestamp),
-        _format_index_compact_line(payload),
+        _section_heading(_ICON_MARKET, _format_index_compact_line(payload)),
         "",
     ]
 
@@ -567,12 +578,14 @@ def build_during_market_push(
     concept = payload.get(BOARD_CONCEPT) or {}
     _format_board_brief_section(
         lines,
+        icon=_ICON_INDUSTRY,
         title="行业（流入/流出/涨跌）",
         block=industry if isinstance(industry, dict) else {},
         section=BOARD_INDUSTRY,
     )
     _format_board_brief_section(
         lines,
+        icon=_ICON_CONCEPT,
         title="概念（流入/流出/涨跌）",
         block=concept if isinstance(concept, dict) else {},
         section=BOARD_CONCEPT,

@@ -27,10 +27,10 @@ class DuringMarketPushTests(unittest.TestCase):
         )
         self.assertIn("📡 盘中 14:35", text)
         self.assertIn("周四", text)
-        self.assertIn("上证", text)
-        self.assertIn("概念（流入/流出/涨跌）", text)
-        self.assertIn("━━━━ 自选异动", text)
-        self.assertIn("持仓（", text)
+        self.assertIn("📊 上证", text)
+        self.assertIn("💡 概念（流入/流出/涨跌）", text)
+        self.assertIn("👀 自选异动", text)
+        self.assertIn("💼 持仓（", text)
         self.assertIn("🚨 买卖信号", text)
 
     def test_cn_market_color_convention(self) -> None:
