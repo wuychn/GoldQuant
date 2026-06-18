@@ -111,7 +111,7 @@ class Settings(BaseSettings):
     QUANT_SCHED_DURING_MARKET_TIMES: str = _QUANT_SCHED_DEFAULT_DURING_TIMES
     #: 午间复盘（`post_market_lunch`），仅交易日（`is_real_workday_cn`）执行。
     QUANT_SCHED_POST_MARKET_LUNCH_TIME: str = "11:50"
-    #: 晚间复盘（`post_market_evening`）；工作日当晚 + 假日前一夜（详见 orchestrator）。
+    #: 晚间复盘（`post_market_evening`），仅交易日（`is_real_workday_cn`）执行。
     QUANT_SCHED_POST_MARKET_EVENING_TIME: str = "20:10"
     #: 每日预取自选/持仓问财所属概念（减轻盘中 enrich 耗时）。
     QUANT_SCHED_PREFETCH_CONCEPTS_ENABLED: bool = True
@@ -183,7 +183,7 @@ class Settings(BaseSettings):
     #: 每累计一次同花顺资金流失败，后续请求额外等待秒数（失败越多等越久）。
     QUANT_THS_FUNDS_FAILURE_BACKOFF_SEC: float = Field(default=5.0, ge=0.0, le=120.0)
 
-    #: 测试阶段：为 true 时数据侧 API 列表统一只返回前 3 条，且候选池人气/涨停等处理亦限 3 条。
+    #: 测试阶段：为 true 时数据侧 API 与各来源初筛/enrich 统一限 3 条（仍走实时接口）。
     QUANT_TEST_PHASE: bool = False
     #: 本地数据：为 true 时 ``python -m quant`` 从 ``data/*.json`` 读数，不请求 FastAPI。
     QUANT_USE_LOCAL_FIXTURE: bool = False

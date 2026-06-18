@@ -45,3 +45,19 @@ def maybe_trim_for_test_phase(obj: Any) -> Any:
     if limit is None:
         return obj
     return trim_for_test_phase(obj, limit=limit)
+
+
+def truncate_list_for_test_phase(
+    rows: list[Any] | None,
+    settings: Any | None = None,
+) -> list[Any]:
+    """测试阶段将列表截为 ``quant_test_list_limit`` 条（供初筛/enrich 前使用）。"""
+    if not rows:
+        return []
+    from app.core.config import get_settings
+
+    settings = settings or get_settings()
+    limit = settings.quant_test_list_limit()
+    if limit is None:
+        return list(rows)
+    return list(rows[:limit])

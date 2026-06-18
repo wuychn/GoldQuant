@@ -38,6 +38,15 @@ class QuantTestTrimTests(unittest.TestCase):
         out = maybe_trim_for_test_phase(data)
         self.assertEqual(out["rows"], [0, 1, 2])
 
+    @patch("app.core.config.get_settings")
+    def test_truncate_list_for_test_phase(self, mock_get_settings) -> None:
+        from app.utils.quant_test_trim import truncate_list_for_test_phase
+
+        mock_get_settings.return_value.quant_test_list_limit = lambda: 3
+        self.assertEqual(truncate_list_for_test_phase(list(range(8))), [0, 1, 2])
+        mock_get_settings.return_value.quant_test_list_limit = lambda: None
+        self.assertEqual(truncate_list_for_test_phase(list(range(8))), list(range(8)))
+
 
 if __name__ == "__main__":
     unittest.main()

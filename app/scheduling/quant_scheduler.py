@@ -10,7 +10,6 @@ import logging
 import os
 import subprocess
 import sys
-from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -62,12 +61,6 @@ def _parse_time_list_csv(s: str) -> list[tuple[int, int]]:
     if not parts:
         raise ValueError("盘中时点列表为空")
     return [_parse_hh_mm(p) for p in parts]
-
-
-def _evening_calendar_hit() -> bool:
-    """与 orchestrator `post_market_evening` 一致：今日或次日为工作日即触发窗口内可跑。"""
-    d = datetime.now().date()
-    return is_real_workday_cn(d) or is_real_workday_cn(d + timedelta(days=1))
 
 
 def _invoke_quant_cli(mode: str) -> None:
@@ -123,7 +116,7 @@ def _job_post_market_lunch(_settings: Settings) -> None:
 
 
 def _job_post_market_evening(_settings: Settings) -> None:
-    if not _evening_calendar_hit():
+    if not is_real_workday_cn():
         return
     _invoke_quant_cli("post_market_evening")
 

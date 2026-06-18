@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import sys
 from dataclasses import asdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 
 from app.utils.common_util import is_real_workday_cn
 
@@ -321,14 +321,11 @@ def pipeline_allowed_for_mode(mode: str, *, on: date | None = None) -> bool:
     """是否应运行该模式的完整流水线（与 FastAPI 定时任务一致，基于 `is_real_workday_cn`）。
 
     - 新闻：始终允许。
-    - 盘前/盘中/午间：仅当日为大陆真实工作日。
-    - 晚间复盘：当日为工作日，或「当日非工作日但次日为工作日」（节假日前夜备盘口径）。
+    - 盘前/盘中/午间/晚间：仅当日为大陆真实工作日。
     """
     if mode == "news":
         return True
     d = on if on is not None else cn_today()
-    if mode == "post_market_evening":
-        return is_real_workday_cn(d) or is_real_workday_cn(d + timedelta(days=1))
     return is_real_workday_cn(d)
 
 

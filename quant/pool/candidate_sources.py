@@ -31,14 +31,20 @@ from quant.pool.sources import (
 )
 from quant.pool.ths_rank_util import split_enriched_ths_rank_payload
 from quant.progress_log import log_progress, log_progress_done
+from app.utils.quant_test_trim import truncate_list_for_test_phase
 
 
 async def _prefilter_popularity(settings: Settings, cfg: dict) -> list[dict]:
     from quant.pool.candidate_config import popularity_limit
 
-    limit = settings.quant_hot_list_limit() if settings.QUANT_TEST_PHASE else popularity_limit(cfg)
-    raw = await hot_stock(limit)
-    return prefilter_popularity(raw if isinstance(raw, list) else [], cfg=cfg)
+    fetch_limit = (
+        settings.quant_hot_list_limit()
+        if settings.QUANT_TEST_PHASE
+        else popularity_limit(cfg)
+    )
+    raw = await hot_stock(fetch_limit)
+    rows = prefilter_popularity(raw if isinstance(raw, list) else [], cfg=cfg)
+    return truncate_list_for_test_phase(rows, settings)
 
 
 async def _prefilter_zt(
@@ -47,9 +53,9 @@ async def _prefilter_zt(
     *,
     zt_rows: list[dict] | None = None,
 ) -> list[dict]:
-    del settings
     raw = zt_rows if zt_rows is not None else ztgc(filter_first=False)
-    return prefilter_zt_pool(raw if isinstance(raw, list) else [], cfg=cfg)
+    rows = prefilter_zt_pool(raw if isinstance(raw, list) else [], cfg=cfg)
+    return truncate_list_for_test_phase(rows, settings)
 
 
 async def _prefilter_ths_rank(
@@ -58,7 +64,7 @@ async def _prefilter_ths_rank(
     *,
     progress_scope: str = "candidates",
 ) -> list[dict]:
-    del settings
+    batch_limit = settings.quant_test_list_limit()
     batches: list[tuple[str, list[dict]]] = []
 
     async def _fetch_batch(label: str, fetch_fn) -> list[dict]:
@@ -68,7 +74,10 @@ async def _prefilter_ths_rank(
             default=[],
             progress_scope=progress_scope,
         )
-        return rows if isinstance(rows, list) else []
+        rows = rows if isinstance(rows, list) else []
+        if batch_limit is not None:
+            rows = rows[:batch_limit]
+        return rows
 
     for label in cxg_labels(cfg):
         batches.append((label, await _fetch_batch(label, lambda l=label: cxg(l))))
@@ -78,7 +87,8 @@ async def _prefilter_ths_rank(
         ("量价齐升", ljqs),
     ):
         batches.append((label, await _fetch_batch(label, fn)))
-    return merge_ths_rank_from_batches(batches, cfg=cfg)
+    rows = merge_ths_rank_from_batches(batches, cfg=cfg)
+    return truncate_list_for_test_phase(rows, settings)
 
 
 async def build_ths_rank_candidates(
