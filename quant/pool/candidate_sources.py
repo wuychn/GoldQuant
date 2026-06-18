@@ -6,6 +6,7 @@ from typing import Any
 
 from app.core.config import Settings
 from app.utils.dfcf_util import ztgc
+from app.utils.ths_rank_fetch import fetch_with_retry
 from app.utils.ths_util import cxfl, cxg, hot_stock, ljqs, lxsz
 from quant.pool.candidate_config import (
     PAYLOAD_KEY_CXFL,
@@ -51,19 +52,32 @@ async def _prefilter_zt(
     return prefilter_zt_pool(raw if isinstance(raw, list) else [], cfg=cfg)
 
 
-async def _prefilter_ths_rank(settings: Settings, cfg: dict) -> list[dict]:
+async def _prefilter_ths_rank(
+    settings: Settings,
+    cfg: dict,
+    *,
+    progress_scope: str = "candidates",
+) -> list[dict]:
     del settings
     batches: list[tuple[str, list[dict]]] = []
+
+    async def _fetch_batch(label: str, fetch_fn) -> list[dict]:
+        rows = await fetch_with_retry(
+            label,
+            fetch_fn,
+            default=[],
+            progress_scope=progress_scope,
+        )
+        return rows if isinstance(rows, list) else []
+
     for label in cxg_labels(cfg):
-        batch = await cxg(label)
-        batches.append((label, batch if isinstance(batch, list) else []))
+        batches.append((label, await _fetch_batch(label, lambda l=label: cxg(l))))
     for label, fn in (
         ("持续上涨", lxsz),
         ("持续放量", cxfl),
         ("量价齐升", ljqs),
     ):
-        batch = await fn()
-        batches.append((label, batch if isinstance(batch, list) else []))
+        batches.append((label, await _fetch_batch(label, fn)))
     return merge_ths_rank_from_batches(batches, cfg=cfg)
 
 
@@ -128,11 +142,21 @@ async def build_all_source_candidates(
     """串行初筛三来源 → 按代码合并 → 一次问财+enrich → 拆回 payload 键。"""
     cfg = load_candidate_config()
     log_progress(progress_scope, "初筛：人气榜")
-    pop_rows = await _prefilter_popularity(settings, cfg)
+    pop_rows = await fetch_with_retry(
+        "人气榜",
+        lambda: _prefilter_popularity(settings, cfg),
+        default=[],
+        progress_scope=progress_scope,
+    )
     log_progress(progress_scope, "初筛：涨停池")
-    zt_rows_f = await _prefilter_zt(settings, cfg, zt_rows=zt_rows)
+    zt_rows_f = await fetch_with_retry(
+        "涨停池",
+        lambda: _prefilter_zt(settings, cfg, zt_rows=zt_rows),
+        default=[],
+        progress_scope=progress_scope,
+    )
     log_progress(progress_scope, "初筛：同花顺形态榜")
-    ths_rows = await _prefilter_ths_rank(settings, cfg)
+    ths_rows = await _prefilter_ths_rank(settings, cfg, progress_scope=progress_scope)
     log_progress(
         progress_scope,
         "初筛完成",

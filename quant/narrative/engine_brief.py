@@ -69,6 +69,19 @@ def _format_watchlist_scores(scores: list[Any] | None, *, limit: int = 8) -> lis
     return lines
 
 
+def _append_pnl_account_block(lines: list[str], payload: dict, *, mode: str) -> None:
+    pnl = format_today_pnl_summary(payload)
+    lines.append("")
+    if mode == "during_market":
+        label = "当日盈亏与账户（须在正文写出，严格依据下列数据）："
+    elif mode == "post_market_lunch":
+        label = "当日盈亏与账户（须在正文写出，严格依据下列数据）："
+    else:
+        label = "当日盈亏与账户（「总结与展望」须与此一致，勿夸大）："
+    lines.append(label)
+    lines.append(pnl)
+
+
 def _append_holdings_performance_block(lines: list[str]) -> None:
     lines.append("")
     lines.append("持仓股表现（第三节须与此一致）：")
@@ -144,6 +157,7 @@ def build_engine_brief(
 
     if mode == "during_market":
         lines.append(intraday_session_time_line())
+        _append_pnl_account_block(lines, payload, mode=mode)
         macro = global_macro_for_scoring()
         if macro:
             label = {"bearish": "利空", "neutral": "中性", "bullish": "利好"}.get(
@@ -163,6 +177,7 @@ def build_engine_brief(
         lines.append("持续确认：盘前不计入；买入当日有效、约10分钟+2轮（连续竞价计时），成交前再验。")
 
     if mode == "post_market_lunch":
+        _append_pnl_account_block(lines, payload, mode=mode)
         opt_rows = [r for r in (payload.get("自选股") or []) if isinstance(r, dict)]
         lines.append("")
         lines.append("自选股表现范围：")
@@ -175,11 +190,7 @@ def build_engine_brief(
         lines.append("")
         lines.append("今日操作（成交记录，操作复盘须与此一致）：")
         lines.append(trades)
-
-        pnl = format_today_pnl_summary(payload)
-        lines.append("")
-        lines.append("当日盈亏参考（「总结与展望」须与此一致，勿夸大）：")
-        lines.append(pnl)
+        _append_pnl_account_block(lines, payload, mode=mode)
 
         if watchlist_scores is not None:
             score_lines = _format_watchlist_scores(watchlist_scores)

@@ -292,17 +292,35 @@ def get_total_assets() -> float:
     return float(get_account().get("总资产", INITIAL_CAPITAL))
 
 
+def holding_mark_price(h: dict) -> float | None:
+    """单只持仓现价：盘口 → 历史收盘 → 买入价。"""
+    from quant.scoring.tech_indicators import hist_close, hist_rows_sorted
+
+    price = quote_last_price(h)
+    if price is not None and price > 0:
+        return price
+    hist = hist_rows_sorted(h.get("历史行情"))
+    if hist:
+        close = hist_close(hist[-1])
+        if close is not None and close > 0:
+            return close
+    try:
+        buy = float(h.get("买入价", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+    return buy if buy > 0 else None
+
+
 def compute_holdings_market_value(holdings: list[dict]) -> float:
     total = 0.0
     for h in holdings:
         qty = int(h.get("持仓股数", 0) or 0)
         if qty <= 0:
             continue
-        price = quote_last_price(h) or h.get("买入价", 0)
-        try:
-            total += qty * float(price)
-        except (TypeError, ValueError):
+        price = holding_mark_price(h)
+        if price is None or price <= 0:
             continue
+        total += qty * price
     return total
 
 
@@ -344,6 +362,14 @@ def save_account(
     _write_text_atomic(view_file("fund.md"), _format_num(acc["可用资金"]))
     _write_text_atomic(view_file("position_value.md"), _format_num(acc["持仓市值"]))
     return acc
+
+
+def refresh_account_market_value(holdings: list[dict] | None = None) -> dict:
+    """按现价刷新持仓市值与总资产（不改动已实现盈亏）。"""
+    rows = _normalize_rows(holdings if holdings is not None else get_holdings())
+    cash = float(get_account().get("可用资金", 0))
+    mv = compute_holdings_market_value(rows)
+    return save_account(cash=cash, position_mv=mv, daily_realized_delta=0.0)
 
 
 def _format_num(v: float) -> str:

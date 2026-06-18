@@ -232,6 +232,13 @@ def process_pre_market(raw: dict) -> str:
     return narrative.rstrip()
 
 
+def _sync_account_for_brief(payload: dict) -> None:
+    from quant.narrative.holdings_context import holdings_for_pnl
+    from quant.store.state import refresh_account_market_value
+
+    refresh_account_market_value(holdings_for_pnl(payload))
+
+
 def process_during_market(raw: dict) -> str:
     scope = "during_market"
     log_progress(scope, "开始盘中分析")
@@ -243,6 +250,7 @@ def process_during_market(raw: dict) -> str:
     log_progress(scope, "执行模拟成交", detail=f"可执行 {len(executable)} 条")
     executed = execute_signals(executable, payload=payload) if executable else []
 
+    _sync_account_for_brief(payload)
     engine = ScoringEngine()
     log_progress(scope, "持仓评分")
     holding_scores = engine.score_many(ctx, payload.get("持仓股") or get_holdings())
@@ -288,6 +296,7 @@ def process_lunch_review(raw: dict) -> str:
     payload = _prepare_payload(raw, mode=scope)
     ctx = ScoreContext.from_payload(payload, mode="post_market_lunch")
 
+    _sync_account_for_brief(payload)
     brief = build_engine_brief(ctx, payload, mode="post_market_lunch")
     log_progress(scope, "LLM 午间文案")
     narrative = call_llm(
@@ -309,6 +318,7 @@ def process_evening_review(raw: dict) -> str:
 
     log_progress(scope, "自选池更新与评分")
     merged, added, optional_section, scores = _update_watchlist_evening(ctx)
+    _sync_account_for_brief(payload)
     log_progress(scope, "生成引擎摘要")
     brief = build_engine_brief(
         ctx,

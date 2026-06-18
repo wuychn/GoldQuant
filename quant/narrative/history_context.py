@@ -142,6 +142,42 @@ def _load_today_trades(*, date_str: str | None = None) -> tuple[str, list[dict]]
     return ds, rows
 
 
+def _resolve_mark_price(stock: dict) -> float | None:
+    from quant.scoring.tech_indicators import hist_close, hist_rows_sorted, quote_last_price
+
+    price = quote_last_price(stock)
+    if price is not None and price > 0:
+        return price
+    hist = hist_rows_sorted(stock.get("历史行情"))
+    if hist:
+        close = hist_close(hist[-1])
+        if close is not None and close > 0:
+            return close
+    try:
+        buy = float(stock.get("买入价", 0) or 0)
+    except (TypeError, ValueError):
+        buy = 0.0
+    return buy if buy > 0 else None
+
+
+def _summarize_trade_fees(rows: list[dict]) -> tuple[float, float, float, float, float]:
+    commission = stamp = transfer = buy_amount = sell_amount = 0.0
+    for r in rows:
+        try:
+            commission += float(r.get("佣金") or 0)
+            stamp += float(r.get("印花税") or 0)
+            transfer += float(r.get("过户费") or 0)
+            amount = float(r.get("成交额") or 0)
+        except (TypeError, ValueError):
+            continue
+        action = str(r.get("方向") or "").strip()
+        if action == "买入":
+            buy_amount += amount
+        elif action == "卖出":
+            sell_amount += amount
+    return commission, stamp, transfer, buy_amount, sell_amount
+
+
 def format_today_trades(*, date_str: str | None = None) -> str:
     """当日成交摘要，供晚间操作复盘引用。"""
     ds, rows = _load_today_trades(date_str=date_str)
@@ -172,66 +208,107 @@ def format_today_trades(*, date_str: str | None = None) -> str:
     return f"{ds} 成交（共{len(parts)}笔）：" + "；".join(parts)
 
 
-def format_today_pnl_summary(payload: dict | None = None, *, date_str: str | None = None) -> str:
-    """当日盈亏参考：已实现 + 持仓浮动估算。"""
-    from quant.narrative.holdings_context import holdings_for_pnl
-    from quant.scoring.tech_indicators import quote_last_price, stock_daily_change_pct
-    from quant.store.state import get_account, sum_today_realized_pnl
+def _compute_today_pnl_components(
+    holdings: list[dict],
+    *,
+    date_str: str,
+) -> tuple[float, float, float]:
+    """返回 (当日盈亏, 成交已实现盈亏, 持仓较昨收变动)。"""
+    from quant.scoring.tech_indicators import stock_daily_change_pct
+    from quant.store.state import sum_today_realized_pnl
 
-    ds = date_str or datetime.now(_SH_TZ).date().isoformat()
-    _, rows = _load_today_trades(date_str=ds)
-    realized = sum_today_realized_pnl(ds)
-    acc = get_account()
-
-    lines = [f"当日已实现盈亏（成交汇总）：{realized:+.2f}元"]
-    if rows:
-        for r in rows:
-            pnl = r.get("已实现盈亏")
-            if pnl is None:
-                continue
-            try:
-                pnl_f = float(pnl)
-            except (TypeError, ValueError):
-                continue
-            name = r.get("股票名称") or ""
-            code = r.get("股票代码") or ""
-            action = r.get("方向") or ""
-            lines.append(f"· {action} {name}({code}) 已实现{pnl_f:+.2f}元")
-    else:
-        lines.append("· 今日无成交，已实现盈亏为 0")
-
-    holdings = holdings_for_pnl(payload)
-    float_lines: list[str] = []
-    total_float = 0.0
+    realized = sum_today_realized_pnl(date_str)
+    holding_daily = 0.0
     for h in holdings:
         if not isinstance(h, dict):
             continue
         qty = int(h.get("持仓股数", 0) or 0)
         if qty <= 0:
             continue
-        price = quote_last_price(h)
+        price = _resolve_mark_price(h)
         chg = stock_daily_change_pct(h)
         if price is None or chg is None:
             continue
-        est = qty * price * chg / 100.0
-        total_float += est
-        name = h.get("股票名称") or h.get("股票代码") or ""
-        code = h.get("股票代码") or ""
-        float_lines.append(f"· {name}({code}) 当日浮动估算{est:+.2f}元（{chg:+.2f}%）")
+        holding_daily += qty * price * chg / 100.0
+    return realized + holding_daily, realized, holding_daily
 
-    if float_lines:
-        lines.append(f"持仓当日浮动估算合计：{total_float:+.2f}元")
-        lines.extend(float_lines)
-    elif not holdings:
-        from quant.store.state import get_holdings
 
-        if get_holdings():
-            lines.append("· 持仓浮动：行情 payload 缺盘口，请见「当前持仓」节")
-        else:
-            lines.append("当前无持仓，无浮动盈亏。")
+def format_today_pnl_summary(
+    payload: dict | None = None,
+    *,
+    date_str: str | None = None,
+    sync_account: bool = True,
+) -> str:
+    """当日盈亏与账户资金（盘中/午间/晚间共用）。"""
+    from quant.narrative.holdings_context import holdings_for_pnl
+    from quant.store.state import refresh_account_market_value
 
+    ds = date_str or datetime.now(_SH_TZ).date().isoformat()
+    holdings = holdings_for_pnl(payload)
+    if sync_account:
+        acc = refresh_account_market_value(holdings)
+    else:
+        from quant.store.state import compute_holdings_market_value, get_account
+
+        acc = dict(get_account())
+        cash = float(acc.get("可用资金", 0) or 0)
+        mv = compute_holdings_market_value(holdings)
+        acc["持仓市值"] = round(mv, 4)
+        acc["总资产"] = round(cash + mv, 4)
+
+    _, rows = _load_today_trades(date_str=ds)
+    daily_pnl, realized, holding_daily = _compute_today_pnl_components(holdings, date_str=ds)
+
+    lines = [f"当日盈亏：{daily_pnl:+.2f}元"]
+    if rows or holding_daily:
+        parts: list[str] = []
+        if rows:
+            parts.append(f"成交{realized:+.2f}元")
+        if holding_daily:
+            parts.append(f"持仓较昨收{holding_daily:+.2f}元")
+        if parts:
+            lines.append(f"（{' + '.join(parts)}）")
+
+    if rows:
+        comm, stamp, transfer, buy_amt, sell_amt = _summarize_trade_fees(rows)
+        lines.append(
+            f"今日成交 {len(rows)} 笔：买入{buy_amt:.2f}元 卖出{sell_amt:.2f}元"
+        )
+        lines.append(
+            f"今日费用：佣金{comm:.2f}元 印花税{stamp:.2f}元 过户费{transfer:.2f}元"
+        )
+        for r in rows:
+            action = str(r.get("方向") or "").strip()
+            name = r.get("股票名称") or ""
+            code = r.get("股票代码") or ""
+            qty = int(r.get("股数") or 0)
+            price = r.get("成交价")
+            price_s = f" @{price}" if price is not None else ""
+            if action == "买入":
+                lines.append(
+                    f"· 买入 {name}({code}) {qty}股{price_s} "
+                    f"佣金{float(r.get('佣金') or 0):.2f}元"
+                )
+            else:
+                try:
+                    pnl_f = float(r.get("已实现盈亏") or 0)
+                except (TypeError, ValueError):
+                    pnl_f = 0.0
+                lines.append(f"· 卖出 {name}({code}) {qty}股{price_s} 盈亏{pnl_f:+.2f}元")
+    else:
+        lines.append("今日无成交")
+
+    cash = float(acc.get("可用资金", 0) or 0)
+    position_mv = float(acc.get("持仓市值", 0) or 0)
     total_assets = float(acc.get("总资产", 0) or 0)
-    lines.append(f"账户总资产：{total_assets:.2f}元")
+    lines.append(
+        f"账户：可用{cash:.2f}元 | 持仓市值{position_mv:.2f}元 | 总资产{total_assets:.2f}元"
+    )
+    if abs(cash + position_mv - total_assets) > 0.02:
+        lines.append(
+            f"· 资金校验异常：可用+持仓市值={cash + position_mv:.2f}元，"
+            f"总资产={total_assets:.2f}元"
+        )
     return "\n".join(lines)
 
 
