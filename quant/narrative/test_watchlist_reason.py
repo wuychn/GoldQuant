@@ -8,7 +8,9 @@ from types import SimpleNamespace
 from quant.narrative.stock_lines import (
     build_watchlist_human_reason,
     build_watchlist_push_section,
+    ensure_watchlist_reason_display,
     format_watchlist_reason_bullet,
+    refresh_merged_watchlist_reasons,
 )
 from quant.pool.ths_rank_util import format_ths_rank_tags_brief
 
@@ -73,6 +75,83 @@ class WatchlistReasonTests(unittest.TestCase):
     def test_format_watchlist_reason_bullet_fallback(self) -> None:
         row = {"股票代码": "000001", "股票名称": "平安银行", "评分": 72}
         self.assertIn("平安银行", format_watchlist_reason_bullet(row))
+
+    def test_legacy_reason_gets_name_prefix(self) -> None:
+        row = {
+            "股票代码": "603228",
+            "股票名称": "景旺电子",
+            "评分": 79.1,
+            "加入自选原因": "评分79.1；创新高(一年新高、创月新高)",
+        }
+        bullet = format_watchlist_reason_bullet(row)
+        self.assertIn("景旺电子", bullet)
+        self.assertTrue(bullet.startswith("· 景旺电子"))
+
+    def test_refresh_merged_rewrites_legacy_reason(self) -> None:
+        score = SimpleNamespace(
+            name="景旺电子",
+            total=79.1,
+            code="603228",
+            dimensions=[
+                SimpleNamespace(
+                    name="concept_theme",
+                    available=True,
+                    detail={"最佳赛道": "行业", "最佳命中概念": "元件"},
+                )
+            ],
+        )
+        merged = [
+            {
+                "股票代码": "603228",
+                "股票名称": "景旺电子",
+                "评分": 79.1,
+                "加入自选原因": "评分79.1；创新高(一年新高、创月新高)",
+            }
+        ]
+        refresh_merged_watchlist_reasons(
+            merged,
+            score_by_code={"603228": score},
+            candidate_by_code={
+                "603228": {
+                    "股票代码": "603228",
+                    "股票名称": "景旺电子",
+                    "榜单标签": ["一年新高", "创月新高"],
+                }
+            },
+        )
+        self.assertEqual(
+            merged[0]["加入自选原因"],
+            "景旺电子，所属行业元件，创新高，评分79",
+        )
+
+    def test_refresh_merged_without_score_still_prefixes_name(self) -> None:
+        merged = [
+            {
+                "股票代码": "603228",
+                "股票名称": "景旺电子",
+                "评分": 78.6,
+                "加入自选原因": "评分78.6；涨停池(连板3)",
+            }
+        ]
+        refresh_merged_watchlist_reasons(
+            merged,
+            score_by_code={},
+            candidate_by_code={},
+        )
+        self.assertEqual(
+            merged[0]["加入自选原因"],
+            "景旺电子，评分78.6；涨停池(连板3)",
+        )
+
+    def test_ensure_watchlist_reason_display(self) -> None:
+        row = {
+            "股票名称": "中天科技",
+            "加入自选原因": "评分78.1；人气榜(排名10)",
+        }
+        self.assertEqual(
+            ensure_watchlist_reason_display(row),
+            "中天科技，评分78.1；人气榜(排名10)",
+        )
 
 
 class ThsRankBriefTests(unittest.TestCase):

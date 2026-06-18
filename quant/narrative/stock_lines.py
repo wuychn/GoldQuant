@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from quant.pool.ths_rank_util import format_ths_rank_tags_brief, stock_ths_rank_tags
@@ -76,6 +77,67 @@ def _theme_part_from_row(row: dict) -> str | None:
     return None
 
 
+_LEGACY_WATCHLIST_REASON_RE = re.compile(r"^评分[\d.]+[；;]")
+
+
+def watchlist_reason_needs_name_prefix(reason: str, row: dict) -> bool:
+    """旧版原因以「评分xx；…」开头且不含股票名称。"""
+    text = str(reason or "").strip()
+    if not text:
+        return False
+    name = stock_name(row)
+    if name and name in text:
+        return False
+    return bool(_LEGACY_WATCHLIST_REASON_RE.match(text)) or text.startswith("评分")
+
+
+def ensure_watchlist_reason_display(row: dict) -> str:
+    """补齐旧版无名称的「加入自选原因」。"""
+    reason = str(row.get("加入自选原因") or "").strip()
+    if reason and not watchlist_reason_needs_name_prefix(reason, row):
+        return reason
+    if reason:
+        name = stock_name(row) or stock_code(row)
+        return f"{name}，{reason}" if name else reason
+    name = stock_name(row) or stock_code(row)
+    score = row.get("评分")
+    if name and score is not None:
+        try:
+            return f"{name}，评分{_format_watchlist_score(float(score))}"
+        except (TypeError, ValueError):
+            return f"{name}，评分{score}"
+    return name
+
+
+def refresh_merged_watchlist_reasons(
+    merged: list[dict],
+    *,
+    score_by_code: dict[str, Any],
+    candidate_by_code: dict[str, dict],
+) -> None:
+    """合并后按当晚评分与候选数据重写「加入自选原因」。"""
+    for row in merged:
+        code = stock_code(row)
+        if not code:
+            continue
+        score = score_by_code.get(code)
+        if score is None:
+            fixed = ensure_watchlist_reason_display(row)
+            if fixed:
+                row["加入自选原因"] = fixed
+            continue
+        cand = dict(candidate_by_code.get(code) or {})
+        if not stock_name(cand) and stock_name(row):
+            cand.setdefault("股票名称", stock_name(row))
+        if not row.get("股票名称"):
+            row["股票名称"] = getattr(score, "name", "") or stock_name(cand)
+        row["评分"] = round(float(getattr(score, "total", row.get("评分", 0)) or 0), 2)
+        row["加入自选原因"] = build_watchlist_human_reason(score, cand)
+        ths_tags = stock_ths_rank_tags(cand)
+        if ths_tags:
+            row["榜单标签"] = ths_tags
+
+
 def build_watchlist_human_reason(score: Any, candidate_row: dict) -> str:
     """晚间加自选：人类可读单行原因，如「xx股份，所属行业元件，创新高，评分80」。"""
     name = stock_name(candidate_row) or getattr(score, "name", "") or stock_code(candidate_row)
@@ -114,6 +176,8 @@ def build_watchlist_human_reason(score: Any, candidate_row: dict) -> str:
 def format_watchlist_reason_bullet(row: dict) -> str:
     reason = str(row.get("加入自选原因") or "").strip()
     if reason:
+        if watchlist_reason_needs_name_prefix(reason, row):
+            reason = ensure_watchlist_reason_display(row)
         return reason if reason.startswith("·") else f"· {reason}"
     return format_score_bullet(row)
 

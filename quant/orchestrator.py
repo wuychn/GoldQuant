@@ -21,7 +21,11 @@ from quant.constants import STRATEGY_NAME
 from quant.execution.executor import ExecutedTrade, execute_signals
 from quant.narrative.during_market_push import build_during_market_push
 from quant.narrative.engine_brief import build_engine_brief
-from quant.narrative.stock_lines import build_watchlist_human_reason, build_watchlist_push_section
+from quant.narrative.stock_lines import (
+    build_watchlist_human_reason,
+    build_watchlist_push_section,
+    refresh_merged_watchlist_reasons,
+)
 from quant.narrative.llm import call_llm
 from quant.narrative.prompts import (
     build_user_msg,
@@ -135,6 +139,12 @@ def _update_watchlist_evening(ctx: ScoreContext) -> tuple[list[dict], list[dict]
 
     existing = get_optional()
     merged, added, removed = merge_watchlist_evening(existing, passed_rows)
+    score_by_code = {s.code: s for s in scores}
+    refresh_merged_watchlist_reasons(
+        merged,
+        score_by_code=score_by_code,
+        candidate_by_code=by_code,
+    )
     save_optional(merged, delta={"added": added, "removed": removed})
     log_progress(
         scope,
