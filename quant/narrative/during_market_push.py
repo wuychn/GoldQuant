@@ -6,12 +6,18 @@ import re
 from datetime import datetime
 
 from quant.market.turnover import parse_turnover_yi, turnover_from_payload
-from quant.narrative.ops_context import sample_no_trade_reasons
+from quant.narrative.ops_context import (
+    _confirm_progress_suffix,
+    index_confirmation_audit,
+    pending_confirm_codes,
+    sample_no_trade_reasons,
+)
 from quant.narrative.stock_lines import stock_name
 from quant.pool.ths_rank_util import format_ths_rank_tags_brief, stock_ths_rank_tags
 from quant.scoring.context import ScoreContext
 from quant.scoring.tech_indicators import stock_daily_change_pct, to_float
 from quant.scoring.theme_boards import BOARD_CONCEPT, BOARD_INDUSTRY, section_board_rows
+from quant.execution.executor import ExecutedTrade
 from quant.signals.models import TradeSignal
 from quant.store.state import (
     _holding_cost_price,
@@ -481,6 +487,55 @@ def _format_holding_lines(payload: dict) -> tuple[str, list[str]]:
     return header, lines if lines else ["暂无持仓"]
 
 
+def _signal_qty_label(qty: int) -> str:
+    return f"{qty}股" if qty >= 100 else ""
+
+
+def _partition_executed(
+    executed: list[ExecutedTrade] | None,
+) -> tuple[dict[str, ExecutedTrade], dict[str, ExecutedTrade]]:
+    sold: dict[str, ExecutedTrade] = {}
+    bought: dict[str, ExecutedTrade] = {}
+    for item in executed or []:
+        sig = item.signal
+        if sig.action == "卖出":
+            sold[sig.code] = item
+        elif sig.action == "买入":
+            bought[sig.code] = item
+    return sold, bought
+
+
+def _partition_executable(
+    executable: list[TradeSignal] | None,
+) -> tuple[set[str], set[str]]:
+    sell_codes: set[str] = set()
+    buy_codes: set[str] = set()
+    for sig in executable or []:
+        if sig.action == "卖出":
+            sell_codes.add(sig.code)
+        elif sig.action == "买入":
+            buy_codes.add(sig.code)
+    return buy_codes, sell_codes
+
+
+def _holding_qty_for_code(payload: dict, code: str) -> int:
+    for row in resolve_payload_holdings(payload):
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("股票代码") or "").strip() == code:
+            return int(_holding_quantity(row) or 0)
+    return 0
+
+
+def _holding_mark_price_for_code(payload: dict, code: str) -> float | None:
+    for row in resolve_payload_holdings(payload):
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("股票代码") or "").strip() == code:
+            return holding_mark_price(row)
+    return None
+
+
 def _signal_trigger_text(sig: TradeSignal) -> str:
     kind = str(sig.signal_kind or sig.sell_type or "").strip()
     reason = str(sig.reason or "").strip()
@@ -493,23 +548,161 @@ def _signal_trigger_text(sig: TradeSignal) -> str:
     return reason[:24] if reason else "策略触发"
 
 
+def _format_buy_signal_line(
+    sig: TradeSignal,
+    *,
+    executed: dict[str, ExecutedTrade],
+    executable_codes: set[str],
+    audit_row: dict | None = None,
+) -> str:
+    trigger = _signal_trigger_text(sig)
+    px = _fmt_price(sig.price if sig.price > 0 else None)
+    qty = _signal_qty_label(sig.quantity)
+    qty_part = f" {qty}" if qty else ""
+    progress = _confirm_progress_suffix(audit_row)
+    if sig.code in executed:
+        return f"{_RED} 已买：{sig.name}{qty_part}{progress}  触发「{trigger}」现价{px}"
+    if sig.code in executable_codes:
+        return f"⚠️ 买入·未成交：{sig.name}{qty_part}{progress}  触发「{trigger}」现价{px}"
+    return f"{_RED} 买信号·确认中：{sig.name}{qty_part}{progress}  触发「{trigger}」现价{px}"
+
+
+def _format_sell_signal_line(
+    sig: TradeSignal,
+    *,
+    executed: dict[str, ExecutedTrade],
+    executable_codes: set[str],
+    audit_row: dict | None = None,
+) -> str:
+    trigger = _signal_trigger_text(sig)
+    px = _fmt_price(sig.price if sig.price > 0 else None)
+    qty = _signal_qty_label(sig.quantity)
+    qty_part = f" {qty}" if qty else ""
+    progress = _confirm_progress_suffix(audit_row)
+    if sig.code in executed:
+        return f"{_GREEN} 已卖：{sig.name}{qty_part}{progress}  触发「{trigger}」现价{px}"
+    if sig.code in executable_codes:
+        return f"⚠️ 卖出·未成交：{sig.name}{qty_part}{progress}  触发「{trigger}」现价{px}"
+    return f"{_GREEN} 卖信号·确认中：{sig.name}{qty_part}{progress}  触发「{trigger}」现价{px}"
+
+
+def _has_signal_activity(
+    raw_buy: list[TradeSignal],
+    raw_sell: list[TradeSignal],
+    *,
+    executed: list[ExecutedTrade] | None = None,
+    audit: list[dict] | None = None,
+) -> bool:
+    pending_buy, pending_sell = pending_confirm_codes(audit)
+    return bool(raw_buy or raw_sell or executed or pending_buy or pending_sell)
+
+
+def _format_audit_pending_sell_line(
+    row: dict,
+    payload: dict,
+    *,
+    executed: dict[str, ExecutedTrade],
+    executable_codes: set[str],
+) -> str:
+    code = str(row.get("股票代码") or "").strip()
+    name = str(row.get("股票名称") or code).strip()
+    trigger = str(row.get("信号类型") or "卖信号").strip()
+    progress = _confirm_progress_suffix(row)
+    qty = _signal_qty_label(_holding_qty_for_code(payload, code))
+    qty_part = f" {qty}" if qty else ""
+    px = _fmt_price(_holding_mark_price_for_code(payload, code))
+    if code in executed:
+        return f"{_GREEN} 已卖：{name}{qty_part}{progress}  触发「{trigger}」现价{px}"
+    if code in executable_codes:
+        return f"⚠️ 卖出·未成交：{name}{qty_part}{progress}  触发「{trigger}」现价{px}"
+    return f"{_GREEN} 卖信号·确认中：{name}{qty_part}{progress}  触发「{trigger}」现价{px}"
+
+
 def _format_signal_lines(
     raw_buy: list[TradeSignal],
     raw_sell: list[TradeSignal],
     *,
+    executable: list[TradeSignal] | None = None,
+    executed: list[ExecutedTrade] | None = None,
+    audit: list[dict] | None = None,
+    payload: dict | None = None,
     ctx: ScoreContext | None = None,
     mode: str = "during_market",
 ) -> list[str]:
     lines: list[str] = [_section_heading(_ICON_SIGNAL, "买卖信号")]
-    if raw_buy or raw_sell:
-        for sig in raw_buy:
-            trigger = _signal_trigger_text(sig)
-            px = _fmt_price(sig.price if sig.price > 0 else None)
-            lines.append(f"{_RED} 买入：{sig.name}    触发「{trigger}」现价{px}")
+    exec_sold, exec_bought = _partition_executed(executed)
+    buy_ready, sell_ready = _partition_executable(executable)
+    audit_index = index_confirmation_audit(audit)
+    pending_buy, pending_sell = pending_confirm_codes(audit)
+
+    has_activity = _has_signal_activity(
+        raw_buy,
+        raw_sell,
+        executed=executed,
+        audit=audit,
+    )
+
+    if has_activity:
+        shown_buy: set[str] = set()
+        shown_sell: set[str] = set()
         for sig in raw_sell:
-            trigger = _signal_trigger_text(sig)
-            px = _fmt_price(sig.price if sig.price > 0 else None)
-            lines.append(f"{_GREEN} 卖出：{sig.name}    触发「{trigger}」现价{px}")
+            lines.append(
+                _format_sell_signal_line(
+                    sig,
+                    executed=exec_sold,
+                    executable_codes=sell_ready,
+                    audit_row=audit_index.get((sig.code, "卖出")),
+                )
+            )
+            shown_sell.add(sig.code)
+        for code in pending_sell:
+            if code in shown_sell:
+                continue
+            row = audit_index.get((code, "卖出"))
+            if row and payload is not None:
+                lines.append(
+                    _format_audit_pending_sell_line(
+                        row,
+                        payload,
+                        executed=exec_sold,
+                        executable_codes=sell_ready,
+                    )
+                )
+                shown_sell.add(code)
+        for sig in raw_buy:
+            lines.append(
+                _format_buy_signal_line(
+                    sig,
+                    executed=exec_bought,
+                    executable_codes=buy_ready,
+                    audit_row=audit_index.get((sig.code, "买入")),
+                )
+            )
+            shown_buy.add(sig.code)
+        for code, item in exec_sold.items():
+            if code in shown_sell:
+                continue
+            lines.append(
+                _format_sell_signal_line(
+                    item.signal,
+                    executed=exec_sold,
+                    executable_codes=sell_ready,
+                    audit_row=audit_index.get((code, "卖出")),
+                )
+            )
+            shown_sell.add(code)
+        for code, item in exec_bought.items():
+            if code in shown_buy:
+                continue
+            lines.append(
+                _format_buy_signal_line(
+                    item.signal,
+                    executed=exec_bought,
+                    executable_codes=buy_ready,
+                    audit_row=audit_index.get((code, "买入")),
+                )
+            )
+            shown_buy.add(code)
         return lines
 
     if ctx is not None:
@@ -518,6 +711,7 @@ def _format_signal_lines(
             mode=mode,
             raw_buy=raw_buy,
             raw_sell=raw_sell,
+            audit=audit,
             per_side=2,
         )
         if buy_notes or sell_notes:
@@ -543,6 +737,9 @@ def build_during_market_push(
     timestamp: str,
     raw_buy: list[TradeSignal] | None = None,
     raw_sell: list[TradeSignal] | None = None,
+    executable: list[TradeSignal] | None = None,
+    executed: list[ExecutedTrade] | None = None,
+    audit: list[dict] | None = None,
     ctx: ScoreContext | None = None,
     mode: str = "during_market",
 ) -> str:
@@ -555,18 +752,32 @@ def build_during_market_push(
     ]
 
     hold_title, hold_lines = _format_holding_lines(payload)
-    lines.append(hold_title)
-    lines.extend(hold_lines)
-    lines.append("")
-
-    lines.extend(
-        _format_signal_lines(
-            raw_buy or [],
-            raw_sell or [],
-            ctx=ctx,
-            mode=mode,
-        )
+    signal_lines = _format_signal_lines(
+        raw_buy or [],
+        raw_sell or [],
+        executable=executable,
+        executed=executed,
+        audit=audit,
+        payload=payload,
+        ctx=ctx,
+        mode=mode,
     )
+    signals_first = _has_signal_activity(
+        raw_buy or [],
+        raw_sell or [],
+        executed=executed,
+        audit=audit,
+    )
+    if signals_first:
+        lines.extend(signal_lines)
+        lines.append("")
+        lines.append(hold_title)
+        lines.extend(hold_lines)
+    else:
+        lines.append(hold_title)
+        lines.extend(hold_lines)
+        lines.append("")
+        lines.extend(signal_lines)
     lines.append("")
 
     wl_title, wl_lines = _format_watchlist_anomaly_lines(payload)

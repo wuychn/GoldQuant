@@ -47,6 +47,49 @@ def _simplify_reason(text: str) -> str:
     return s[:80] if s else ""
 
 
+def _confirm_progress_suffix(audit_row: dict | None) -> str:
+    """从审计行提取「5/10分，1/2轮」类进度后缀。"""
+    if not audit_row:
+        return ""
+    status = str(audit_row.get("状态") or "")
+    m = re.search(r"（([^）]+)）", status)
+    if not m:
+        return ""
+    return f"（{m.group(1)}）"
+
+
+def index_confirmation_audit(audit: list[dict] | None) -> dict[tuple[str, str], dict]:
+    """按 (股票代码, 方向) 索引三确认审计行。"""
+    out: dict[tuple[str, str], dict] = {}
+    for row in audit or []:
+        if not isinstance(row, dict):
+            continue
+        code = str(row.get("股票代码") or "").strip()
+        action = str(row.get("方向") or "").strip()
+        if code and action:
+            out[(code, action)] = row
+    return out
+
+
+def pending_confirm_codes(audit: list[dict] | None) -> tuple[set[str], set[str]]:
+    """仍在持续确认、尚未可执行的买卖代码。"""
+    buy_codes: set[str] = set()
+    sell_codes: set[str] = set()
+    for row in audit or []:
+        if not isinstance(row, dict) or row.get("可执行"):
+            continue
+        code = str(row.get("股票代码") or "").strip()
+        action = str(row.get("方向") or "").strip()
+        status = str(row.get("状态") or "")
+        if not code or ("确认" not in status and "锁存" not in status):
+            continue
+        if action == "卖出":
+            sell_codes.add(code)
+        elif action == "买入":
+            buy_codes.add(code)
+    return buy_codes, sell_codes
+
+
 def _audit_line(row: dict) -> str | None:
     if row.get("可执行"):
         return None
@@ -58,10 +101,10 @@ def _audit_line(row: dict) -> str | None:
     is_sell = action == "卖出"
     if is_sell and "等待14:30" in status:
         return f"{name}：卖点条件已满足，等尾盘最终确认"
-    if is_sell and "持续确认中" in status:
-        return f"{name}：卖点条件持续确认中"
+    if is_sell and ("持续确认中" in status or "锁存" in status):
+        return f"{name}：卖信号确认中"
     if is_sell and "确认" in status:
-        return f"{name}：出现卖点信号，仍在持续确认"
+        return f"{name}：卖信号确认中"
     if not is_sell and "持续确认中" in status:
         return f"{name}：买点条件持续确认中"
     if not is_sell and "确认" in status:
@@ -147,7 +190,13 @@ def _sample_lines(candidates: list[str], *, limit: int) -> list[str]:
     return random.sample(candidates, limit)
 
 
-def _watchlist_skip_examples(ctx: ScoreContext, *, mode: str, limit: int = 2) -> list[str]:
+def _watchlist_skip_examples(
+    ctx: ScoreContext,
+    *,
+    mode: str,
+    limit: int = 2,
+    exclude_codes: set[str] | None = None,
+) -> list[str]:
     """仅从自选股（未持仓）抽样未满足买点的说明。"""
     mw_cfg = load_gates_config().get("main_wave") or {}
     buy_cfg = (load_gates_config().get("buy") or {}).get(
@@ -156,13 +205,14 @@ def _watchlist_skip_examples(ctx: ScoreContext, *, mode: str, limit: int = 2) ->
     engine = ScoringEngine()
     threshold = float(engine.config.get("buy_threshold", 72))
     held = {str(h.get("股票代码", "")).strip() for h in get_holdings()}
+    skip = exclude_codes or set()
 
     candidates: list[str] = []
     for stock in ctx.payload.get("自选股") or []:
         if not isinstance(stock, dict):
             continue
         code = str(stock.get("股票代码", "")).strip()
-        if not code or code in held:
+        if not code or code in held or code in skip:
             continue
         line = _skip_reason_for_watchlist_stock(
             stock,
@@ -229,7 +279,7 @@ def _holding_hold_reason(
     if _intraday_weakness_applies(ctx, sell_cfg):
         ok_weak, _ = intraday_weakness_triggers_sell(enriched, sell_cfg)
         if ok_weak:
-            return f"{name}：日内走弱待确认"
+            return f"{name}：分时走弱，卖信号确认中"
     ok_sell, _, _ = detect_sell_setup(enriched, ctx, mw_cfg)
     if ok_sell:
         return f"{name}：卖点待确认"
@@ -284,13 +334,24 @@ def sample_no_trade_reasons(
     mode: str,
     raw_buy: list[TradeSignal] | None = None,
     raw_sell: list[TradeSignal] | None = None,
+    audit: list[dict] | None = None,
+    extra_buy_exclude: set[str] | None = None,
+    extra_sell_exclude: set[str] | None = None,
     per_side: int = 2,
 ) -> tuple[list[str], list[str]]:
     """无买卖信号时：自选未买、持仓未卖各随机抽样。"""
-    buy_exclude = {s.code for s in raw_buy or []}
-    sell_exclude = {s.code for s in raw_sell or []}
+    buy_exclude = {s.code for s in raw_buy or []} | (extra_buy_exclude or set())
+    sell_exclude = {s.code for s in raw_sell or []} | (extra_sell_exclude or set())
+    pending_buy, pending_sell = pending_confirm_codes(audit)
+    buy_exclude |= pending_buy
+    sell_exclude |= pending_sell
 
-    buy_pool = _watchlist_skip_examples(ctx, mode=mode, limit=max(per_side * 3, 6))
+    buy_pool = _watchlist_skip_examples(
+        ctx,
+        mode=mode,
+        limit=max(per_side * 3, 6),
+        exclude_codes=buy_exclude,
+    )
     sell_pool = _collect_holding_hold_reasons(ctx, exclude_codes=sell_exclude)
 
     buy_lines = _sample_lines(buy_pool, limit=per_side)

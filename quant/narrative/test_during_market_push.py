@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from quant.execution.executor import ExecutedTrade
 from quant.narrative.during_market_push import build_during_market_push
 from quant.scoring.context import ScoreContext
 from quant.signals.models import TradeSignal
@@ -58,39 +59,118 @@ class DuringMarketPushTests(unittest.TestCase):
         self.assertIn("成交5823", text)
 
     def test_signals_block(self) -> None:
+        sell_sig = TradeSignal(
+            action="卖出",
+            code="600519",
+            name="贵州茅台",
+            price=1680.0,
+            quantity=100,
+            strategy="主升浪",
+            reason="日内走弱",
+            sell_type="日内走弱",
+        )
+        buy_sig = TradeSignal(
+            action="买入",
+            code="601689",
+            name="拓普集团",
+            price=67.10,
+            quantity=100,
+            strategy="主升浪",
+            reason="[上升途中]评分75",
+            signal_kind="上升途中",
+        )
         with patch("quant.store.state.get_holdings", return_value=[]):
-            text = build_during_market_push(
+            pending = build_during_market_push(
                 {"自选股": [], "持仓股": []},
                 timestamp="2026-06-18 14:35:00",
-                raw_buy=[
-                    TradeSignal(
-                        action="买入",
-                        code="601689",
-                        name="拓普集团",
-                        price=67.10,
-                        quantity=100,
-                        strategy="主升浪",
-                        reason="[上升途中]评分75",
-                        signal_kind="上升途中",
-                    )
-                ],
-                raw_sell=[
-                    TradeSignal(
-                        action="卖出",
-                        code="600519",
-                        name="贵州茅台",
-                        price=1680.0,
-                        quantity=100,
-                        strategy="主升浪",
-                        reason="日内走弱",
-                        sell_type="日内走弱",
+                raw_buy=[buy_sig],
+                raw_sell=[sell_sig],
+            )
+            executed = build_during_market_push(
+                {"自选股": [], "持仓股": []},
+                timestamp="2026-06-18 14:37:00",
+                raw_sell=[sell_sig],
+                executable=[sell_sig],
+                executed=[
+                    ExecutedTrade(
+                        signal=sell_sig,
+                        timestamp="14:37:00",
+                        pnl=-120.0,
                     )
                 ],
             )
-        self.assertIn("拓普集团", text)
-        self.assertIn("贵州茅台", text)
-        self.assertIn("买入", text)
-        self.assertIn("卖出", text)
+        self.assertIn("拓普集团", pending)
+        self.assertIn("贵州茅台", pending)
+        self.assertIn("买信号·确认中", pending)
+        self.assertIn("卖信号·确认中", pending)
+        self.assertIn("100股", pending)
+        self.assertIn("已卖", executed)
+        self.assertIn("100股", executed)
+        self.assertNotIn("卖信号·确认中", executed)
+
+    def test_pending_sell_not_shown_as_skip(self) -> None:
+        ctx = ScoreContext.from_payload(
+            {
+                "自选股": [],
+                "持仓股": [
+                    {
+                        "股票代码": "600498",
+                        "股票名称": "烽火通信",
+                        "买入价": 80.0,
+                        "持仓股数": 500,
+                        "盘口": {"最新": 75.61, "涨幅": -2.0},
+                    },
+                    {
+                        "股票代码": "002436",
+                        "股票名称": "兴森科技",
+                        "买入价": 47.7,
+                        "持仓股数": 100,
+                        "盘口": {"最新": 47.7, "涨幅": 0.0},
+                    },
+                ],
+            },
+            mode="during_market",
+        )
+        sell_sig = TradeSignal(
+            action="卖出",
+            code="600498",
+            name="烽火通信",
+            price=75.61,
+            quantity=500,
+            strategy="主升浪",
+            reason="距日内高点回撤3.2%",
+            sell_type="日内走弱",
+            signal_kind="日内走弱",
+        )
+        audit = [
+            {
+                "股票代码": "600498",
+                "股票名称": "烽火通信",
+                "方向": "卖出",
+                "信号类型": "日内走弱",
+                "确认次数": 1,
+                "状态": "当日锁存确认中（累计1/2次，0/10分）",
+                "可执行": False,
+                "理由": sell_sig.reason,
+            }
+        ]
+        holdings = [
+            {"股票代码": "600498", "股票名称": "烽火通信", "买入价": 80.0, "持仓股数": 500},
+            {"股票代码": "002436", "股票名称": "兴森科技", "买入价": 47.7, "持仓股数": 100},
+        ]
+        with patch("quant.store.state.get_holdings", return_value=holdings):
+            text = build_during_market_push(
+                ctx.payload,
+                timestamp="2026-06-18 14:37:00",
+                raw_sell=[sell_sig],
+                audit=audit,
+                ctx=ctx,
+            )
+        self.assertIn("卖信号·确认中：烽火通信 500股", text)
+        self.assertIn("1/2次", text)
+        self.assertNotIn("·未卖 烽火通信", text)
+        self.assertNotIn("·未卖", text)
+        self.assertLess(text.index("卖信号·确认中"), text.index("💼 持仓"))
 
     def test_no_signal_shows_skip_reasons(self) -> None:
         ctx = ScoreContext.from_payload(

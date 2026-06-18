@@ -50,6 +50,22 @@ def _position_buy_kind(holding: dict) -> str:
     return ""
 
 
+def verify_sell_signal_still_valid(
+    code: str,
+    ctx: ScoreContext,
+    *,
+    signal_kind: str = "",
+) -> bool:
+    """持续确认成交前再验：持仓仍满足同类型卖出条件。"""
+    for sig in generate_sell_signals(ctx):
+        if sig.code != code:
+            continue
+        if signal_kind and sig.signal_kind != signal_kind:
+            continue
+        return True
+    return False
+
+
 def generate_sell_signals(ctx: ScoreContext) -> list[TradeSignal]:
     """产生卖出原始信号（未经三确认）。"""
     mw_cfg = load_gates_config().get("main_wave") or {}

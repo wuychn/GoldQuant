@@ -183,18 +183,23 @@ class Settings(BaseSettings):
     #: 每累计一次同花顺资金流失败，后续请求额外等待秒数（失败越多等越久）。
     QUANT_THS_FUNDS_FAILURE_BACKOFF_SEC: float = Field(default=5.0, ge=0.0, le=120.0)
 
-    #: 测试阶段：为 true 时人气榜/涨停统计仅处理前 3 条（仍走实时接口）。
+    #: 测试阶段：为 true 时数据侧 API 列表统一只返回前 3 条，且候选池人气/涨停等处理亦限 3 条。
     QUANT_TEST_PHASE: bool = False
     #: 本地数据：为 true 时 ``python -m quant`` 从 ``data/*.json`` 读数，不请求 FastAPI。
     QUANT_USE_LOCAL_FIXTURE: bool = False
 
+    def quant_test_list_limit(self) -> int | None:
+        """测试阶段 API/数据侧列表统一条数上限；``None`` 表示不截断。"""
+        return 3 if self.QUANT_TEST_PHASE else None
+
     def quant_hot_list_limit(self) -> int:
         """同花顺人气榜处理条数上限。"""
-        return 3 if self.QUANT_TEST_PHASE else 30
+        limit = self.quant_test_list_limit()
+        return limit if limit is not None else 30
 
     def quant_bulk_row_limit(self) -> int | None:
         """涨停统计处理条数上限；``None`` 表示全量。"""
-        return 3 if self.QUANT_TEST_PHASE else None
+        return self.quant_test_list_limit()
 
     # 飞书配置
     FEISHU_APP_ID: str | None = None

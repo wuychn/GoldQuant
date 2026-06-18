@@ -258,6 +258,9 @@ def process_during_market(raw: dict, *, timestamp: str = "") -> str:
         timestamp=ts,
         raw_buy=raw_buy,
         raw_sell=raw_sell,
+        executable=executable,
+        executed=executed,
+        audit=audit,
         ctx=ctx,
         mode=scope,
     )

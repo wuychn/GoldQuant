@@ -163,53 +163,58 @@ gates:
   stoploss_cooldown_days: 3         # 止损卖出后 N 日内不再买同代码
   block_same_day_rebuy_after_sell: true  # 当日卖出过的代码当日不再买入
 
-  # 持续确认：买入当日有效 + 软中断；卖出仍偏严格
+  # 持续确认：当日锁存 + 累计命中（第 N 次仍满足时成交；跨日清）
   confirmation:
-    default_persistence_minutes: 10
-    default_min_consecutive_runs: 2
+    day_latch:
+      enabled: true                 # 首次触发当日锁存至收盘；缺轮不清零累计
+    default_min_span_minutes: 3      # 自首次触发起最短间隔（分钟）
+    default_min_day_hits: 2           # 当日累计命中次数（不必连续）
+    default_persistence_minutes: 3   # 兼容旧键 → min_span_minutes
+    default_min_consecutive_runs: 2   # 兼容旧键 → min_day_hits
     max_window_minutes: 180
     buy_policy:
-      same_day_window: true       # 买入：同一自然日内不因 max_window 重计
-      max_miss_streak: 1          # 买入：允许 1 轮未见信号（软中断）
-      use_trading_minutes: true   # 买入：持续时长按连续竞价分钟（剔除午休）
-      verify_before_execute: true # 买入：成交前再验趋势/评分/分时
+      use_trading_minutes: true       # 买入：间隔按连续竞价分钟（剔除午休）
+      verify_before_execute: true   # 买入：成交前再验趋势/评分/分时
+    sell_policy:
+      verify_before_execute: true   # 卖出：成交前再验卖点仍成立
     skip_count_modes:
       - pre_market
     by_kind:
       止损:
-        persistence_minutes: 0
-        min_consecutive_runs: 1
+        min_span_minutes: 0
+        min_day_hits: 1
       日内走弱:
-        persistence_minutes: 10
-        min_consecutive_runs: 2
+        min_span_minutes: 10
+        min_day_hits: 2
       上升途中:
-        persistence_minutes: 5
-        min_consecutive_runs: 1
+        min_span_minutes: 5
+        min_day_hits: 1
       回调企稳:
-        persistence_minutes: 15
-        min_consecutive_runs: 2
+        min_span_minutes: 15
+        min_day_hits: 2
       # 破5日线 / 趋势衰竭 / 评分走弱：卖出侧仍偏长确认
       破5日线:
-        persistence_minutes: 20
-        min_consecutive_runs: 3
+        min_span_minutes: 20
+        min_day_hits: 3
       趋势衰竭:
-        persistence_minutes: 30
-        min_consecutive_runs: 3
-        max_window_minutes: 4320       # 72h，允许多日逐步确认
+        min_span_minutes: 30
+        min_day_hits: 3
+        max_window_minutes: 4320
+        multi_day: true              # 允许多日累计，非日锁存
       评分走弱:
-        persistence_minutes: 20
-        min_consecutive_runs: 3
+        min_span_minutes: 20
+        min_day_hits: 3
     强势:
-      persistence_minutes: 10   # 买入约 09:37→09:47（2 轮）
-      min_consecutive_runs: 2
+      min_span_minutes: 10
+      min_day_hits: 2
       max_window_minutes: 120
     震荡:
-      persistence_minutes: 10   # 买入约 09:37→09:47（2 轮）
-      min_consecutive_runs: 2
+      min_span_minutes: 10
+      min_day_hits: 2
       max_window_minutes: 180
     弱势:
-      persistence_minutes: 15
-      min_consecutive_runs: 2
+      min_span_minutes: 15
+      min_day_hits: 2
       max_window_minutes: 240
 
   # 概念板块：滑动窗口四榜快照 + concept_theme 概念权重；仅晚间复盘写入状态

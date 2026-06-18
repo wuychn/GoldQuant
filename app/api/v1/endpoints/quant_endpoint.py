@@ -161,7 +161,9 @@ def _finalize_quant_payload(obj: Any) -> Any:
         from quant.store.state import merge_payload_holdings
 
         out = merge_payload_holdings(out)
-    return out
+    from app.utils.quant_test_trim import maybe_trim_for_test_phase
+
+    return maybe_trim_for_test_phase(out)
 
 
 def _merge_concept_boards(jzf: list | None, jzj: list | None, jdf: list | None, jzjlc: list | None, *, limit: int = 10) -> dict[str, Any]:

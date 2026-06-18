@@ -21,13 +21,16 @@ def ak_dataframe_to_payload(
     :param params: 与本次调用一致的入参，用于回显与排错。
     """
     rows = dataframe_to_records(df)
-    return {
+    payload = {
         "source": f"akshare.{source_func}",
         "params": params,
         "row_count": len(rows),
         "columns": list(df.columns) if not df.empty else [],
         "rows": rows,
     }
+    from app.utils.quant_test_trim import maybe_trim_for_test_phase
+
+    return maybe_trim_for_test_phase(payload)
 
 
 def wrap_ak_dataframe(
