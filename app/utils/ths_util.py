@@ -11,6 +11,7 @@ import httpx
 import py_mini_racer
 from akshare.stock_feature.stock_fund_flow import _get_file_content_ths
 from fastapi import HTTPException
+from fastapi.concurrency import run_in_threadpool
 
 from app.api.deps import SettingsDep
 from app.utils.common_util import filter_exclude_by_key, format_percent, sort_by_field_and_limit
@@ -411,15 +412,42 @@ async def stock_skyrocket(settings):
     return result
 
 
-async def stock_fund_flow_concept(type_, sort_key, desc=True):
-    """同花顺概念资金流。"""
-    records = dataframe_to_records(ak.stock_fund_flow_concept(symbol=type_))
-    return sort_by_field_and_limit(
-        filter_exclude_by_key(records, "行业", ["融资融券", "深股通", "沪股通"]),
-        sort_key,
-        10,
-        desc=desc,
+_CONCEPT_BOARD_EXCLUDE = ["融资融券", "深股通", "沪股通"]
+
+
+def _filter_concept_fund_flow(records: list[dict]) -> list[dict]:
+    return filter_exclude_by_key(records, "行业", _CONCEPT_BOARD_EXCLUDE)
+
+
+async def _load_concept_fund_flow_records(type_: str) -> list[dict]:
+    """概念资金流全量：优先直连 THS，失败回退 akshare。"""
+    from app.utils.concept_board_fetch import fetch_ths_concept_fund_flow
+
+    try:
+        return await run_in_threadpool(fetch_ths_concept_fund_flow, type_)
+    except Exception:
+        return dataframe_to_records(
+            await run_in_threadpool(lambda: ak.stock_fund_flow_concept(symbol=type_))
+        )
+
+
+async def concept_board_top_lists(
+    type_: str = "即时",
+) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
+    """一次拉取概念资金流，本地切出涨幅/跌幅/流入/流出四榜。"""
+    records = _filter_concept_fund_flow(await _load_concept_fund_flow_records(type_))
+    return (
+        sort_by_field_and_limit(records, "行业-涨跌幅", 10, desc=True),
+        sort_by_field_and_limit(records, "行业-涨跌幅", 10, desc=False),
+        sort_by_field_and_limit(records, "净额", 10, desc=True),
+        sort_by_field_and_limit(records, "净额", 10, desc=False),
     )
+
+
+async def stock_fund_flow_concept(type_, sort_key, desc=True):
+    """同花顺概念资金流（单榜；新代码请优先用 concept_board_top_lists 一次拉取）。"""
+    records = _filter_concept_fund_flow(await _load_concept_fund_flow_records(type_))
+    return sort_by_field_and_limit(records, sort_key, 10, desc=desc)
 
 
 async def zdfb_ths():

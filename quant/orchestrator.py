@@ -243,7 +243,14 @@ def process_during_market(raw: dict, *, timestamp: str = "") -> str:
 
     log_progress(scope, "模板化推送文案")
     ts = timestamp or cn_datetime_str()
-    body = build_during_market_push(payload, timestamp=ts, raw_buy=raw_buy, raw_sell=raw_sell)
+    body = build_during_market_push(
+        payload,
+        timestamp=ts,
+        raw_buy=raw_buy,
+        raw_sell=raw_sell,
+        ctx=ctx,
+        mode=scope,
+    )
     log_progress_done(scope, "盘中分析完成", detail=f"成交 {len(executed)} 笔")
     return body
 

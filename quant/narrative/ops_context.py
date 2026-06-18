@@ -11,7 +11,7 @@ from quant.gates.rules import check_buy_gates
 from quant.scoring.context import ScoreContext
 from quant.scoring.engine import ScoringEngine
 from quant.signals.models import TradeSignal
-from quant.store.state import get_holdings
+from quant.store.state import get_holdings, resolve_payload_holdings
 from quant.strategy.intraday import intraday_allows_buy
 from quant.strategy.main_wave import detect_buy_setup
 from quant.strategy.trend import trend_allows_buy
@@ -177,6 +177,137 @@ def _watchlist_skip_examples(ctx: ScoreContext, *, mode: str, limit: int = 2) ->
             candidates.append(line)
 
     return _sample_lines(candidates, limit=limit)
+
+
+def _intraday_weakness_applies(ctx: ScoreContext, sell_cfg: dict) -> bool:
+    weak = sell_cfg.get("intraday_weakness") or {}
+    if not weak.get("enabled", True):
+        return False
+    modes = weak.get("modes") or ["during_market"]
+    return bool(ctx.mode and ctx.mode in modes)
+
+
+def _holding_hold_reason(
+    holding: dict,
+    enriched: dict,
+    ctx: ScoreContext,
+    *,
+    mw_cfg: dict[str, Any],
+    sell_cfg: dict[str, Any],
+    engine: ScoringEngine,
+) -> str:
+    """持仓未出现在卖出信号里时的说明（始终返回一行）。"""
+    from quant.scoring.tech_indicators import quote_last_price
+    from quant.strategy.intraday import intraday_weakness_triggers_sell
+    from quant.strategy.main_wave import detect_sell_setup
+    from quant.strategy.time_stop import parse_buy_date, time_stop_triggers_sell
+
+    code = str(holding.get("股票代码", "")).strip()
+    name = str(holding.get("股票名称", "")).strip() or code
+    if not code:
+        return ""
+
+    price = quote_last_price(enriched)
+    if price is None:
+        return f"{name}：暂无行情"
+    try:
+        buy_price = float(enriched.get("买入价", 0) or 0)
+    except (TypeError, ValueError):
+        buy_price = 0.0
+    pnl_pct = (price - buy_price) / buy_price * 100 if buy_price > 0 else 0.0
+    stop_loss = float(sell_cfg.get("stop_loss_pct", -5.0))
+    score = engine.score_stock(ctx, enriched)
+    sell_threshold = float(engine.config.get("sell_threshold", 45))
+
+    if pnl_pct <= stop_loss:
+        return f"{name}：触及止损线"
+    ts_ok, _ = time_stop_triggers_sell(
+        enriched, sell_cfg, pnl_pct=pnl_pct, buy_date=parse_buy_date(enriched)
+    )
+    if ts_ok:
+        return f"{name}：时间止损待确认"
+    if _intraday_weakness_applies(ctx, sell_cfg):
+        ok_weak, _ = intraday_weakness_triggers_sell(enriched, sell_cfg)
+        if ok_weak:
+            return f"{name}：日内走弱待确认"
+    ok_sell, _, _ = detect_sell_setup(enriched, ctx, mw_cfg)
+    if ok_sell:
+        return f"{name}：卖点待确认"
+    if pnl_pct >= 3.0:
+        return f"{name}：浮盈{pnl_pct:.1f}%，持有"
+    if pnl_pct <= stop_loss * 0.6:
+        return f"{name}：浮亏{pnl_pct:.1f}%，未触发止损"
+    if score.total >= sell_threshold + 8:
+        return f"{name}：评分尚可，暂不减"
+    return f"{name}：暂不减仓"
+
+
+def _collect_holding_hold_reasons(
+    ctx: ScoreContext,
+    *,
+    exclude_codes: set[str],
+) -> list[str]:
+    mw_cfg = load_gates_config().get("main_wave") or {}
+    sell_cfg = load_gates_config().get("sell") or {}
+    engine = ScoringEngine()
+    out: list[str] = []
+    for holding in resolve_payload_holdings(ctx.payload):
+        if not isinstance(holding, dict):
+            continue
+        code = str(holding.get("股票代码", "")).strip()
+        if not code or code in exclude_codes:
+            continue
+        enriched = holding
+        for row in ctx.payload.get("持仓股") or []:
+            if str(row.get("股票代码", "")).strip() == code:
+                enriched = {**holding, **row}
+                break
+        line = _holding_hold_reason(
+            holding, enriched, ctx, mw_cfg=mw_cfg, sell_cfg=sell_cfg, engine=engine
+        )
+        if line:
+            out.append(line)
+    return out
+
+
+def _holding_skip_examples(ctx: ScoreContext, *, mode: str, limit: int = 2) -> list[str]:
+    del mode
+    return _sample_lines(
+        _collect_holding_hold_reasons(ctx, exclude_codes=set()),
+        limit=limit,
+    )
+
+
+def sample_no_trade_reasons(
+    ctx: ScoreContext,
+    *,
+    mode: str,
+    raw_buy: list[TradeSignal] | None = None,
+    raw_sell: list[TradeSignal] | None = None,
+    per_side: int = 2,
+) -> tuple[list[str], list[str]]:
+    """无买卖信号时：自选未买、持仓未卖各随机抽样。"""
+    buy_exclude = {s.code for s in raw_buy or []}
+    sell_exclude = {s.code for s in raw_sell or []}
+
+    buy_pool = _watchlist_skip_examples(ctx, mode=mode, limit=max(per_side * 3, 6))
+    sell_pool = _collect_holding_hold_reasons(ctx, exclude_codes=sell_exclude)
+
+    buy_lines = _sample_lines(buy_pool, limit=per_side)
+    sell_lines = _sample_lines(sell_pool, limit=per_side)
+
+    if not sell_lines:
+        held = resolve_payload_holdings(ctx.payload)
+        fallback = [
+            f"{str(h.get('股票名称') or h.get('股票代码', '')).strip()}：暂不减仓"
+            for h in held
+            if isinstance(h, dict)
+            and str(h.get("股票代码", "")).strip()
+            and str(h.get("股票代码", "")).strip() not in sell_exclude
+        ]
+        sell_lines = _sample_lines(fallback, limit=per_side)
+
+    return buy_lines, sell_lines
 
 
 def _format_side_parts(

@@ -32,7 +32,7 @@ from app.utils.dfcf_util import ztgc, ztgc_with_date
 from app.utils.error_log import log_caught_error
 from app.services.stock_enrich import enrich_stock_rows
 from app.utils.etf52_util import zdfb_52etf
-from app.utils.ths_util import hyylb, stock_fund_flow_concept, hot_stock, zdfb_ths
+from app.utils.ths_util import concept_board_top_lists, hyylb, hot_stock, zdfb_ths
 from quant.scoring.theme_boards import normalize_industry_board_rows
 from quant.pool.candidate_config import (
     PAYLOAD_KEY_CXFL,
@@ -224,10 +224,20 @@ async def zjl_(n: int) -> list | None:
 
 async def _stock_fund_flow_concept_or_none(context: str, sort_key: str, desc=True):
     try:
+        from app.utils.ths_util import stock_fund_flow_concept
+
         return await stock_fund_flow_concept("即时", sort_key, desc)
     except Exception:
         _log_api_error(f"{context} sort_key={sort_key!r}")
         return None
+
+
+async def _concept_boards_or_none(context: str = "概念四榜 | ths.concept_board_top_lists"):
+    try:
+        return await concept_board_top_lists("即时")
+    except Exception as exc:
+        _log_api_error(context, exc)
+        return None, None, None, None
 
 
 async def _enrich_stock_list(
@@ -697,24 +707,7 @@ async def during_market(settings: SettingsDep, background_tasks: BackgroundTasks
     macro_task = asyncio.gather(
         _dpzs(),
         _zqxy(market_phase="intraday"),
-        _stock_fund_flow_concept_or_none(
-            "涨幅前十概念 | ths.stock_fund_flow_concept",
-            "行业-涨跌幅",
-        ),
-        _stock_fund_flow_concept_or_none(
-            "跌幅前十概念 | ths.stock_fund_flow_concept",
-            "行业-涨跌幅",
-            False,
-        ),
-        _stock_fund_flow_concept_or_none(
-            "资金流入前十概念 | ths.stock_fund_flow_concept",
-            "净额",
-        ),
-        _stock_fund_flow_concept_or_none(
-            "资金流出前十概念 | ths.stock_fund_flow_concept",
-            "净额",
-            False,
-        ),
+        _concept_boards_or_none(),
         _industry_board_or_none("行业涨幅榜 | ths.hyylb", "涨跌幅", True),
         _industry_board_or_none("行业跌幅榜 | ths.hyylb", "涨跌幅", False),
         _industry_board_or_none("行业资金流入榜 | ths.hyylb", "净流入", True),
@@ -735,10 +728,7 @@ async def during_market(settings: SettingsDep, background_tasks: BackgroundTasks
         (
             dpzs,
             zqxy_,
-            jrzfqsgn,
-            jrdfqsgn,
-            jrzjlrqsgn,
-            jrzjlcqsgn,
+            concept_boards,
             hy_gain,
             hy_loss,
             hy_fund,
@@ -748,6 +738,11 @@ async def during_market(settings: SettingsDep, background_tasks: BackgroundTasks
         ),
         (zxg_, ccg_),
     ) = await asyncio.gather(macro_task, enrich_task)
+
+    if concept_boards[0] is None:
+        jrzfqsgn = jrdfqsgn = jrzjlrqsgn = jrzjlcqsgn = None
+    else:
+        jrzfqsgn, jrdfqsgn, jrzjlrqsgn, jrzjlcqsgn = concept_boards
 
     gn_bk = _merge_concept_boards(jrzfqsgn, jrzjlrqsgn, jrdfqsgn, jrzjlcqsgn)
     hy_bk = _merge_industry_boards(hy_gain, hy_fund, hy_loss, hy_fund_out)
@@ -787,38 +782,22 @@ async def post_market_lunch(settings: SettingsDep) -> Response:
 
     log_progress(scope, "拉取概念/行业四榜")
     (
-        jrzfqsgn,
-        jrdfqsgn,
-        jrzjlrqsgn,
-        jrzjlcqsgn,
+        concept_boards,
         hy_gain,
         hy_loss,
         hy_fund,
         hy_fund_out,
     ) = await asyncio.gather(
-        _stock_fund_flow_concept_or_none(
-            "涨幅前十概念 | ths.stock_fund_flow_concept",
-            "行业-涨跌幅",
-        ),
-        _stock_fund_flow_concept_or_none(
-            "跌幅前十概念 | ths.stock_fund_flow_concept",
-            "行业-涨跌幅",
-            False,
-        ),
-        _stock_fund_flow_concept_or_none(
-            "资金流入前十概念 | ths.stock_fund_flow_concept",
-            "净额",
-        ),
-        _stock_fund_flow_concept_or_none(
-            "资金流出前十概念 | ths.stock_fund_flow_concept",
-            "净额",
-            False,
-        ),
+        _concept_boards_or_none(),
         _industry_board_or_none("行业涨幅榜 | ths.hyylb", "涨跌幅", True),
         _industry_board_or_none("行业跌幅榜 | ths.hyylb", "涨跌幅", False),
         _industry_board_or_none("行业资金流入榜 | ths.hyylb", "净流入", True),
         _industry_board_or_none("行业资金流出榜 | ths.hyylb", "净流入", False),
     )
+    if concept_boards[0] is None:
+        jrzfqsgn = jrdfqsgn = jrzjlrqsgn = jrzjlcqsgn = None
+    else:
+        jrzfqsgn, jrdfqsgn, jrzjlrqsgn, jrzjlcqsgn = concept_boards
 
     gn_bk = _merge_concept_boards(jrzfqsgn, jrzjlrqsgn, jrdfqsgn, jrzjlcqsgn)
     hy_bk = _merge_industry_boards(hy_gain, hy_fund, hy_loss, hy_fund_out)
@@ -866,38 +845,22 @@ async def post_market(settings: SettingsDep, background_tasks: BackgroundTasks) 
 
     log_progress(scope, "拉取概念/行业四榜")
     (
-        jrzfqsgn,
-        jrdfqsgn,
-        jrzjlrqsgn,
-        jrzjlcqsgn,
+        concept_boards,
         hy_gain,
         hy_loss,
         hy_fund,
         hy_fund_out,
     ) = await asyncio.gather(
-        _stock_fund_flow_concept_or_none(
-            "涨幅前十概念 | ths.stock_fund_flow_concept",
-            "行业-涨跌幅",
-        ),
-        _stock_fund_flow_concept_or_none(
-            "跌幅前十概念 | ths.stock_fund_flow_concept",
-            "行业-涨跌幅",
-            False,
-        ),
-        _stock_fund_flow_concept_or_none(
-            "资金流入前十概念 | ths.stock_fund_flow_concept",
-            "净额",
-        ),
-        _stock_fund_flow_concept_or_none(
-            "资金流出前十概念 | ths.stock_fund_flow_concept",
-            "净额",
-            False,
-        ),
+        _concept_boards_or_none(),
         _industry_board_or_none("行业涨幅榜 | ths.hyylb", "涨跌幅", True),
         _industry_board_or_none("行业跌幅榜 | ths.hyylb", "涨跌幅", False),
         _industry_board_or_none("行业资金流入榜 | ths.hyylb", "净流入", True),
         _industry_board_or_none("行业资金流出榜 | ths.hyylb", "净流入", False),
     )
+    if concept_boards[0] is None:
+        jrzfqsgn = jrdfqsgn = jrzjlrqsgn = jrzjlcqsgn = None
+    else:
+        jrzfqsgn, jrdfqsgn, jrzjlrqsgn, jrzjlcqsgn = concept_boards
 
     gn_bk = _merge_concept_boards(jrzfqsgn, jrzjlrqsgn, jrdfqsgn, jrzjlcqsgn)
     hy_bk = _merge_industry_boards(hy_gain, hy_fund, hy_loss, hy_fund_out)
