@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 
@@ -12,12 +13,32 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _ENV_FILE = _PROJECT_ROOT / ".env"
 
+
+def build_during_market_schedule(
+    *,
+    interval_minutes: int = 7,
+    morning: tuple[int, int, int, int] = (9, 30, 11, 30),
+    afternoon: tuple[int, int, int, int] = (13, 0, 15, 0),
+) -> str:
+    """生成盘中智能盯盘 Cron 时点：连续竞价时段内每 ``interval_minutes`` 分钟一次。"""
+
+    def _session_times(start_h: int, start_m: int, end_h: int, end_m: int) -> list[str]:
+        start = datetime(2000, 1, 1, start_h, start_m)
+        end = datetime(2000, 1, 1, end_h, end_m)
+        step = timedelta(minutes=interval_minutes)
+        t = start
+        out: list[str] = []
+        while t <= end:
+            out.append(t.strftime("%H:%M"))
+            t += step
+        return out
+
+    times = _session_times(*morning) + _session_times(*afternoon)
+    return ",".join(times)
+
+
 # 量化定时任务默认「盘中」触发时点（comma HH:MM，可通过 `GOLDQUANT_QUANT_SCHED_DURING_MARKET_TIMES` 覆盖）
-_QUANT_SCHED_DEFAULT_DURING_TIMES = (
-    "09:37,09:47,09:57,10:07,10:17,10:27,10:37,10:47,10:57,"
-    "11:07,11:17,11:27,13:07,13:17,13:27,13:37,13:47,13:57,"
-    "14:07,14:17,14:27,14:37,14:47,14:57"
-)
+_QUANT_SCHED_DEFAULT_DURING_TIMES = build_during_market_schedule()
 
 
 def _dotenv_get(env_path: Path, key: str) -> str | None:
@@ -107,7 +128,7 @@ class Settings(BaseSettings):
     QUANT_SCHED_NEWS_MINUTE: int = Field(default=0, ge=0, le=59)
     #: 盘前（`pre_market`），仅工作日历命中时才会真正拉起子进程。
     QUANT_SCHED_PRE_MARKET_TIME: str = "09:25"
-    #: 盘中（`during_market`）多个触发点，`HH:MM` 逗号分隔。
+    #: 盘中（`during_market` / 智能盯盘）：默认 9:30–11:30、13:00–15:00 每 7 分钟，`HH:MM` 逗号分隔。
     QUANT_SCHED_DURING_MARKET_TIMES: str = _QUANT_SCHED_DEFAULT_DURING_TIMES
     #: 午间复盘（`post_market_lunch`），仅交易日（`is_real_workday_cn`）执行。
     QUANT_SCHED_POST_MARKET_LUNCH_TIME: str = "11:50"
