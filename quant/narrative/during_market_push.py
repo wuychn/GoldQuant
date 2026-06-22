@@ -12,9 +12,10 @@ from quant.narrative.ops_context import (
     pending_confirm_codes,
     sample_no_trade_reasons,
 )
-from quant.narrative.stock_lines import stock_name
+from quant.narrative.stock_lines import _parse_name_list, stock_name
 from quant.pool.ths_rank_util import format_ths_rank_tags_brief, stock_ths_rank_tags
 from quant.scoring.context import ScoreContext
+from quant.scoring.dimensions.concept_theme import resolve_stock_concepts
 from quant.scoring.tech_indicators import stock_daily_change_pct, to_float
 from quant.scoring.theme_boards import BOARD_CONCEPT, BOARD_INDUSTRY, section_board_rows
 from quant.execution.executor import ExecutedTrade
@@ -40,7 +41,6 @@ _ICON_WATCH = "👀"
 _ICON_INDUSTRY = "🏭"
 _ICON_CONCEPT = "💡"
 _BOARD_BRIEF_N = 3
-_WATCHLIST_ANOMALY_N = 15
 _WEEKDAYS = "一二三四五六日"
 
 
@@ -378,11 +378,85 @@ def _watchlist_tag_note(stock: dict) -> str:
     return tags[0]
 
 
-def _watchlist_anomaly_score(row: dict) -> float:
-    chg = stock_daily_change_pct(row) or 0.0
-    flow = abs(_stock_flow_yi(row) or 0.0)
-    tag_bonus = 3.0 if _watchlist_tag_note(row) else 0.0
-    return abs(chg) * 2.0 + flow + tag_bonus
+def _concept_gain_index(payload: dict) -> dict[str, float]:
+    """概念名 → 当日涨跌幅（四榜合并，同名取较高值）。"""
+    block = payload.get(BOARD_CONCEPT) or {}
+    index: dict[str, float] = {}
+    if not isinstance(block, dict):
+        return index
+    for key in ("涨幅榜", "跌幅榜", "资金流入榜", "资金流出榜"):
+        rows = block.get(key) or []
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            name = _theme_name(row)
+            chg = _theme_chg_pct(row)
+            if not name or chg is None:
+                continue
+            prev = index.get(name)
+            if prev is None or chg > prev:
+                index[name] = chg
+    return index
+
+
+def _stock_industry_name(row: dict) -> str:
+    for key in ("行业", "所属行业"):
+        names = _parse_name_list(row.get(key))
+        if names:
+            return names[0]
+    return ""
+
+
+def _stock_concept_names(row: dict, payload: dict) -> list[str]:
+    resolved = resolve_stock_concepts(row, payload)
+    return _parse_name_list(resolved.get("所属概念") or resolved.get("概念"))
+
+
+def _best_gain_concept(concepts: list[str], gain_index: dict[str, float]) -> tuple[str, float | None]:
+    if not concepts:
+        return "", None
+    scored = [(c, gain_index.get(c)) for c in concepts]
+    with_gain = [(c, g) for c, g in scored if g is not None]
+    if with_gain:
+        best_name, best_chg = max(with_gain, key=lambda x: (x[1], x[0]))
+        return best_name, best_chg
+    return concepts[0], None
+
+
+def _watchlist_change_pct(row: dict) -> float:
+    chg = stock_daily_change_pct(row)
+    return chg if chg is not None else float("-inf")
+
+
+def _format_industry_label(name: str) -> str:
+    name = name.strip()
+    if not name:
+        return ""
+    if name.endswith("行业"):
+        return name
+    return f"{name}行业"
+
+
+def _format_concept_label(name: str) -> str:
+    name = name.strip()
+    if not name:
+        return ""
+    if name.endswith("概念"):
+        return name
+    return f"{name}概念"
+
+
+def _format_watchlist_theme_brief(row: dict, payload: dict, concept_gain: dict[str, float]) -> str:
+    parts: list[str] = []
+    industry = _stock_industry_name(row)
+    if industry:
+        parts.append(_format_industry_label(industry))
+    concept, _concept_chg = _best_gain_concept(_stock_concept_names(row, payload), concept_gain)
+    if concept:
+        parts.append(_format_concept_label(concept))
+    return " · ".join(parts)
 
 
 def _format_watchlist_anomaly_lines(payload: dict) -> tuple[str, list[str]]:
@@ -390,11 +464,11 @@ def _format_watchlist_anomaly_lines(payload: dict) -> tuple[str, list[str]]:
     total = len(rows)
     if not rows:
         return _section_heading(_ICON_WATCH, "自选异动"), ["暂无自选股"]
-    ranked = sorted(rows, key=_watchlist_anomaly_score, reverse=True)
-    picked = ranked[:_WATCHLIST_ANOMALY_N]
-    title = _section_heading(_ICON_WATCH, f"自选异动（{len(picked)}/{total}）")
+    concept_gain = _concept_gain_index(payload)
+    ranked = sorted(rows, key=_watchlist_change_pct, reverse=True)
+    title = _section_heading(_ICON_WATCH, f"自选异动（{total}）")
     lines: list[str] = []
-    for row in picked:
+    for row in ranked:
         name = stock_name(row)
         if not name:
             continue
@@ -402,7 +476,12 @@ def _format_watchlist_anomaly_lines(payload: dict) -> tuple[str, list[str]]:
         emoji = _emoji_for_pct(chg)
         tag = _watchlist_tag_note(row)
         tag_part = f"  {tag}" if tag else ""
-        lines.append(f"{emoji} {name}  {_fmt_pct(chg)}  {_flow_brief(_stock_flow_yi(row))}{tag_part}")
+        theme = _format_watchlist_theme_brief(row, payload, concept_gain)
+        theme_part = f"  {theme}" if theme else ""
+        lines.append(
+            f"{emoji} {name}  {_fmt_pct(chg)}  {_flow_brief(_stock_flow_yi(row))}"
+            f"{tag_part}{theme_part}"
+        )
     return title, lines if lines else ["暂无自选股"]
 
 
@@ -618,6 +697,50 @@ def _format_audit_pending_sell_line(
     return f"{_GREEN} 卖信号·确认中：{name}{qty_part}{progress}  触发「{trigger}」现价{px}"
 
 
+def _count_payload_watchlist(payload: dict | None) -> int:
+    if not payload:
+        return 0
+    seen: set[str] = set()
+    for row in payload.get("自选股") or []:
+        if not isinstance(row, dict):
+            continue
+        code = str(row.get("股票代码", "")).strip()
+        if code and code not in seen:
+            seen.add(code)
+    return len(seen)
+
+
+def _format_no_signal_summary_line(
+    *,
+    payload: dict | None,
+    buy_notes: list[str],
+    sell_notes: list[str],
+) -> str:
+    """无买卖信号时的摘要：总数 + 节选例数，避免误读为仅有个别持仓/自选。"""
+    parts: list[str] = []
+    if sell_notes:
+        total = len(resolve_payload_holdings(payload or {}))
+        sample = len(sell_notes)
+        if total > sample:
+            parts.append(f"持仓共{total}只暂不减，节选{sample}例")
+        elif total > 0:
+            parts.append(f"{total}只持仓暂不减")
+        else:
+            parts.append("持仓暂不减")
+    if buy_notes:
+        total = _count_payload_watchlist(payload)
+        sample = len(buy_notes)
+        if total > sample:
+            parts.append(f"自选共{total}只未达买点，节选{sample}例")
+        elif total > 0:
+            parts.append(f"{total}只自选未达买点")
+        else:
+            parts.append("自选未达买点")
+    if not parts:
+        return "暂无买卖信号"
+    return "暂无信号 · " + " · ".join(parts)
+
+
 def _format_signal_lines(
     raw_buy: list[TradeSignal],
     raw_sell: list[TradeSignal],
@@ -715,12 +838,16 @@ def _format_signal_lines(
             per_side=2,
         )
         if buy_notes or sell_notes:
-            summary_parts: list[str] = []
-            if sell_notes:
-                summary_parts.append(f"{len(sell_notes)}只持仓暂不减")
-            if buy_notes:
-                summary_parts.append(f"{len(buy_notes)}只自选强度不够")
-            lines.append("暂无信号 · " + " · ".join(summary_parts))
+            payload_for_count = (
+                payload if payload is not None else (ctx.payload if ctx is not None else None)
+            )
+            lines.append(
+                _format_no_signal_summary_line(
+                    payload=payload_for_count,
+                    buy_notes=buy_notes,
+                    sell_notes=sell_notes,
+                )
+            )
             for note in sell_notes:
                 lines.append(f"·未卖 {note}")
             for note in buy_notes:
