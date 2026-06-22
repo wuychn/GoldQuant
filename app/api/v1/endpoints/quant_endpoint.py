@@ -32,7 +32,7 @@ from app.utils.dfcf_util import ztgc, ztgc_with_date
 from app.utils.error_log import log_caught_error
 from app.services.stock_enrich import enrich_stock_rows
 from app.utils.etf52_util import zdfb_52etf
-from app.utils.ths_util import concept_board_top_lists, hyylb, hot_stock, zdfb_ths
+from app.utils.ths_util import concept_board_top_lists, hyylb, hot_stock, zdfb_ths, zdfb_v2_realtime
 from quant.scoring.theme_boards import normalize_industry_board_rows
 from quant.pool.candidate_config import (
     PAYLOAD_KEY_CXFL,
@@ -491,6 +491,12 @@ async def _dpzs():
 
 async def _zqxy(*, market_phase: str = "intraday"):
     """涨跌分布 / 赚钱效应（多数据源回退）。"""
+
+    try:
+        return await zdfb_v2_realtime()
+    except Exception:
+        _log_api_error("赚钱效应 | 同花顺V2接口")
+
     try:
         return await zdfb_52etf(market_phase=market_phase)
     except Exception:

@@ -14,7 +14,7 @@ from fastapi import HTTPException
 from fastapi.concurrency import run_in_threadpool
 
 from app.api.deps import SettingsDep
-from app.utils.common_util import filter_exclude_by_key, format_percent, sort_by_field_and_limit
+from app.utils.common_util import filter_exclude_by_key, format_percent, sort_by_field_and_limit, round_half_up
 from app.utils.dataframe import dataframe_to_records
 from app.utils.iwencai_hexin_util import get_iwencai_hexin_v
 
@@ -457,6 +457,63 @@ async def zdfb_ths():
     """
     return await call_ths_api_with_header(_ZDFB_URL)
 
+def _fmt_turnover_yi(amount: float) -> str:
+    return str(round_half_up(amount / 100000000, 2)) + "亿"
+
+async def _build_turnover_block():
+    url = "https://dq.10jqka.com.cn/fuyao/market_analysis_api/chart/v1/get_chart_data?chart_key=turnover_minute"
+    r = await call_ths_api(url)
+    data = r['data']['charts']['header']
+    turnover = 0
+    turnover_pre = 0
+    turnover_change = 0
+    predict_turnover = 0
+    for record in data:
+        if record['key'] == 'turnover':
+            turnover = record['val']
+        if record['key'] == 'turnover_pre':
+            turnover_pre = record['val']
+        if record['key'] == 'turnover_change':
+            turnover_change = record['val']
+        if record['key'] == 'predict_turnover':
+            predict_turnover = record['val']
+    delta = round_half_up(turnover_change / 100000000, 2)
+    block: dict = {"今日累计": _fmt_turnover_yi(turnover), "昨日全天": _fmt_turnover_yi(turnover_pre),
+                   "较昨日同时段": ("放量" if delta > 0 else "缩量") + str(abs(delta)) + "亿",
+                   "预测全天": _fmt_turnover_yi(predict_turnover)}
+    block["今日全天"] = block["今日累计"]
+    return block
+
+
+async def zdfb_v2_realtime():
+    url = "https://dq.10jqka.com.cn/fuyao/up_down_distribution/distribution/v2/realtime"
+    r = await call_ths_api(url)
+    data = r['data']
+    table = data['table']
+    result = {
+        "下跌": data['down'],
+        "上涨": data['up'],
+        "平盘": data['flat'],
+        "涨停": data['limit_up'],
+        "跌停": data['limit_down'],
+        "成交额": await _build_turnover_block(),
+        "涨跌分布": {
+            '>10%': table[10]['value'],
+            '7%~10%': table[9]['value'],
+            '5%~7%': table[8]['value'],
+            '3%~5%': table[7]['value'],
+            '0%~3%': table[6]['value'],
+            '0%': table[5]['value'],
+            '-3%~0%': table[4]['value'],
+            '-5%~-3%': table[3]['value'],
+            '-7%~-5%': table[2]['value'],
+            '-10%~-7%': table[1]['value'],
+            '<-10%': table[0]['value'],
+        }
+    }
+    return result
+
+
 
 async def hyylb(sort_key: str = "涨跌幅", desc: bool = True, *, limit: int = 10):
     """
@@ -551,5 +608,5 @@ if __name__ == "__main__":
     # gnzjl = asyncio.run(stock_fund_flow_concept('3日排行', '流入资金'))
     # print(json.dumps(gnzjl, ensure_ascii=False, indent=2))
 
-    r = asyncio.run(hot_stock())
+    r = asyncio.run(zdfb_v2_realtime())
     print(json.dumps(r, ensure_ascii=False, indent=2))
