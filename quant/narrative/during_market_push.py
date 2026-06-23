@@ -615,6 +615,15 @@ def _holding_mark_price_for_code(payload: dict, code: str) -> float | None:
     return None
 
 
+def _watchlist_mark_price_for_code(payload: dict, code: str) -> float | None:
+    for row in payload.get("自选股") or []:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("股票代码") or "").strip() == code:
+            return holding_mark_price(row)
+    return None
+
+
 def _signal_trigger_text(sig: TradeSignal) -> str:
     kind = str(sig.signal_kind or sig.sell_type or "").strip()
     reason = str(sig.reason or "").strip()
@@ -695,6 +704,25 @@ def _format_audit_pending_sell_line(
     if code in executable_codes:
         return f"⚠️ 卖出·未成交：{name}{qty_part}{progress}  触发「{trigger}」现价{px}"
     return f"{_GREEN} 卖信号·确认中：{name}{qty_part}{progress}  触发「{trigger}」现价{px}"
+
+
+def _format_audit_pending_buy_line(
+    row: dict,
+    payload: dict,
+    *,
+    executed: dict[str, ExecutedTrade],
+    executable_codes: set[str],
+) -> str:
+    code = str(row.get("股票代码") or "").strip()
+    name = str(row.get("股票名称") or code).strip()
+    trigger = str(row.get("信号类型") or "买信号").strip()
+    progress = _confirm_progress_suffix(row)
+    px = _fmt_price(_watchlist_mark_price_for_code(payload, code))
+    if code in executed:
+        return f"{_RED} 已买：{name}{progress}  触发「{trigger}」现价{px}"
+    if code in executable_codes:
+        return f"⚠️ 买入·未成交：{name}{progress}  触发「{trigger}」现价{px}"
+    return f"{_RED} 买信号·确认中：{name}{progress}  触发「{trigger}」现价{px}"
 
 
 def _count_payload_watchlist(payload: dict | None) -> int:
@@ -802,6 +830,20 @@ def _format_signal_lines(
                 )
             )
             shown_buy.add(sig.code)
+        for code in pending_buy:
+            if code in shown_buy:
+                continue
+            row = audit_index.get((code, "买入"))
+            if row and payload is not None:
+                lines.append(
+                    _format_audit_pending_buy_line(
+                        row,
+                        payload,
+                        executed=exec_bought,
+                        executable_codes=buy_ready,
+                    )
+                )
+                shown_buy.add(code)
         for code, item in exec_sold.items():
             if code in shown_sell:
                 continue
@@ -826,7 +868,8 @@ def _format_signal_lines(
                 )
             )
             shown_buy.add(code)
-        return lines
+        if len(lines) > 1:
+            return lines
 
     if ctx is not None:
         buy_notes, sell_notes = sample_no_trade_reasons(

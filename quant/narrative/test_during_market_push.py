@@ -172,6 +172,41 @@ class DuringMarketPushTests(unittest.TestCase):
         self.assertNotIn("·未卖", text)
         self.assertLess(text.index("卖信号·确认中"), text.index("💼 持仓"))
 
+    def test_pending_buy_only_in_audit_shows_confirming_line(self) -> None:
+        payload = {
+            "自选股": [
+                {
+                    "股票代码": "601689",
+                    "股票名称": "拓普集团",
+                    "盘口": {"最新": 67.10, "涨幅": 2.5},
+                }
+            ],
+            "持仓股": [],
+        }
+        ctx = ScoreContext.from_payload(payload, mode="during_market")
+        audit = [
+            {
+                "股票代码": "601689",
+                "股票名称": "拓普集团",
+                "方向": "买入",
+                "信号类型": "上升途中",
+                "确认次数": 1,
+                "状态": "当日锁存确认中（累计1/2次，0/10分）",
+                "可执行": False,
+                "理由": "[上升途中]评分75",
+            }
+        ]
+        with patch("quant.store.state.get_holdings", return_value=[]):
+            text = build_during_market_push(
+                payload,
+                timestamp="2026-06-18 14:37:00",
+                audit=audit,
+                ctx=ctx,
+            )
+        self.assertIn("买信号·确认中：拓普集团", text)
+        self.assertIn("1/2次", text)
+        self.assertNotIn("·未买 拓普集团", text)
+
     def test_no_signal_shows_skip_reasons(self) -> None:
         ctx = ScoreContext.from_payload(
             {
