@@ -174,6 +174,13 @@ def _update_watchlist_evening(ctx: ScoreContext) -> tuple[list[dict], list[dict]
         score_by_code=score_by_code,
         candidate_by_code=candidate_by_code,
     )
+    merged.sort(
+        key=lambda r: (
+            -float(r.get("动能分") or 0),
+            -float(r.get("评分") or 0),
+            str(r.get("股票代码", "")),
+        )
+    )
     save_optional(merged, delta={"added": added, "removed": removed})
     log_progress(
         scope,

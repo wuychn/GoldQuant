@@ -288,6 +288,35 @@ gates:
     ma5_break_ratio: 0.995          # 卖-破5日线：现价 < MA5×此值
     ma20_break_ratio: 0.995         # 卖-趋势衰竭：现价 < MA20×此值
 
+    # 近端动能：发散双窗口、价强豁免、高位衰减、排序/买入
+    spread_recent_days: 3            # 近 N 日发散不能从峰值持续回落
+    spread_recent_max_drop_pct: 0.05
+    spread_exempt_min_signals: 2     # 发散未加速时，满足几条仍算加速
+    spread_exempt_day_chg_pct: 3.0
+    momentum_recent_5d_min_pct: 8.0  # 价强豁免：近5日涨幅
+    momentum_high_break_days: 20
+    momentum_high_break_ratio: 0.97
+    momentum_fade_min_signals: 2      # 满足几条判高位动能衰减
+    momentum_fade_ignore_day_chg_pct: 3.0   # 价强豁免且当日涨幅≥此值时不判衰减
+    momentum_fade_ignore_net5_pct: 12.0     # 价强豁免且近5日涨幅≥此值时不判衰减
+    momentum_intraday_fade_min_pct: 5.0     # 自日内高点回撤≥此值且低于均价 → 日内动能衰减
+    momentum_intraday_require_below_avg: true
+    momentum_intraday_fade_score_penalty: 22.0  # 日内冲高回落时动能分额外扣分
+    momentum_fade_spread_drop_pct: 0.3
+    momentum_fade_body_ratio: 0.6
+    momentum_fade_volume_ratio: 0.8
+    momentum_fade_penalty_per_signal: 4.0
+    momentum_fade_penalty_max: 12.0
+    momentum_buy_min_score: 45.0      # 买入：动能分下限
+    momentum_buy_rank_weight: 0.2    # 买入排序：总分 + 动能分×权重
+    momentum_score_blend: 0.25        # 主升维度评分与动能分混合比例
+    momentum_rank_weights:
+      recent_return: 0.30
+      spread_trend: 0.25
+      volume_price: 0.20
+      structure: 0.15
+      stability: 0.10
+
   # 仓位：按强势/震荡/弱势（infer_regime → 总仓 80% / 50% / 20%）
   # 多候选买入预算按评分比例分配 room，单票仍受 single_pct 上限约束
   position:

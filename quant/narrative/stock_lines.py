@@ -7,6 +7,9 @@ from typing import Any
 
 from quant.pool.ths_rank_util import format_ths_rank_tags_brief, stock_ths_rank_tags
 from quant.scoring.tech_indicators import stock_daily_change_pct
+from quant.config import load_gates_config
+from quant.strategy.momentum import momentum_score
+from quant.strategy.trend import quantify_trend
 
 WATCHLIST_SECTION_TITLE = "六、自选更新"
 
@@ -109,6 +112,18 @@ def ensure_watchlist_reason_display(row: dict) -> str:
     return name
 
 
+def enrich_watchlist_trend_fields(row: dict, stock: dict, *, mw_cfg: dict | None = None) -> None:
+    """写入趋势阶段与动能分（自选/推送展示与排序）。"""
+    if not stock:
+        return
+    cfg = mw_cfg if mw_cfg is not None else (load_gates_config().get("main_wave") or {})
+    phase, note, _ = quantify_trend(stock, cfg)
+    ms, _ = momentum_score(stock, cfg)
+    row["趋势阶段"] = phase
+    row["趋势说明"] = note
+    row["动能分"] = round(ms, 1)
+
+
 def refresh_merged_watchlist_reasons(
     merged: list[dict],
     *,
@@ -116,6 +131,7 @@ def refresh_merged_watchlist_reasons(
     candidate_by_code: dict[str, dict],
 ) -> None:
     """合并后按当晚评分与候选数据重写「加入自选原因」。"""
+    mw_cfg = load_gates_config().get("main_wave") or {}
     for row in merged:
         code = stock_code(row)
         if not code:
@@ -125,6 +141,9 @@ def refresh_merged_watchlist_reasons(
             fixed = ensure_watchlist_reason_display(row)
             if fixed:
                 row["加入自选原因"] = fixed
+            cand = dict(candidate_by_code.get(code) or {})
+            if cand:
+                enrich_watchlist_trend_fields(row, {**row, **cand}, mw_cfg=mw_cfg)
             continue
         cand = dict(candidate_by_code.get(code) or {})
         if not stock_name(cand) and stock_name(row):
@@ -136,6 +155,7 @@ def refresh_merged_watchlist_reasons(
         ths_tags = stock_ths_rank_tags(cand)
         if ths_tags:
             row["榜单标签"] = ths_tags
+        enrich_watchlist_trend_fields(row, {**row, **cand}, mw_cfg=mw_cfg)
 
 
 def build_watchlist_human_reason(score: Any, candidate_row: dict) -> str:

@@ -68,20 +68,12 @@ def _peak_spread_pct(closes: list[float], window: int) -> float | None:
     return peak
 
 
-def is_spread_accelerating(closes: list[float], cfg: dict[str, Any]) -> bool:
-    """发散度在近若干日明显扩大。"""
-    min_spread = float(cfg.get("min_ma_spread_pct", 0.8))
-    accel_delta = float(cfg.get("spread_accel_min_pct", 0.12))
-    spread_days = int(cfg.get("spread_accel_days", 5))
-    if len(closes) < 20 + spread_days:
-        return False
-    spread_now = ma_spread_pct(closes)
-    spread_prev = ma_spread_pct(closes[:-spread_days])
-    if spread_now is None or spread_prev is None:
-        return False
-    return spread_now >= min_spread and spread_now >= spread_prev + accel_delta
-
-
+from quant.strategy.momentum import (
+    is_spread_accelerating,
+    momentum_fading_penalty,
+    spread_accel_exempt,
+    spread_accel_dual_window,
+)
 def _live_end_price(stock: dict, closes: list[float]) -> float | None:
     """趋势判定终点价：盘口现价优先，否则最近一根日 K 收盘。"""
     live = quote_last_price(stock)
@@ -113,6 +105,8 @@ def _main_wave_choppy_exempt(
     if ma_bull_stack(m) and recent_net >= recent_min:
         return True
     if ma_bull_stack(m) and is_spread_accelerating(closes, cfg):
+        return True
+    if ma_bull_stack(m) and spread_accel_exempt(stock, closes, cfg)[0]:
         return True
 
     high_days = int(cfg.get("choppy_high_break_days", 60))
@@ -236,8 +230,13 @@ def is_main_wave_acceleration(
     m = _mas(stock)
     last = m.get("last")
     closes = hist_closes(stock.get("历史行情") or [])
-    if not is_spread_accelerating(closes, c):
-        return False, "发散未加速"
+    spread_ok, _ = spread_accel_dual_window(closes, c)
+    accel_note = "主升浪加速段"
+    if not spread_ok:
+        exempt, ex_note = spread_accel_exempt(stock, closes, c)
+        if not exempt:
+            return False, "发散未加速"
+        accel_note = f"主升浪加速段({ex_note})"
 
     ma5 = m.get("ma5")
     if ma5 and len(closes) >= 10:
@@ -249,7 +248,7 @@ def is_main_wave_acceleration(
     if ma5 and last < ma5 * floor:
         return False, "远离加速均线"
 
-    return True, "主升浪加速段"
+    return True, accel_note
 
 
 def is_main_wave_pullback(stock: dict, cfg: dict[str, Any] | None = None) -> tuple[bool, str]:
@@ -429,6 +428,11 @@ def main_wave_score_penalties(
         if accel_cap > 0:
             total += accel_cap
             detail["暴拉加速降档"] = round(accel_cap, 1)
+
+    fade_pen, fade_detail = momentum_fading_penalty(stock, cfg)
+    if fade_pen > 0:
+        total += fade_pen
+        detail.update(fade_detail)
 
     return total, detail
 

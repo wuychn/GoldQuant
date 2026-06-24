@@ -22,6 +22,7 @@ from quant.store.state import get_holdings
 from quant.scoring.tech_indicators import quote_last_price, quote_open_price
 from quant.strategy.intraday import intraday_allows_buy
 from quant.strategy.main_wave import detect_buy_setup
+from quant.strategy.momentum import momentum_buy_floor, momentum_score
 from quant.strategy.trend import trend_allows_buy
 
 
@@ -61,6 +62,10 @@ def _evaluate_buy_candidate(
 
     ok_trend, _ = trend_allows_buy(stock, mw_cfg)
     if not ok_trend:
+        return None
+
+    ms, _ = momentum_score(stock, mw_cfg)
+    if ms < momentum_buy_floor(mw_cfg):
         return None
 
     score = engine.score_stock(ctx, stock)
@@ -133,6 +138,8 @@ def verify_buy_signal_still_valid(
     ) or {}
     if not trend_allows_buy(stock, mw_cfg)[0]:
         return False
+    if momentum_score(stock, mw_cfg)[0] < momentum_buy_floor(mw_cfg):
+        return False
     ok, kind, _ = detect_buy_setup(stock, ctx, mw_cfg)
     if not ok:
         return False
@@ -197,10 +204,12 @@ def generate_buy_signals(ctx: ScoreContext, *, mode: str) -> list[TradeSignal]:
         )
         if candidate is None:
             continue
-        ranked.append((candidate.score.total, candidate.code, candidate))
+        ms, _ = momentum_score(stock, mw_cfg)
+        rank_score = candidate.score.total + ms * float(mw_cfg.get("momentum_buy_rank_weight", 0.2))
+        ranked.append((rank_score, ms, candidate.code, candidate))
 
-    ranked.sort(key=lambda x: (-x[0], x[1]))
-    top = [c for _, _, c in ranked[:slots_left]]
+    ranked.sort(key=lambda x: (-x[0], -x[1], x[2]))
+    top = [c for _, _, _, c in ranked[:slots_left]]
     if not top:
         return []
 

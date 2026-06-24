@@ -1,6 +1,6 @@
 """趋势（势）量化：买在向上/准备向上，卖在走弱/准备向下/向下。
 
-价在 MA5/MA10 下方并不自动等于「势向下」——须结合结构、MA20 与动量。
+价在 MA5/MA10 下方并不自动等于「势向下」——须结合结构、MA20 与近端动能。
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from quant.strategy.main_wave import (
     is_trend_choppy,
     ma_bull_stack,
 )
+from quant.strategy.momentum import momentum_fading
 
 PHASE_UP = "向上"
 PHASE_PREPARING_UP = "准备向上"
@@ -80,6 +81,14 @@ def quantify_trend(
     if ma5 and last < ma5 * ma5_break:
         return PHASE_PREPARING_DOWN, f"有效跌破MA5({ma5:.2f})", detail
 
+    ok_trend, trend_note = is_main_wave_trend_active(stock, c)
+    fading, fade_note, fade_detail = momentum_fading(stock, c)
+    if ok_trend or fading:
+        detail.update(fade_detail)
+        if fading:
+            detail["动能衰减"] = True
+            return PHASE_WEAK, fade_note, detail
+
     closes = hist_closes(stock.get("历史行情") or [])
     spread = ma_spread_pct(closes) if closes else None
     min_spread = float(c.get("min_ma_spread_pct", 0.8))
@@ -99,10 +108,9 @@ def quantify_trend(
         detail["回调企稳区"] = True
         return PHASE_PREPARING_UP, note_p, detail
 
-    ok_trend, note_t = is_main_wave_trend_active(stock, c)
     if ok_trend:
         detail["趋势有效"] = True
-        return PHASE_PREPARING_UP, note_t, detail
+        return PHASE_PREPARING_UP, trend_note, detail
 
     if is_trend_choppy(stock, c):
         return PHASE_DOWN, "震荡无序", detail

@@ -14,6 +14,7 @@ from quant.signals.models import TradeSignal
 from quant.store.state import get_holdings, resolve_payload_holdings
 from quant.strategy.intraday import intraday_allows_buy
 from quant.strategy.main_wave import detect_buy_setup
+from quant.strategy.momentum import momentum_buy_floor, momentum_score
 from quant.strategy.trend import trend_allows_buy
 
 
@@ -165,6 +166,10 @@ def _skip_reason_for_watchlist_stock(
     if not ok_trend:
         note = _simplify_reason(trend_note) or "趋势还没走顺"
         return f"{name}：{note}"
+
+    ms, _ = momentum_score(stock, mw_cfg)
+    if ms < momentum_buy_floor(mw_cfg):
+        return f"{name}：近端动能偏弱（{ms:.0f}分）"
 
     score = engine.score_stock(ctx, stock)
     if score.total < threshold:

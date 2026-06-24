@@ -16,6 +16,7 @@ from quant.strategy.main_wave import (
     ma_diverging,
     _mas,
 )
+from quant.strategy.momentum import momentum_score
 
 
 class MainWaveScorer:
@@ -53,6 +54,10 @@ class MainWaveScorer:
         penalties, pen_detail = main_wave_score_penalties(stock, cfg, phase=phase or "")
         s -= penalties
 
+        ms, ms_detail = momentum_score(stock, mw_cfg)
+        blend = float(cfg.get("momentum_score_blend", 0.25))
+        s = s * (1.0 - blend) + ms * blend
+
         detail = {
             "主升波段": ok,
             "阶段": phase or None,
@@ -60,7 +65,10 @@ class MainWaveScorer:
             "均线多头": bull,
             "均线发散": diverge,
             "买点类型": kind or None,
+            "动能分": round(ms, 1),
         }
+        if ms_detail:
+            detail["动能明细"] = {k: v for k, v in ms_detail.items() if k != "动能分"}
         if pen_detail:
             detail["软扣分"] = pen_detail
             detail["扣分合计"] = round(penalties, 1)
