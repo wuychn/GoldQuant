@@ -53,7 +53,12 @@ from quant.store.state import (
     save_optional,
     write_news_summary,
 )
-from quant.store.watchlist import merge_watchlist_evening, watchlist_retain_days
+from quant.store.watchlist import (
+    index_enriched_watchlist,
+    merge_watchlist_evening,
+    supplement_retained_watchlist_scores,
+    watchlist_retain_days,
+)
 
 _MODE_LABELS = {
     "news": "新闻聚焦",
@@ -140,10 +145,26 @@ def _update_watchlist_evening(ctx: ScoreContext) -> tuple[list[dict], list[dict]
     existing = get_optional()
     merged, added, removed = merge_watchlist_evening(existing, passed_rows)
     score_by_code = {s.code: s for s in scores}
+    enriched_by_code = index_enriched_watchlist(ctx.payload)
+    retained_scored = supplement_retained_watchlist_scores(
+        ctx,
+        engine,
+        merged,
+        scores=scores,
+        score_by_code=score_by_code,
+        enriched_by_code=enriched_by_code,
+    )
+    if retained_scored:
+        log_progress(
+            scope,
+            "补算保留自选评分",
+            detail=f"{retained_scored} 只（未进候选池）",
+        )
+    candidate_by_code = {**enriched_by_code, **by_code}
     refresh_merged_watchlist_reasons(
         merged,
         score_by_code=score_by_code,
-        candidate_by_code=by_code,
+        candidate_by_code=candidate_by_code,
     )
     save_optional(merged, delta={"added": added, "removed": removed})
     log_progress(

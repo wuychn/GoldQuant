@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+from typing import TYPE_CHECKING
 
 from app.utils.common_util import is_real_workday_cn
+
+if TYPE_CHECKING:
+    from quant.scoring.context import ScoreContext
+    from quant.scoring.engine import ScoringEngine
 
 
 def _parse_iso(d: object) -> date | None:
@@ -96,3 +101,40 @@ def merge_watchlist_evening(
 
     merged.sort(key=lambda r: (-float(r.get("评分", 0) or 0), str(r.get("股票代码", ""))))
     return merged, added, removed
+
+
+def index_enriched_watchlist(payload: dict) -> dict[str, dict]:
+    """payload「自选股」按代码索引（晚间 enrich 后的行情/资金流等）。"""
+    out: dict[str, dict] = {}
+    for row in payload.get("自选股") or []:
+        if not isinstance(row, dict):
+            continue
+        code = str(row.get("股票代码", "")).strip()
+        if code:
+            out[code] = row
+    return out
+
+
+def supplement_retained_watchlist_scores(
+    ctx: ScoreContext,
+    engine: ScoringEngine,
+    merged: list[dict],
+    *,
+    scores: list,
+    score_by_code: dict[str, object],
+    enriched_by_code: dict[str, dict],
+) -> int:
+    """保留自选若未进当晚候选池，仍用 enrich 数据补算当日评分。返回补算只数。"""
+    n = 0
+    for row in merged:
+        code = str(row.get("股票代码", "")).strip()
+        if not code or code in score_by_code:
+            continue
+        enriched = enriched_by_code.get(code)
+        if not enriched:
+            continue
+        scored = engine.score_stock(ctx, enriched)
+        score_by_code[code] = scored
+        scores.append(scored)
+        n += 1
+    return n
