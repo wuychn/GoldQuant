@@ -51,13 +51,13 @@ scoring:
       penalty_parabolic_accel_max: 12
     concept_theme:          # 个股概念与板块概念权重共振
       enabled: true
-      weight: 18
+      weight: 12
     popularity_rank:        # 同花顺人气排名
       enabled: true
-      weight: 10
-    ths_rank_signal:        # 同花顺形态榜（轻量加分，weight=5 不宜过高）
+      weight: 8
+    ths_rank_signal:        # 同花顺形态榜（轻量加分）
       enabled: true
-      weight: 5
+      weight: 4
       base_score: 35        # 有标签时维度起分；1 标签≈40，4 标签≈55
       score_per_tag: 5
     technical:              # MACD、均线等技术指标

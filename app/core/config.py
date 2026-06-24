@@ -17,7 +17,7 @@ _ENV_FILE = _PROJECT_ROOT / ".env"
 def build_during_market_schedule(
     *,
     interval_minutes: int = 7,
-    morning: tuple[int, int, int, int] = (9, 30, 11, 30),
+    morning: tuple[int, int, int, int] = (9, 37, 11, 30),
     afternoon: tuple[int, int, int, int] = (13, 0, 15, 0),
 ) -> str:
     """生成盘中智能盯盘 Cron 时点：连续竞价时段内每 ``interval_minutes`` 分钟一次。"""
@@ -128,7 +128,7 @@ class Settings(BaseSettings):
     QUANT_SCHED_NEWS_MINUTE: int = Field(default=0, ge=0, le=59)
     #: 盘前（`pre_market`），仅工作日历命中时才会真正拉起子进程。
     QUANT_SCHED_PRE_MARKET_TIME: str = "09:25"
-    #: 盘中（`during_market` / 智能盯盘）：默认 9:30–11:30、13:00–15:00 每 7 分钟，`HH:MM` 逗号分隔。
+    #: 盘中（`during_market` / 智能盯盘）：默认 9:37–11:30、13:00–15:00 每 7 分钟，`HH:MM` 逗号分隔。
     QUANT_SCHED_DURING_MARKET_TIMES: str = _QUANT_SCHED_DEFAULT_DURING_TIMES
     #: 午间复盘（`post_market_lunch`），仅交易日（`is_real_workday_cn`）执行。
     QUANT_SCHED_POST_MARKET_LUNCH_TIME: str = "11:50"
