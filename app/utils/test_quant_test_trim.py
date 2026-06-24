@@ -47,6 +47,25 @@ class QuantTestTrimTests(unittest.TestCase):
         mock_get_settings.return_value.quant_test_list_limit = lambda: None
         self.assertEqual(truncate_list_for_test_phase(list(range(8))), list(range(8)))
 
+    @patch("app.core.config.get_settings")
+    def test_test_phase_list_limit(self, mock_get_settings) -> None:
+        from app.utils.quant_test_trim import test_phase_list_limit
+
+        mock_get_settings.return_value.quant_test_list_limit = lambda: 3
+        self.assertEqual(test_phase_list_limit(default=10), 3)
+        mock_get_settings.return_value.quant_test_list_limit = lambda: None
+        self.assertEqual(test_phase_list_limit(default=10), 10)
+
+    @patch("app.core.config.get_settings")
+    def test_trim_quant_payload(self, mock_get_settings) -> None:
+        from app.utils.quant_test_trim import trim_quant_payload
+
+        mock_get_settings.return_value.quant_test_list_limit = lambda: 3
+        payload = {"自选股": list(range(8)), "持仓股": list(range(5))}
+        out = trim_quant_payload(payload)
+        self.assertEqual(out["自选股"], [0, 1, 2])
+        self.assertEqual(out["持仓股"], [0, 1, 2])
+
 
 if __name__ == "__main__":
     unittest.main()

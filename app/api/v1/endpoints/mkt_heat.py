@@ -99,14 +99,19 @@ async def hot_list_direct(
 
     raw_out: Any = copy.deepcopy(payload)
     total = 0
+    effective_limit = limit
+    if effective_limit is None:
+        tp_limit = settings.quant_test_list_limit()
+        if tp_limit is not None:
+            effective_limit = tp_limit
     if isinstance(raw_out, dict):
         inner = raw_out.get("data")
         if isinstance(inner, dict) and "stock_list" in inner:
             sl = inner.get("stock_list")
             if isinstance(sl, list):
                 total = len(sl)
-                if limit is not None:
-                    inner["stock_list"] = sl[:limit]
+                if effective_limit is not None:
+                    inner["stock_list"] = sl[:effective_limit]
 
     return ThsHotOut(
         source="ths_direct",

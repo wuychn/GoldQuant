@@ -167,11 +167,14 @@ def _finalize_quant_payload(obj: Any) -> Any:
 
 
 def _merge_concept_boards(jzf: list | None, jzj: list | None, jdf: list | None, jzjlc: list | None, *, limit: int = 10) -> dict[str, Any]:
+    from app.utils.quant_test_trim import test_phase_list_limit
+
+    cap = test_phase_list_limit(default=limit)
     return {
-        "涨幅榜": (jzf or [])[:limit],
-        "跌幅榜": (jdf or [])[:limit],
-        "资金流入榜": (jzj or [])[:limit],
-        "资金流出榜": (jzjlc or [])[:limit],
+        "涨幅榜": (jzf or [])[:cap],
+        "跌幅榜": (jdf or [])[:cap],
+        "资金流入榜": (jzj or [])[:cap],
+        "资金流出榜": (jzjlc or [])[:cap],
     }
 
 
@@ -183,14 +186,17 @@ def _merge_industry_boards(
     *,
     limit: int = 10,
 ) -> dict[str, Any]:
+    from app.utils.quant_test_trim import test_phase_list_limit
+
+    cap = test_phase_list_limit(default=limit)
     boards: dict[str, Any] = {
-        "涨幅榜": normalize_industry_board_rows((gain or [])[:limit]),
-        "资金流入榜": normalize_industry_board_rows((fund or [])[:limit]),
+        "涨幅榜": normalize_industry_board_rows((gain or [])[:cap]),
+        "资金流入榜": normalize_industry_board_rows((fund or [])[:cap]),
     }
     if loss is not None:
-        boards["跌幅榜"] = normalize_industry_board_rows((loss or [])[:limit])
+        boards["跌幅榜"] = normalize_industry_board_rows((loss or [])[:cap])
     if fund_out is not None:
-        boards["资金流出榜"] = normalize_industry_board_rows((fund_out or [])[:limit])
+        boards["资金流出榜"] = normalize_industry_board_rows((fund_out or [])[:cap])
     return boards
 
 
@@ -298,6 +304,10 @@ async def _enrich_optional_and_holding_from_rows(
     """
     optional = optional if isinstance(optional, list) else []
     holding = holding if isinstance(holding, list) else []
+    from app.utils.quant_test_trim import truncate_list_for_test_phase
+
+    optional = truncate_list_for_test_phase(optional, settings)
+    holding = truncate_list_for_test_phase(holding, settings)
 
     def _code(row: dict) -> str:
         return str(row.get("股票代码", "")).strip()
@@ -320,6 +330,8 @@ async def _enrich_optional_and_holding_from_rows(
             continue
         seen.add(c)
         unique_rows.append(dict(row))
+
+    unique_rows = truncate_list_for_test_phase(unique_rows, settings)
 
     if progress_scope:
         log_progress(

@@ -85,9 +85,11 @@ def fetch_mode(mode: str) -> dict:
 
 def unwrap_payload(raw: dict) -> dict:
     """剥离 Response 包装 {code, message, data}；news 模式 data 可能为 list。"""
+    from app.utils.quant_test_trim import trim_quant_payload
+
     data = raw.get("data")
     if isinstance(data, dict):
-        return data
+        return trim_quant_payload(data)
     if isinstance(data, list):
-        return {"news": data}
-    return raw
+        return trim_quant_payload({"news": data})
+    return trim_quant_payload(raw) if isinstance(raw, dict) else raw

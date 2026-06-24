@@ -55,7 +55,17 @@ def merge_prefiltered_sources(
                 item["代码"] = code
                 merged[code] = item
 
-    return list(merged.values()), source_orders
+    from app.utils.quant_test_trim import truncate_list_for_test_phase
+
+    merged_rows = truncate_list_for_test_phase(list(merged.values()))
+    allowed = {_code(r) for r in merged_rows if _code(r)}
+    if allowed and len(allowed) < len(merged):
+        filtered_orders: dict[str, list[str]] = {}
+        for source_key, codes in source_orders.items():
+            filtered_orders[source_key] = [c for c in codes if c in allowed]
+        source_orders = filtered_orders
+
+    return merged_rows, source_orders
 
 
 def split_enriched_by_source(

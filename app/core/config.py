@@ -204,7 +204,7 @@ class Settings(BaseSettings):
     #: 每累计一次同花顺资金流失败，后续请求额外等待秒数（失败越多等越久）。
     QUANT_THS_FUNDS_FAILURE_BACKOFF_SEC: float = Field(default=5.0, ge=0.0, le=120.0)
 
-    #: 测试阶段：为 true 时数据侧 API 与各来源初筛/enrich 统一限 3 条（仍走实时接口）。
+    #: 测试阶段：为 true 时 API 出参、enrich/推送/orchestrator/state 等列表统一限 3 条。
     QUANT_TEST_PHASE: bool = False
     #: 本地数据：为 true 时 ``python -m quant`` 从 ``data/*.json`` 读数，不请求 FastAPI。
     QUANT_USE_LOCAL_FIXTURE: bool = False

@@ -71,7 +71,9 @@ _MODE_LABELS = {
 
 
 def _prepare_payload(raw: dict, *, mode: str = "") -> dict:
-    return merge_payload_holdings(unwrap_payload(raw))
+    from app.utils.quant_test_trim import trim_quant_payload
+
+    return trim_quant_payload(merge_payload_holdings(unwrap_payload(raw)))
 
 
 def _build_operation_section(

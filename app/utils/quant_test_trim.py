@@ -61,3 +61,19 @@ def truncate_list_for_test_phase(
     if limit is None:
         return list(rows)
     return list(rows[:limit])
+
+
+def test_phase_list_limit(*, default: int) -> int:
+    """测试阶段返回 3，否则返回 ``default``（板块榜/enrich 批次等）。"""
+    from app.core.config import get_settings
+
+    limit = get_settings().quant_test_list_limit()
+    return limit if limit is not None else default
+
+
+def trim_quant_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
+    """量化 payload 统一截断（orchestrator / fixture 路径）。"""
+    if not payload:
+        return {}
+    out = maybe_trim_for_test_phase(payload)
+    return out if isinstance(out, dict) else payload
