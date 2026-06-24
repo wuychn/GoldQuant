@@ -28,9 +28,9 @@ scoring:
       - 半年新高
       - 一年新高
       - 历史新高
-    include_zt_pool: true       # 涨停池作为独立候选来源
+    include_zt_pool: false       # 涨停池不进入晚间自选候选
     include_ths_rank_pool: true  # 同花顺形态榜（创新高/持续上涨/持续放量/量价齐升）
-    watchlist_retain_days: 5     # 末次入选后 N 个交易日未再入选则移出自选
+    watchlist_retain_days: 5     # 连续评分不达标 N 个交易日后移出自选
 
   # 评分维度：enabled 关闭则不参与；weight 为加权系数
   dimensions:

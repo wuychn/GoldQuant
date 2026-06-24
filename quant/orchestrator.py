@@ -54,10 +54,11 @@ from quant.store.state import (
     write_news_summary,
 )
 from quant.store.watchlist import (
+    apply_watchlist_fail_streak,
     index_enriched_watchlist,
     merge_watchlist_evening,
     supplement_retained_watchlist_scores,
-    watchlist_retain_days,
+    watchlist_fail_streak_limit,
 )
 
 _MODE_LABELS = {
@@ -108,9 +109,9 @@ def _build_operation_section(
 
 
 def _update_watchlist_evening(ctx: ScoreContext) -> tuple[list[dict], list[dict], str, list]:
-    """晚间复盘：达标写入自选；未达标但末次入选≤N 个交易日仍保留，超期移出。"""
+    """晚间复盘：达标写入自选；连续 N 个交易日评分不达标则移出。"""
     scope = "post_market_evening"
-    retain = watchlist_retain_days()
+    fail_limit = watchlist_fail_streak_limit()
     log_progress(scope, "合并三来源候选")
     engine = ScoringEngine()
     candidates = build_candidates(ctx.payload)
@@ -160,6 +161,13 @@ def _update_watchlist_evening(ctx: ScoreContext) -> tuple[list[dict], list[dict]
             "补算保留自选评分",
             detail=f"{retained_scored} 只（未进候选池）",
         )
+    threshold = float(engine.config.get("watchlist_threshold", 70))
+    merged, removed = apply_watchlist_fail_streak(
+        merged,
+        score_by_code=score_by_code,
+        threshold=threshold,
+        max_streak=fail_limit,
+    )
     candidate_by_code = {**enriched_by_code, **by_code}
     refresh_merged_watchlist_reasons(
         merged,
@@ -169,14 +177,19 @@ def _update_watchlist_evening(ctx: ScoreContext) -> tuple[list[dict], list[dict]
     save_optional(merged, delta={"added": added, "removed": removed})
     log_progress(
         scope,
-        "写入自选（滚动保留）",
-        detail=f"共 {len(merged)} 只，新增 {len(added)}，移出 {len(removed)}，保留 {retain} 交易日",
+        "写入自选（连续未达标移出）",
+        detail=f"共 {len(merged)} 只，新增 {len(added)}，移出 {len(removed)}，阈值 {fail_limit} 日",
     )
 
     save_derived("scores_watchlist.json", [s.to_dict() for s in scores])
     save_derived(
         "optional_delta.json",
-        {"added": added, "removed": removed, "total": len(merged), "retain_days": retain},
+        {
+            "added": added,
+            "removed": removed,
+            "total": len(merged),
+            "fail_streak_limit": fail_limit,
+        },
     )
 
     optional_section = build_watchlist_push_section(merged, added, removed)

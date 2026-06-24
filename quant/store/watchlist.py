@@ -1,56 +1,32 @@
-"""自选股保留策略：末次入选后 N 个交易日内可保留，超期未再入选则移出。"""
+"""自选股保留策略：连续评分不达标 N 个交易日后移出。"""
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
-from typing import TYPE_CHECKING
-
-from app.utils.common_util import is_real_workday_cn
+from datetime import date, datetime
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from quant.scoring.context import ScoreContext
     from quant.scoring.engine import ScoringEngine
 
 
-def _parse_iso(d: object) -> date | None:
-    s = str(d or "").strip()[:10]
-    if not s:
-        return None
-    try:
-        return date.fromisoformat(s.replace("/", "-"))
-    except ValueError:
-        return None
-
-
-def count_workdays_between(start: date, end: date, *, exclusive_start: bool = True) -> int:
-    """统计 [start, end] 区间内的工作日数；默认不含 start（用于「末次入选之后过了几天」）。"""
-    if end < start:
-        return 0
-    cur = start + timedelta(days=1) if exclusive_start else start
-    n = 0
-    while cur <= end:
-        if is_real_workday_cn(cur):
-            n += 1
-        cur += timedelta(days=1)
-    return n
-
-
-def watchlist_retain_days(cfg: dict | None = None) -> int:
+def watchlist_fail_streak_limit(cfg: dict | None = None) -> int:
+    """连续评分不达标多少个交易日移出自选（配置键 watchlist_retain_days）。"""
     from quant.config import load_scoring_config
 
     c = (load_scoring_config().get("candidate") or {}) if cfg is None else cfg
     return max(1, int(c.get("watchlist_retain_days", 5)))
 
 
-def should_drop_watchlist_row(row: dict, *, today: date | None = None, retain_days: int | None = None) -> bool:
-    """末次入选后连续 retain_days 个交易日未再入选 → 应移出。"""
-    retain = retain_days if retain_days is not None else watchlist_retain_days()
-    ref = today or datetime.now().date()
-    last = _parse_iso(row.get("最后入选日期") or row.get("加入日期"))
-    if last is None:
-        return False
-    gap = count_workdays_between(last, ref, exclusive_start=True)
-    return gap >= retain
+# 兼容旧调用
+watchlist_retain_days = watchlist_fail_streak_limit
+
+
+def _fail_streak(row: dict) -> int:
+    try:
+        return max(0, int(row.get("未达标连续天数") or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def merge_watchlist_evening(
@@ -58,22 +34,19 @@ def merge_watchlist_evening(
     passed_rows: list[dict],
     *,
     today: date | None = None,
-    retain_days: int | None = None,
 ) -> tuple[list[dict], list[dict], list[dict]]:
-    """合并晚间达标标的与历史自选（滚动保留）。
+    """合并晚间达标标的与历史自选（移出由 ``apply_watchlist_fail_streak`` 处理）。
 
-    返回 (merged, added, removed)。
+    返回 (merged, added, removed)；removed 恒为空列表。
     """
     ref = today or datetime.now().date()
-    retain = retain_days if retain_days is not None else watchlist_retain_days()
     today_s = ref.isoformat()
 
     passed_by_code = {str(r.get("股票代码", "")).strip(): r for r in passed_rows}
     passed_codes = set(passed_by_code)
 
     merged: list[dict] = []
-    removed: list[dict] = []
-    old_codes = set()
+    old_codes: set[str] = set()
 
     for row in existing:
         code = str(row.get("股票代码", "")).strip()
@@ -82,25 +55,55 @@ def merge_watchlist_evening(
         old_codes.add(code)
         if code in passed_codes:
             continue
-        if should_drop_watchlist_row(row, today=ref, retain_days=retain):
-            removed.append(dict(row))
-        else:
-            kept = dict(row)
-            if not kept.get("最后入选日期"):
-                kept["最后入选日期"] = ref.isoformat()
-            merged.append(kept)
+        kept = dict(row)
+        if not kept.get("最后入选日期"):
+            kept["最后入选日期"] = ref.isoformat()
+        merged.append(kept)
 
     added: list[dict] = []
     for code, row in passed_by_code.items():
         if not code:
             continue
-        new_row = {**row, "最后入选日期": today_s}
+        new_row = {**row, "最后入选日期": today_s, "未达标连续天数": 0}
         if code not in old_codes:
             added.append(new_row)
         merged.append(new_row)
 
     merged.sort(key=lambda r: (-float(r.get("评分", 0) or 0), str(r.get("股票代码", ""))))
-    return merged, added, removed
+    return merged, added, []
+
+
+def apply_watchlist_fail_streak(
+    merged: list[dict],
+    *,
+    score_by_code: dict[str, Any],
+    threshold: float,
+    max_streak: int | None = None,
+) -> tuple[list[dict], list[dict]]:
+    """按当日评分更新连续未达标天数；达 ``max_streak`` 则移出。返回 (kept, removed)。"""
+    limit = max_streak if max_streak is not None else watchlist_fail_streak_limit()
+    kept: list[dict] = []
+    removed: list[dict] = []
+    for row in merged:
+        code = str(row.get("股票代码", "")).strip()
+        score_obj = score_by_code.get(code)
+        item = dict(row)
+        if score_obj is None:
+            kept.append(item)
+            continue
+        total = float(getattr(score_obj, "total", 0) or 0)
+        if total >= threshold:
+            item["未达标连续天数"] = 0
+            kept.append(item)
+            continue
+        streak = _fail_streak(item) + 1
+        item["未达标连续天数"] = streak
+        if streak >= limit:
+            removed.append(item)
+        else:
+            kept.append(item)
+    kept.sort(key=lambda r: (-float(r.get("评分", 0) or 0), str(r.get("股票代码", ""))))
+    return kept, removed
 
 
 def index_enriched_watchlist(payload: dict) -> dict[str, dict]:
