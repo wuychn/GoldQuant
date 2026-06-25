@@ -333,6 +333,10 @@ class DuringMarketPushTests(unittest.TestCase):
                     "股票名称": "低涨幅",
                     "行业": "半导体",
                     "所属概念": ["新能源", "存储芯片"],
+                    "概念粘合度": [
+                        {"rank": 1, "concept": "存储芯片"},
+                        {"rank": 2, "concept": "新能源"},
+                    ],
                     "盘口": {"涨幅": 1.0},
                 },
                 {
@@ -352,8 +356,8 @@ class DuringMarketPushTests(unittest.TestCase):
             )
         self.assertLess(text.index("高涨幅"), text.index("低涨幅"))
         self.assertIn("银行行业", text)
+        self.assertIn("存储芯片概念、新能源概念", text)
         self.assertIn("新能源概念", text)
-        self.assertIn("存储芯片概念", text)
 
     def test_watchlist_theme_concept_suffix_not_duplicated(self) -> None:
         payload = {

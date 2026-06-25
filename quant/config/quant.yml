@@ -258,6 +258,9 @@ gates:
       composite_gain: 30            # 近 N 日综合涨幅(%，各上榜日涨跌幅累加)
       net_fund_flow: 20             # 近 N 日资金净流入(亿元，流入−流出)
       no_hit: 0                     # 个股概念均未命中窗口概念池时的分数
+    fit_rank:                       # 概念粘合度加权（同花顺 F10）
+      weight_decay: 0.85            # rank=1 权重 1.0，rank=2 为 0.85，依次衰减
+      max_concepts: 15               # 仅前 N 个粘合度概念参与加权
 
   # 主升浪战法：仅加速段 + 震荡剔除（不要求整理/启动）
   main_wave:

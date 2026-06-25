@@ -838,6 +838,86 @@ def _score_by_hit_rank(rank: int | None, raw_score: float, cfg: dict[str, Any] |
     return tiers["off_top_penalty"], "榜外(11+)"
 
 
+def _fit_rank_cfg(cfg: dict[str, Any] | None = None) -> dict[str, float | int]:
+    c = cfg or _concept_tracker_cfg()
+    fit = c.get("fit_rank") or {}
+    return {
+        "weight_decay": float(fit.get("weight_decay", 0.85)),
+        "max_concepts": int(fit.get("max_concepts", 15)),
+    }
+
+
+def _fit_rank_weight(fit_rank: int, cfg: dict[str, Any] | None = None) -> float:
+    fit_cfg = _fit_rank_cfg(cfg)
+    max_concepts = int(fit_cfg["max_concepts"])
+    if fit_rank <= 0 or fit_rank > max_concepts:
+        return 0.0
+    decay = float(fit_cfg["weight_decay"])
+    return decay ** (fit_rank - 1)
+
+
+def _score_fit_rank_weighted_resonance(
+    fit_order: list[tuple[str, int]],
+    matched: dict[str, float],
+    rank_map: dict[str, int],
+    cfg: dict[str, Any],
+) -> tuple[float, dict[str, Any], str, int | None, str]:
+    """按概念粘合度加权汇总窗口榜命中分（粘合度越靠前权重越大）。"""
+    hits: list[dict[str, Any]] = []
+    for concept, fit_rank in fit_order:
+        weight = _fit_rank_weight(fit_rank, cfg)
+        if weight <= 0 or concept not in matched:
+            continue
+        board_rank = rank_map.get(concept)
+        raw = matched[concept]
+        board_score, tier = _score_by_hit_rank(board_rank, raw, cfg)
+        hits.append(
+            {
+                "concept": concept,
+                "fit_rank": fit_rank,
+                "board_rank": board_rank,
+                "raw_score": raw,
+                "board_score": board_score,
+                "tier": tier,
+                "weight": weight,
+                "weighted_score": board_score * weight,
+            }
+        )
+
+    if not hits:
+        tiers = _rank_tier_cfg(cfg)
+        return float((cfg.get("score_weights") or {}).get("no_hit", 0)), {}, "", None, ""
+
+    total_w = sum(float(h["weight"]) for h in hits)
+    score = sum(float(h["weighted_score"]) for h in hits) / total_w
+    primary = min(
+        hits,
+        key=lambda h: (int(h["fit_rank"]), int(h["board_rank"] or 9999), str(h["concept"])),
+    )
+    detail = {
+        "概念粘合度评分": [
+            {
+                "概念": h["concept"],
+                "粘合度": h["fit_rank"],
+                "窗口排名": h["board_rank"],
+                "权重分": round(float(h["raw_score"]), 2),
+                "档位": h["tier"],
+                "权重": round(float(h["weight"]), 4),
+                "加权分": round(float(h["weighted_score"]), 2),
+            }
+            for h in hits
+        ],
+        "粘合度加权分": round(score, 2),
+    }
+    return (
+        score,
+        detail,
+        str(primary["concept"]),
+        primary["board_rank"],
+        str(primary["tier"]),
+    )
+
+
 def _score_single_track_resonance(
     tags: set[str],
     payload: dict,
@@ -845,6 +925,7 @@ def _score_single_track_resonance(
     section: str,
     track_label: str,
     mode: str = "",
+    concept_fit_order: list[tuple[str, int]] | None = None,
 ) -> tuple[float, dict[str, Any]]:
     cfg = _concept_tracker_cfg(mode)
     w_cfg = cfg.get("score_weights") or {}
@@ -883,10 +964,30 @@ def _score_single_track_resonance(
             "排名档位": None,
         }
 
-    best_name = min(matched.keys(), key=lambda c: (rank_map.get(c, 9999), -matched[c], c))
-    best_raw = matched[best_name]
-    best_rank = rank_map.get(best_name)
-    score, tier_label = _score_by_hit_rank(best_rank, best_raw, cfg)
+    use_fit_rank = (
+        section == BOARD_CONCEPT
+        and track_label == "概念"
+        and concept_fit_order
+    )
+    fit_detail: dict[str, Any] = {}
+    if use_fit_rank:
+        score, fit_detail, best_name, best_rank, tier_label = _score_fit_rank_weighted_resonance(
+            concept_fit_order,
+            matched,
+            rank_map,
+            cfg,
+        )
+        if not best_name:
+            use_fit_rank = False
+
+    if not use_fit_rank:
+        best_name = min(matched.keys(), key=lambda c: (rank_map.get(c, 9999), -matched[c], c))
+        best_raw = matched[best_name]
+        best_rank = rank_map.get(best_name)
+        score, tier_label = _score_by_hit_rank(best_rank, best_raw, cfg)
+        fit_detail = {}
+
+    best_raw = matched.get(best_name, 0.0)
     hit_detail = {
         k: round(v, 2) for k, v in sorted(matched.items(), key=lambda x: (-x[1], x[0]))
     }
@@ -894,6 +995,7 @@ def _score_single_track_resonance(
 
     return score, {
         **base_detail,
+        **fit_detail,
         f"命中{track_label}": sorted(matched.keys()),
         f"{track_label}权重分": hit_detail,
         f"命中{track_label}排名": matched_ranks,
@@ -902,6 +1004,7 @@ def _score_single_track_resonance(
         "最高命中排名": best_rank,
         "排名档位": tier_label,
         f"{track_label}减分": score < 0,
+        "评分模式": "粘合度加权" if use_fit_rank else "窗口最优",
     }
 
 
@@ -910,6 +1013,7 @@ def score_theme_resonance(
     stock_industries: set[str],
     payload: dict,
     *,
+    concept_fit_order: list[tuple[str, int]] | None = None,
     mode: str = "",
     update: bool = False,
 ) -> tuple[float, dict[str, Any]]:
@@ -921,6 +1025,7 @@ def score_theme_resonance(
         section=BOARD_CONCEPT,
         track_label="概念",
         mode=mode,
+        concept_fit_order=concept_fit_order,
     )
     industry_score, industry_detail = _score_single_track_resonance(
         stock_industries,
@@ -970,11 +1075,19 @@ def score_concept_resonance(
     stock_concepts: set[str],
     payload: dict,
     *,
+    concept_fit_order: list[tuple[str, int]] | None = None,
     mode: str = "",
     update: bool = False,
 ) -> tuple[float, dict[str, Any]]:
     """兼容旧调用：仅概念轨。"""
-    return score_theme_resonance(stock_concepts, set(), payload, mode=mode, update=update)
+    return score_theme_resonance(
+        stock_concepts,
+        set(),
+        payload,
+        concept_fit_order=concept_fit_order,
+        mode=mode,
+        update=update,
+    )
 
 
 def theme_detail(payload: dict, *, mode: str = "", update: bool = False) -> dict[str, Any]:

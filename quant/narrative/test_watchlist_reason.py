@@ -53,12 +53,30 @@ class WatchlistReasonTests(unittest.TestCase):
         row = {
             "股票代码": "002371",
             "股票名称": "北方华创",
-            "所属概念": "芯片",
+            "所属概念": ["芯片", "半导体", "国产替代"],
             "人气排名": 1,
             "候选来源": ["人气榜"],
         }
         text = build_watchlist_human_reason(score, row)
-        self.assertEqual(text, "北方华创，所属概念芯片，同花顺人气榜第1，评分78")
+        self.assertEqual(
+            text,
+            "北方华创，所属概念芯片、半导体、国产替代，同花顺人气榜第1，评分78",
+        )
+
+    def test_concept_fit_rank_top_three_in_reason(self) -> None:
+        score = SimpleNamespace(name="风华高科", total=80.0, dimensions=[])
+        row = {
+            "股票代码": "000636",
+            "股票名称": "风华高科",
+            "概念粘合度": [
+                {"rank": 1, "concept": "超级电容"},
+                {"rank": 2, "concept": "储能"},
+                {"rank": 3, "concept": "5G"},
+            ],
+            "所属概念": ["超级电容", "储能", "5G"],
+        }
+        text = build_watchlist_human_reason(score, row)
+        self.assertEqual(text, "风华高科，所属概念超级电容、储能、5G，评分80")
 
     def test_push_section_uses_reason_bullets(self) -> None:
         merged = [

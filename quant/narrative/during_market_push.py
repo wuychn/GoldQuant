@@ -15,7 +15,11 @@ from quant.narrative.ops_context import (
 from quant.narrative.stock_lines import _parse_name_list, stock_name
 from quant.pool.ths_rank_util import format_ths_rank_tags_brief, stock_ths_rank_tags
 from quant.scoring.context import ScoreContext
-from quant.scoring.dimensions.concept_theme import resolve_stock_concepts
+from quant.scoring.dimensions.concept_theme import (
+    DISPLAY_CONCEPT_LIMIT,
+    resolve_stock_concepts,
+    stock_concept_display_names,
+)
 from quant.scoring.tech_indicators import stock_daily_change_pct, to_float
 from quant.scoring.theme_boards import BOARD_CONCEPT, BOARD_INDUSTRY, section_board_rows
 from quant.execution.executor import ExecutedTrade
@@ -378,51 +382,12 @@ def _watchlist_tag_note(stock: dict) -> str:
     return tags[0]
 
 
-def _concept_gain_index(payload: dict) -> dict[str, float]:
-    """概念名 → 当日涨跌幅（四榜合并，同名取较高值）。"""
-    block = payload.get(BOARD_CONCEPT) or {}
-    index: dict[str, float] = {}
-    if not isinstance(block, dict):
-        return index
-    for key in ("涨幅榜", "跌幅榜", "资金流入榜", "资金流出榜"):
-        rows = block.get(key) or []
-        if not isinstance(rows, list):
-            continue
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            name = _theme_name(row)
-            chg = _theme_chg_pct(row)
-            if not name or chg is None:
-                continue
-            prev = index.get(name)
-            if prev is None or chg > prev:
-                index[name] = chg
-    return index
-
-
 def _stock_industry_name(row: dict) -> str:
     for key in ("行业", "所属行业"):
         names = _parse_name_list(row.get(key))
         if names:
             return names[0]
     return ""
-
-
-def _stock_concept_names(row: dict, payload: dict) -> list[str]:
-    resolved = resolve_stock_concepts(row, payload)
-    return _parse_name_list(resolved.get("所属概念") or resolved.get("概念"))
-
-
-def _best_gain_concept(concepts: list[str], gain_index: dict[str, float]) -> tuple[str, float | None]:
-    if not concepts:
-        return "", None
-    scored = [(c, gain_index.get(c)) for c in concepts]
-    with_gain = [(c, g) for c, g in scored if g is not None]
-    if with_gain:
-        best_name, best_chg = max(with_gain, key=lambda x: (x[1], x[0]))
-        return best_name, best_chg
-    return concepts[0], None
 
 
 def _watchlist_change_pct(row: dict) -> float:
@@ -448,14 +413,17 @@ def _format_concept_label(name: str) -> str:
     return f"{name}概念"
 
 
-def _format_watchlist_theme_brief(row: dict, payload: dict, concept_gain: dict[str, float]) -> str:
+def _format_watchlist_theme_brief(row: dict, payload: dict) -> str:
     parts: list[str] = []
     industry = _stock_industry_name(row)
     if industry:
         parts.append(_format_industry_label(industry))
-    concept, _concept_chg = _best_gain_concept(_stock_concept_names(row, payload), concept_gain)
-    if concept:
-        parts.append(_format_concept_label(concept))
+    resolved = resolve_stock_concepts(row, payload)
+    concept_names = stock_concept_display_names(resolved, limit=DISPLAY_CONCEPT_LIMIT)
+    if not concept_names:
+        concept_names = stock_concept_display_names(row, limit=DISPLAY_CONCEPT_LIMIT)
+    if concept_names:
+        parts.append("、".join(_format_concept_label(name) for name in concept_names))
     return " · ".join(parts)
 
 
@@ -464,7 +432,6 @@ def _format_watchlist_anomaly_lines(payload: dict) -> tuple[str, list[str]]:
     total = len(rows)
     if not rows:
         return _section_heading(_ICON_WATCH, "自选异动"), ["暂无自选股"]
-    concept_gain = _concept_gain_index(payload)
     ranked = sorted(rows, key=_watchlist_change_pct, reverse=True)
     title = _section_heading(_ICON_WATCH, f"自选异动（{total}）")
     lines: list[str] = []
@@ -476,7 +443,7 @@ def _format_watchlist_anomaly_lines(payload: dict) -> tuple[str, list[str]]:
         emoji = _emoji_for_pct(chg)
         tag = _watchlist_tag_note(row)
         tag_part = f"  {tag}" if tag else ""
-        theme = _format_watchlist_theme_brief(row, payload, concept_gain)
+        theme = _format_watchlist_theme_brief(row, payload)
         theme_part = f"  {theme}" if theme else ""
         lines.append(
             f"{emoji} {name}  {_fmt_pct(chg)}  {_flow_brief(_stock_flow_yi(row))}"

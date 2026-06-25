@@ -24,8 +24,10 @@ from quant.progress_log import log_progress, log_progress_count
 logger = logging.getLogger(__name__)
 
 _concept_cache: dict[str, list[str] | None] = {}
+_fit_rank_cache: dict[str, list[dict[str, Any]] | None] = {}
 
 CONCEPT_SOURCE_WENCAI = "问财"
+CONCEPT_SOURCE_THS_FIT = "同花顺F10粘合度"
 CONCEPT_SOURCE_FALLBACK = "来源自带"
 
 ConceptFetchSource = Literal["memory", "file", "api"]
@@ -37,6 +39,12 @@ class ConceptFetchResult:
     source: ConceptFetchSource | None = None
 
 
+@dataclass(frozen=True)
+class ConceptFitFetchResult:
+    fit_ranks: list[dict[str, Any]] | None
+    source: ConceptFetchSource | None = None
+
+
 def concept_fetch_progress_label(source: ConceptFetchSource | None) -> str:
     """进度日志用：区分缓存命中与问财接口。"""
     if source in ("memory", "file"):
@@ -44,6 +52,14 @@ def concept_fetch_progress_label(source: ConceptFetchSource | None) -> str:
     if source == "api":
         return "概念·问财"
     return "概念"
+
+
+def concept_fit_fetch_progress_label(source: ConceptFetchSource | None) -> str:
+    if source in ("memory", "file"):
+        return "粘合度·缓存"
+    if source == "api":
+        return "粘合度·同花顺F10"
+    return "粘合度"
 
 
 def _log_error(context: str, exc: Exception | None = None) -> None:
@@ -160,13 +176,117 @@ def _infer_fallback_concept_source(item: dict) -> str:
     return CONCEPT_SOURCE_FALLBACK
 
 
+async def fetch_stock_concept_fit_ths(
+    symbol: str,
+    name: str | None = None,
+    *,
+    cache: dict[str, list[dict[str, Any]] | None] | None = None,
+    file_cache=None,
+    api_allowed: bool = True,
+) -> ConceptFitFetchResult:
+    """同花顺 F10 概念粘合度：内存 → 周文件缓存 → HTTP。"""
+    from app.services.stock_concept_cache import get_stock_concept_cache
+    from app.utils.ths_concept_fit_rank import get_concept_fit_rank_list
+
+    key = str(symbol).strip()
+    if not key:
+        return ConceptFitFetchResult(None, None)
+    store = cache if cache is not None else _fit_rank_cache
+    if key in store:
+        return ConceptFitFetchResult(store[key], "memory")
+
+    file_cache = file_cache if file_cache is not None else get_stock_concept_cache()
+    hit, fit, _ = file_cache.lookup_fit(key)
+    if hit and fit is not None:
+        store[key] = fit
+        return ConceptFitFetchResult(fit, "file")
+    if hit and fit is None and not api_allowed:
+        store[key] = None
+        return ConceptFitFetchResult(None, "file")
+
+    async with file_cache.async_lock_for(key):
+        if key in store:
+            return ConceptFitFetchResult(store[key], "memory")
+        hit, fit, _ = file_cache.lookup_fit(key)
+        if hit and fit is not None:
+            store[key] = fit
+            return ConceptFitFetchResult(fit, "file")
+        if hit and fit is None and not api_allowed:
+            store[key] = None
+            return ConceptFitFetchResult(None, "file")
+
+        if not api_allowed:
+            store[key] = None
+            return ConceptFitFetchResult(None, None)
+
+        try:
+            rows = await asyncio.to_thread(get_concept_fit_rank_list, key)
+            result = rows if rows else None
+        except Exception:
+            _log_error(f"同花顺F10概念粘合度 symbol={symbol!r}")
+            result = None
+
+        if result:
+            concepts = [str(r["concept"]).strip() for r in result if str(r.get("concept", "")).strip()]
+            file_cache.put(
+                key,
+                name=name,
+                concepts=concepts or None,
+                source=CONCEPT_SOURCE_THS_FIT,
+                fit_ranks=result,
+            )
+            store[key] = result
+            return ConceptFitFetchResult(result, "api")
+
+        store[key] = None
+        return ConceptFitFetchResult(None, "api")
+
+
+async def attach_stock_concepts(
+    row: dict[str, Any],
+    *,
+    cache: dict[str, list[str] | None] | None = None,
+    fit_cache: dict[str, list[dict[str, Any]] | None] | None = None,
+    file_cache=None,
+    api_allowed: bool = True,
+) -> tuple[dict[str, Any], ConceptFetchSource | None]:
+    """优先同花顺 F10 概念粘合度，缺失再问财或行内已有概念。"""
+    item = dict(row)
+    symbol = str(item.get("股票代码", "")).strip()
+    if not symbol:
+        return item, None
+
+    stock_name = item.get("股票名称")
+    name = stock_name if isinstance(stock_name, str) else None
+    fit = await fetch_stock_concept_fit_ths(
+        symbol,
+        name,
+        cache=fit_cache,
+        file_cache=file_cache,
+        api_allowed=api_allowed,
+    )
+    if fit.fit_ranks:
+        item["所属概念"] = [str(r["concept"]).strip() for r in fit.fit_ranks]
+        item["概念粘合度"] = fit.fit_ranks
+        item["概念来源"] = CONCEPT_SOURCE_THS_FIT
+        return item, fit.source
+
+    return await attach_stock_concepts_from_wencai(
+        item,
+        cache=cache,
+        file_cache=file_cache,
+        api_allowed=api_allowed,
+    )
+
+
 async def attach_stock_concepts_from_wencai(
     row: dict[str, Any],
     *,
     cache: dict[str, list[str] | None] | None = None,
     file_cache=None,
+    api_allowed: bool = True,
 ) -> tuple[dict[str, Any], ConceptFetchSource | None]:
-    """优先日缓存文件，缺失再问财（同日同代码仅调一次）；失败或空时回退行内已有概念。"""
+    """优先周缓存文件，缺失再问财（同代码缓存期内仅调一次）；失败或空时回退行内已有概念。"""
     item = dict(row)
     symbol = str(item.get("股票代码", "")).strip()
     if not symbol:
@@ -179,6 +299,7 @@ async def attach_stock_concepts_from_wencai(
         stock_name if isinstance(stock_name, str) else None,
         cache=cache,
         file_cache=file_cache,
+        api_allowed=api_allowed,
     )
     if fetched.concepts:
         item["所属概念"] = fetched.concepts
@@ -197,10 +318,10 @@ async def attach_concepts_to_rows(
     file_cache=None,
     progress_scope: str | None = None,
 ) -> list[dict]:
-    from app.services.stock_concept_cache import get_daily_concept_cache
+    from app.services.stock_concept_cache import get_stock_concept_cache
 
     store = cache if cache is not None else _concept_cache
-    day_cache = file_cache if file_cache is not None else get_daily_concept_cache()
+    concept_file_cache = file_cache if file_cache is not None else get_stock_concept_cache()
     out: list[dict] = []
     total = len(rows)
     cache_hits = 0
@@ -208,8 +329,8 @@ async def attach_concepts_to_rows(
     for i, row in enumerate(rows):
         if not isinstance(row, dict):
             continue
-        item, source = await attach_stock_concepts_from_wencai(
-            row, cache=store, file_cache=day_cache
+        item, source = await attach_stock_concepts(
+            row, cache=store, file_cache=concept_file_cache
         )
         out.append(item)
         if source in ("memory", "file"):
@@ -242,8 +363,8 @@ async def fetch_stock_concepts_wcxg(
     file_cache=None,
     api_allowed: bool = True,
 ) -> ConceptFetchResult:
-    """问财概念：内存 → 日文件；文件命中且概念非空则返回，否则在 ``api_allowed`` 时调问财。"""
-    from app.services.stock_concept_cache import get_daily_concept_cache
+    """问财概念：内存 → 周文件缓存；命中且概念非空则返回，否则在 ``api_allowed`` 时调问财。"""
+    from app.services.stock_concept_cache import get_stock_concept_cache
 
     key = str(symbol).strip()
     if not key:
@@ -252,16 +373,16 @@ async def fetch_stock_concepts_wcxg(
     if key in store:
         return ConceptFetchResult(store[key], "memory")
 
-    day_cache = file_cache if file_cache is not None else get_daily_concept_cache()
-    hit, cached = day_cache.lookup(key)
+    file_cache = file_cache if file_cache is not None else get_stock_concept_cache()
+    hit, cached = file_cache.lookup(key)
     if hit and (cached is not None or not api_allowed):
         store[key] = cached
         return ConceptFetchResult(cached, "file")
 
-    async with day_cache.async_lock_for(key):
+    async with file_cache.async_lock_for(key):
         if key in store:
             return ConceptFetchResult(store[key], "memory")
-        hit, cached = day_cache.lookup(key)
+        hit, cached = file_cache.lookup(key)
         if hit and (cached is not None or not api_allowed):
             store[key] = cached
             return ConceptFetchResult(cached, "file")
@@ -279,7 +400,7 @@ async def fetch_stock_concepts_wcxg(
         except Exception:
             _log_error(f"问财所属概念 symbol={symbol!r}")
             result = None
-        day_cache.put(key, name=name, concepts=result)
+        file_cache.put(key, name=name, concepts=result)
         store[key] = result
         return ConceptFetchResult(result, "api")
 
@@ -327,27 +448,13 @@ async def _attach_concepts_cache_only(
     cache: dict[str, list[str] | None] | None = None,
     file_cache=None,
 ) -> tuple[dict[str, Any], ConceptFetchSource | None]:
-    """仅内存/日文件缓存或行内已有概念，不调问财 API。"""
-    symbol = str(item.get("股票代码", "")).strip()
-    if not symbol:
-        return item, None
-    fallback = _parse_existing_concepts(item)
-    stock_name = item.get("股票名称")
-    fetched = await fetch_stock_concepts_wcxg(
-        symbol,
-        stock_name if isinstance(stock_name, str) else None,
+    """仅内存/日文件缓存或行内已有概念，不调外部 API。"""
+    return await attach_stock_concepts(
+        item,
         cache=cache,
         file_cache=file_cache,
         api_allowed=False,
     )
-    if fetched.concepts:
-        item["所属概念"] = fetched.concepts
-        item["概念来源"] = CONCEPT_SOURCE_WENCAI
-    elif fallback:
-        item["所属概念"] = fallback
-        item["概念来源"] = _infer_fallback_concept_source(item)
-        return item, None
-    return item, fetched.source
 
 
 async def _ensure_stock_industry(
@@ -394,7 +501,7 @@ async def enrich_stock_row(
             file_cache=concept_file_cache,
         )
     else:
-        item, concept_source = await attach_stock_concepts_from_wencai(
+        item, concept_source = await attach_stock_concepts(
             item,
             cache=concept_cache,
             file_cache=concept_file_cache,
@@ -484,10 +591,10 @@ async def enrich_stock_rows(
     progress_label: str = "enrich",
     max_concurrency: int | None = None,
 ) -> list[dict]:
-    from app.services.stock_concept_cache import get_daily_concept_cache
+    from app.services.stock_concept_cache import get_stock_concept_cache
 
     cache = concept_cache if concept_cache is not None else _concept_cache
-    day_cache = concept_file_cache if concept_file_cache is not None else get_daily_concept_cache()
+    concept_file_cache = concept_file_cache if concept_file_cache is not None else get_stock_concept_cache()
     indexed: list[tuple[int, dict]] = [
         (i, row) for i, row in enumerate(rows) if isinstance(row, dict)
     ]
@@ -518,7 +625,7 @@ async def enrich_stock_rows(
                 include_pre_snapshot=include_pre_snapshot,
                 hist_max_bars=hist_max_bars,
                 concept_cache=cache,
-                concept_file_cache=day_cache,
+                concept_file_cache=concept_file_cache,
                 skip_wencai=skip_wencai,
                 skip_jbxx=skip_jbxx,
             )

@@ -6,6 +6,11 @@ import re
 from typing import Any
 
 from quant.pool.ths_rank_util import format_ths_rank_tags_brief, stock_ths_rank_tags
+from quant.scoring.dimensions.concept_theme import (
+    DISPLAY_CONCEPT_LIMIT,
+    format_stock_concepts_brief,
+    stock_concept_display_names,
+)
 from quant.scoring.tech_indicators import stock_daily_change_pct
 from quant.config import load_gates_config
 from quant.strategy.momentum import momentum_score
@@ -65,19 +70,27 @@ def _theme_part_from_score(score: Any) -> tuple[str | None, str | None]:
         detail = getattr(d, "detail", None) or {}
         track = detail.get("最佳赛道")
         best = detail.get("最佳命中概念")
-        if track in ("概念", "行业") and best:
+        if track == "行业" and best:
             return str(track), str(best).strip()
     return None, None
 
 
+def _row_with_score_concept_fit(candidate_row: dict, score: Any) -> dict:
+    row = dict(candidate_row)
+    if stock_concept_display_names(row, limit=1):
+        return row
+    for d in getattr(score, "dimensions", []) or []:
+        if getattr(d, "name", "") != "concept_theme":
+            continue
+        fit = (getattr(d, "detail", None) or {}).get("概念粘合度")
+        if isinstance(fit, list) and fit:
+            row["概念粘合度"] = fit
+            break
+    return row
+
+
 def _theme_part_from_row(row: dict) -> str | None:
-    concepts = _parse_name_list(row.get("所属概念") or row.get("概念"))
-    if concepts:
-        return f"所属概念{concepts[0]}"
-    industries = _parse_name_list(row.get("行业"))
-    if industries:
-        return f"所属行业{industries[0]}"
-    return None
+    return format_stock_concepts_brief(row, limit=DISPLAY_CONCEPT_LIMIT)
 
 
 _LEGACY_WATCHLIST_REASON_RE = re.compile(r"^评分[\d.]+[；;]")
@@ -159,17 +172,22 @@ def refresh_merged_watchlist_reasons(
 
 
 def build_watchlist_human_reason(score: Any, candidate_row: dict) -> str:
-    """晚间加自选：人类可读单行原因，如「xx股份，所属行业元件，创新高，评分80」。"""
+    """晚间加自选：人类可读单行原因，如「xx股份，所属概念A、B、C，创新高，评分80」。"""
     name = stock_name(candidate_row) or getattr(score, "name", "") or stock_code(candidate_row)
     parts: list[str] = [name]
 
-    track, best = _theme_part_from_score(score)
-    if track and best:
-        parts.append(f"所属{track}{best}")
+    concept_row = _row_with_score_concept_fit(candidate_row, score)
+    concept_brief = format_stock_concepts_brief(concept_row, limit=DISPLAY_CONCEPT_LIMIT)
+    if concept_brief:
+        parts.append(concept_brief)
     else:
-        theme = _theme_part_from_row(candidate_row)
-        if theme:
-            parts.append(theme)
+        track, best = _theme_part_from_score(score)
+        if track and best:
+            parts.append(f"所属{track}{best}")
+        else:
+            industries = _parse_name_list(candidate_row.get("行业"))
+            if industries:
+                parts.append(f"所属行业{industries[0]}")
 
     parts.extend(format_ths_rank_tags_brief(stock_ths_rank_tags(candidate_row)))
 

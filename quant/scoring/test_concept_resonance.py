@@ -76,3 +76,25 @@ def test_best_rank_wins_among_multiple_hits() -> None:
     assert score == 94.0
     assert detail["最佳命中概念"] == "概念6"
     assert detail["最高命中排名"] == 6
+
+
+def test_fit_rank_prefers_high_adhesion_over_better_board_rank() -> None:
+    fit_order = [("概念12", 1), ("概念6", 2)]
+    with _mock_resonance():
+        score, detail = score_concept_resonance({"概念12", "概念6"}, {}, concept_fit_order=fit_order)
+    assert detail["评分模式"] == "粘合度加权"
+    assert detail["最佳命中概念"] == "概念12"
+    assert detail["最高命中排名"] == 12
+    expected = (-50.0 * 1.0 + 94.0 * 0.85) / (1.0 + 0.85)
+    assert abs(score - expected) < 0.01
+    assert score < 94.0
+
+
+def test_fit_rank_weighted_average() -> None:
+    fit_order = [("概念3", 1), ("概念12", 2)]
+    with _mock_resonance():
+        score, detail = score_concept_resonance({"概念3", "概念12"}, {}, concept_fit_order=fit_order)
+    assert detail["评分模式"] == "粘合度加权"
+    assert detail["最佳命中概念"] == "概念3"
+    expected = (97.0 * 1.0 + (-50.0) * 0.85) / (1.0 + 0.85)
+    assert abs(score - expected) < 0.01

@@ -67,7 +67,7 @@ def daily_review(name: str, d: str | None = None) -> Path:
 
 
 def daily_cache(name: str, d: str | None = None) -> Path:
-    """当日可复用缓存：daily/{date}/cache/{name}（如问财所属概念）。"""
+    """当日可复用缓存：daily/{date}/cache/{name}（个股概念已迁至 ~/.quant/cache/ 周缓存）。"""
     return daily_dir(d) / "cache" / name
 
 
