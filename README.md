@@ -45,7 +45,7 @@ GoldQuant/
 │       └── ...                 # 其他行情/热度接口
 ├── quant/                      # 量化决策机器人
 │   ├── orchestrator.py         # 五模式编排
-│   ├── config/                 # scoring.yml / gates.yml 默认配置
+│   ├── config/                 # quant.yml / gates.yml 默认配置
 │   ├── scoring/                # 100 分制评分引擎
 │   ├── gates/                  # 硬门禁（T+1、熔断、标的池…）
 │   ├── signals/                # 买卖信号
@@ -67,7 +67,7 @@ GoldQuant/
 ├── state/          # optional.jsonl、holding.jsonl、account.json（程序读写）
 ├── views/          # optional.md、holding.md（自动生成，勿手改）
 ├── daily/{date}/   # raw/ derived/ trades/ review/
-├── config/         # scoring.yml、gates.yml、ml_calibration.yml
+├── config/         # quant.yml、gates.yml、ml_calibration.yml（用户覆盖）
 └── memory/         # 新闻摘要、经验教训
 ```
 
@@ -143,19 +143,197 @@ chmod +x run.sh
 
 ---
 
-## 三、运行量化机器人
+## 三、业务逻辑（五时段）
 
-### 3.1 五种模式
+系统按 **五种模式** 定时或手动运行。原则：**买卖、加自选、仓位均由规则引擎决定**；LLM 只负责解读与叙述，盘中推送正文甚至由模板直接生成。
 
-| 命令 | 时段 | 自选 | 买卖 | 说明 |
-|------|------|------|------|------|
-| `python -m quant news` | 任意 | — | — | 新闻解读 + 飞书 |
-| `python -m quant pre_market` | 盘前 | 不改 | 可买 | 开盘分析 + 操作段 |
-| `python -m quant during_market` | 盘中 | 不改 | 可买卖 | 盘中监控 + 操作段 |
-| `python -m quant post_market_lunch` | 午间 | **不更新** | — | 上午复盘 |
-| `python -m quant post_market_evening` | 晚间 | **评分达标新增** | — | 全天复盘 + 自选更新 |
+```text
+                    ┌─────────────┐
+  news ────────────►│ LLM 解读    │──► 新闻摘要 → 全球宏观维度
+                    └─────────────┘
 
-### 3.2 单次执行示例
+  pre_market ──────► 评分/买信号（仅落盘） + LLM 盘前文案
+                    （不计三确认、不成交、不改自选）
+
+  during_market ───► 评分 → 买卖信号 → 三确认 → 模拟成交
+                    + 模板化飞书推送（不改自选）
+
+  post_market_lunch ► LLM 上午复盘（不改自选、不交易）
+
+  post_market_evening ► 候选池评分 → 更新自选/观察池
+                      + LLM 复盘 + 确定性「自选更新」段
+```
+
+### 3.1 各时段做什么
+
+| 模式 | 命令 | 默认调度* | 改自选 | 买卖 | 推送正文 |
+|------|------|-----------|:------:|:----:|----------|
+| 新闻 | `news` | 07–23 点整点 | — | — | LLM |
+| 盘前 | `pre_market` | 09:25 | 否 | 信号落盘，**不成交** | LLM |
+| 盘中 | `during_market` | **09:37 起每 7 分钟**（至 15:00） | 否 | **可成交** | **模板**（非 LLM） |
+| 午间复盘 | `post_market_lunch` | 11:50 | 否 | 否 | LLM |
+| 晚间复盘 | `post_market_evening` | 20:10 | **是** | 否 | LLM + 自选段 |
+
+\* 调度由 `app/scheduling/quant_scheduler.py` 驱动，时点可在 `.env` 中覆盖（如 `GOLDQUANT_QUANT_SCHED_DURING_MARKET_TIMES`）。  
+另：**05:00** 预取自选/持仓的 **概念与粘合度**（周缓存，减轻 enrich 耗时）。
+
+#### 新闻（`news`）
+
+1. 拉取财经新闻列表，LLM 生成解读文案并推送飞书。  
+2. 从文案中提取「综合解读」写入 `~/.quant/memory/`，并刷新 **全球宏观** 评分（影响后续各时段 `global_macro` 维度，权重 2）。  
+3. **不参与** 自选、买卖、候选池。
+
+#### 盘前（`pre_market`）
+
+1. API 聚合：指数、赚钱效应、**当前自选/持仓**（enrich 后）、板块榜等。  
+2. 对自选股扫描 **买入原始信号**（见下文「买入逻辑」），写入 `derived/signals.json`。  
+3. **持续确认不计数**（配置 `confirmation.skip_count_modes` 含 `pre_market`），**不产生可执行单、不模拟成交**。  
+4. LLM 根据 `engine_brief`（程序摘要）写开盘分析；「操作」段仅展示引擎结论，**不执行**。
+
+#### 盘中（`during_market` / 智能盯盘）
+
+1. 同上拉数，对 **自选股** 生成买入信号、对 **持仓** 生成卖出信号。  
+2. 经 **同日防翻转**（当日已卖不买、已买不卖）与 **持续确认** 后，可执行信号交给模拟成交器。  
+3. 持仓股单独评分，落盘 `scores_holding.json`。  
+4. 推送正文由 `build_during_market_push` **模板生成**（大盘、概念榜、自选异动、持仓、信号与成交、三确认进度等）。  
+5. **不修改自选列表**；自选变更仅发生在晚间复盘。
+
+#### 午间复盘（`post_market_lunch`）
+
+1. 上午行情与自选/持仓表现摘要 + LLM 叙述。  
+2. 不生成买卖信号，不更新自选。
+
+#### 晚间复盘（`post_market_evening`）
+
+1. 用当日四榜更新 **概念板块快照**（`concept_tracker.json`，供次日盘中/评分使用）。  
+2. **候选池评分 → 自选池更新**（见下文「加自选逻辑」）。  
+3. LLM 写全天复盘；文末 **追加确定性段落「六、自选更新」**（新增、移观察池、观察池恢复等，不由 LLM 编造）。
+
+---
+
+### 3.2 评分引擎（100 分制）
+
+对单只股票按 **启用维度加权平均** 得到总分（各维度 0–100，缺失则不计入分母）：
+
+| 维度 | 默认权重 | 说明 |
+|------|---------:|------|
+| `main_wave` | 22 | 主升浪加速段形态、震荡剔除、买点结构 |
+| `stock_history` | 12 | 近 30 日大涨占比、均线发散、周/月线 |
+| `concept_theme` | 12 | 概念/行业与板块榜 **共振**；概念优先 **同花顺 F10 粘合度** 加权 |
+| `stock_fund_flow` | 11 | 个股资金流（流出可负分） |
+| `technical` | 9 | MACD、均线等 |
+| `day_bar_shape` | 8 | 收阴、冲高回落（晚间候选加重收阴惩罚） |
+| `popularity_rank` | 8 | 同花顺人气榜排名 |
+| `ths_rank_signal` | 4 | 形态榜标签（创新高/量价齐升等） |
+| `market_sentiment` | 4 | 涨跌家数、涨停家数 |
+| `market_index` | 3 | 大盘指数涨跌 |
+| `zt_height` | 3 | 连板高度 |
+| `global_macro` | 2 | 新闻解读后的宏观多空 |
+
+**阈值**（`quant/config/quant.yml`，可被 `~/.quant/config/quant.yml` 覆盖）：
+
+| 阈值 | 默认 | 用途 |
+|------|-----:|------|
+| `watchlist_threshold` | **70** | 晚间复盘 **加入/保留自选** |
+| `buy_threshold` | **72** | 盘中/盘前 **买入信号** 最低分 |
+| `sell_threshold` | 45 | 已关闭「评分走弱卖出」；保留配置项 |
+
+**概念维度要点：**
+
+- enrich 时 **优先** 拉取同花顺 F10 **概念粘合度**，失败再问财；缓存 **7 天**（`~/.quant/cache/stock_concepts.json`）。  
+- 评分时按粘合度 rank 加权与板块榜共振，**不再** 在全部概念里只取窗口最优一个。  
+- 推送展示个股概念时，优先 **粘合度第 1、2、3** 名（无粘合度则取所属概念前 3）。
+
+---
+
+### 3.3 加自选逻辑（仅晚间复盘）
+
+```text
+人气榜 + 同花顺形态榜 (+ 可选涨停池)
+        ↓ API 初筛 + enrich（行情/概念/资金流…）
+        ↓ build_candidates 合并候选
+        ↓ ScoringEngine 全量评分
+        ↓ 总分 ≥ watchlist_threshold → passed_rows
+        ↓ merge_watchlist_evening：合并历史自选
+        ↓ 保留自选若未进候选池 → 补算评分
+        ↓ 连续 N 日 < 阈值 → 移入观察池（默认 N=3）
+        ↓ 观察池内继续 nightly 评分；≥ 阈值 → 恢复自选
+        ↓ 观察超过 M 日仍不达标 → 删除（默认 M=30）
+        ↓ save_optional / save_observe → 推送「自选更新」
+```
+
+- **候选来源**：默认 **人气榜前 20** + **形态榜**（创月/半年/年/历史新高、持续上涨、持续放量、量价齐升）；涨停池默认 **不进入** 候选。  
+- **观察池**：不参与买入扫描、不出现在 API「自选股」、不推送给 LLM 当可操作标的。  
+- **加入原因** 人类可读单行，含粘合度 Top3 概念、形态标签、人气排名、总分等。
+
+---
+
+### 3.4 买入逻辑（盘前信号 / 盘中可成交）
+
+**标的范围**：仅 **自选股**（不含观察池、不含仅候选未入选）。  
+**策略**：仅 **主升浪战法**（加速段买入 / 回调企稳买入）。
+
+须 **全部通过**（顺序简化）：
+
+1. **硬门禁** `check_buy_gates`：标的池、熔断、仓位上限、ST 等（见 `gates.yml`）。  
+2. **趋势** `trend_allows_buy`：须处于允许做多的趋势阶段。  
+3. **动能** `momentum_score` ≥ 配置下限。  
+4. **总分** ≥ `buy_threshold`（72，可按市场档位动态调整）。  
+5. **买点** `detect_buy_setup`：加速段或回调企稳结构成立。  
+6. **涨幅上限**：追高过滤（加速/回调类型可不同上限）。  
+7. **盘中额外**：`intraday_allows_buy` 分时确认（盘前只生成信号，不做此项拦截落盘）。
+
+通过者按总分排序，在 **剩余仓位空位** 内按分数分配数量。
+
+**持续确认（仅盘中计入）**：
+
+- 首次触发当日 **锁存** 至收盘；累计命中 `min_day_hits` 次（默认 2），且距首次 ≥ `min_span_minutes`（默认 3 分钟），且 **成交前再验** 条件仍成立 → 可执行。  
+- 盘前产生的信号 **不计数**；计数从 **09:37** 第一次盘中调度起算。
+
+---
+
+### 3.5 卖出逻辑（仅盘中）
+
+**标的范围**：仅 **持仓股**。  
+已 **关闭**：评分低于 `sell_threshold` 卖出、持仓时间止损、日内走弱等。
+
+当前仅两类 **原始卖出信号**：
+
+| 类型 | 条件概要 | 执行时间 |
+|------|----------|----------|
+| **止损** | 浮亏达线 **且** 趋势已破位；豁免近涨停/当日强势 | 默认 **14:30 前不评估**；**趋近跌停** 可提前 |
+| **趋势破位** | 加速仓：破 5 日线 / 趋势衰竭；回调仓：破 MA20 | 非紧急卖须 **14:30 后** |
+
+原则：**不破趋势不卖**；避免早盘快照误触止损（如深跌后拉回）。
+
+卖出同样走 **持续确认**  pipeline，成交前 `verify_sell_signal_still_valid` 再验。
+
+---
+
+### 3.6 决策与叙述分工
+
+| 内容 | 产出方 |
+|------|--------|
+| 加自选、移观察池、买卖、成交、仓位 | **规则引擎 + 模拟成交** |
+| 大盘/概念榜/自选异动/操作段（盘中） | **模板** `during_market_push` |
+| 新闻、盘前、午间/晚间复盘叙述 | **LLM**（注入 `engine_brief`，不得推翻引擎结论） |
+| 阈值/权重离线优化 | **ML**（不参与盘中推理） |
+
+---
+
+## 四、运行量化机器人
+
+### 4.1 五种模式（速查）
+
+| 命令 | 时段 | 自选 | 买卖 |
+|------|------|:----:|:----:|
+| `python -m quant news` | 新闻 | — | — |
+| `python -m quant pre_market` | 盘前 | 不改 | 信号 only |
+| `python -m quant during_market` | 盘中 | 不改 | 可成交 |
+| `python -m quant post_market_lunch` | 午间 | 不改 | — |
+| `python -m quant post_market_evening` | 晚间 | **更新** | — |
+
+### 4.2 单次执行示例
 
 ```powershell
 # 1. 确保 API 已启动
@@ -165,21 +343,24 @@ python -m app
 python -m quant post_market_evening
 ```
 
-每次运行会：拉取 API 数据 → 落盘到 `~/.quant/daily/` → 评分/交易/叙述 → 推送飞书。
+每次运行会：拉取 API 数据 → 落盘 `~/.quant/daily/` → 按模式执行评分/交易/叙述 → 推送飞书。
 
-### 3.3 建议调度（cron / 任务计划）
+### 4.3 建议调度
+
+与内置调度器默认一致（工作日，`QUANT_SCHEDULER_ENABLED=true`）：
 
 | 时间 | 模式 |
 |------|------|
-| 08:00 起多次 | `news` |
-| 09:20 | `pre_market` |
-| 09:35～14:30 每 10～30 分钟 | `during_market` |
+| 05:00 | 预取概念/粘合度（可选） |
+| 07–23 点整点 | `news` |
+| 09:25 | `pre_market` |
+| **09:37–15:00 每 7 分钟** | `during_market` |
 | 11:50 | `post_market_lunch` |
-| 15:10 | `post_market_evening` |
+| 20:10 | `post_market_evening` |
 
-Windows 任务计划或 Linux crontab 调用同一命令即可；工作目录设为项目根，并激活 venv。
+也可用手动 cron / 任务计划调用 `python -m quant <mode>`；工作目录为项目根并激活 venv。
 
-### 3.4 飞书推送格式
+### 4.4 飞书推送格式
 
 不变，示例：
 
@@ -196,49 +377,66 @@ Windows 任务计划或 Linux crontab 调用同一命令即可；工作目录设
 
 推送正文统一使用「赚钱效应强/一般/差」描述行情强弱，「仓位控制」及具体比例描述仓位上限；勿使用「市场环境」「市场档位」「可参与交易」等旧表述。
 
-「操作」「自选更新」段由**评分引擎 + 执行器**确定性产出；其余段落由 LLM 叙述。
+```text
+【晚间复盘】2026-05-26 20:10:00
+
+一、大盘概况
+…
+
+六、自选更新
+· 某某股份，所属概念超级电容、储能、5G，创新高，评分72
+本轮新入选：
+· …
+```
+
+推送正文使用「赚钱效应强/一般/差」「仓位控制」等表述；勿使用已废弃的「市场环境」「可参与交易」等旧词。
+
+「操作」「自选更新」由 **引擎确定性产出**；LLM 叙述须与 `engine_brief` 一致，不得虚构未出现的概念名。
 
 ---
 
-## 四、配置说明
+## 五、配置说明
 
-### 4.1 评分与阈值
+### 5.1 评分与阈值
 
-默认：`quant/config/scoring.yml`
-
-用户覆盖：`~/.quant/config/scoring.yml`
+默认：`quant/config/quant.yml`（包内）  
+用户覆盖：`~/.quant/config/quant.yml`（deep merge）
 
 主要字段：
 
 ```yaml
-watchlist_threshold: 65   # 加自选最低分
+watchlist_threshold: 70   # 加自选最低分
 buy_threshold: 72         # 买入最低分
-sell_threshold: 45        # 低于此考虑卖出
+sell_threshold: 45        # 保留；评分走弱卖已关闭
+candidate:
+  watchlist_retain_days: 3      # 连续未达标移观察池（交易日）
+  watchlist_observe_max_days: 30
 dimensions:               # 各维度 enabled + weight
-  market_index: { enabled: true, weight: 12 }
+  main_wave: { enabled: true, weight: 22 }
+  concept_theme: { enabled: true, weight: 12 }
   ...
 ```
 
-### 4.2 硬门禁与仓位
+### 5.2 硬门禁与仓位
 
 默认：`quant/config/gates.yml`  
 用户覆盖：`~/.quant/config/gates.yml`
 
-含：标的池过滤、极端熔断、每日亏损限额、止损冷却、分市场状态的仓位上限等。
+含：标的池、极端熔断、每日亏损限额、止损冷却、分档仓位上限、**三确认**与 **买卖/卖出** 子配置等。
 
-`trading.time_validation_enabled: false` 时任意时刻可模拟成交（便于联调）；实盘请改为 `true`。
+`trading.time_validation_enabled: false` 时任意时刻可模拟成交（联调用）；实盘请改为 `true`。
 
-### 4.3 策略文档
+### 5.3 策略文档
 
-`quant/strategy.md` 为策略条文源；LLM 叙述时会注入相关章节，**买卖不由 LLM 决定**。
+`quant/strategy.md` 为策略条文；LLM 叙述时会注入相关章节，**买卖不由 LLM 决定**。
 
 ---
 
-## 五、ML 离线校准
+## 六、ML 离线校准
 
 ML **不参与盘中推理**，仅在收盘后（或周末）用历史数据优化阈值与维度权重。
 
-### 5.1 数据来源
+### 6.1 数据来源
 
 自动扫描 `~/.quant/daily/*/derived/scores_watchlist.json`，结合：
 
@@ -247,7 +445,7 @@ ML **不参与盘中推理**，仅在收盘后（或周末）用历史数据优�
 
 构建标签后做校准。**至少积累约 20 条样本**后再跑（默认 `--min-samples 20`）。
 
-### 5.2 命令
+### 6.2 命令
 
 ```powershell
 # 预览结果（不写文件）
@@ -266,7 +464,7 @@ python -m quant.ml calibrate --method lightgbm --apply
 python -m quant.ml calibrate --method bayesian --apply
 ```
 
-### 5.3 生效方式
+### 6.3 生效方式
 
 `--apply` 写入 `~/.quant/config/ml_calibration.yml`，下次 `python -m quant` 启动时自动合并到评分配置（优先级高于包内默认值）。
 
@@ -292,7 +490,7 @@ metrics:
 
 ---
 
-## 六、量化数据 API（OpenClaw 入口）
+## 七、量化数据 API（OpenClaw 入口）
 
 前缀 **`/api/v1`**，核心路由在 `quant_endpoint.py`：
 
@@ -335,7 +533,7 @@ metrics:
 
 ---
 
-## 七、常见问题
+## 八、常见问题
 
 **Q：quant 报连接失败？**  
 A：先确认 `python -m app` 已启动，且 `quant/config.py` 中 `BASE_URL` 与 API 端口一致（默认 `http://localhost:8085`）。
@@ -351,7 +549,7 @@ A：使用 `python -m app` 启动；裸 `uvicorn` 需显式 `--port`，见 `.env
 
 ---
 
-## 八、本地自检
+## 九、本地自检
 
 ```powershell
 curl http://127.0.0.1:8085/health
