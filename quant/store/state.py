@@ -2,6 +2,7 @@
 
 源文件（程序唯一写入点）
   optional.jsonl  自选股
+  observe.jsonl   观察池（不对外返回）
   holding.jsonl   持仓
   account.json    可用/市值/总资产/当日盈亏
   stoploss.jsonl  止损冷却记录
@@ -123,6 +124,21 @@ def read_jsonl(path: Path) -> list[dict]:
 def write_jsonl(path: Path, rows: list[dict]) -> None:
     lines = [json.dumps(r, ensure_ascii=False) for r in rows]
     _write_text_atomic(path, "\n".join(lines) + ("\n" if lines else ""))
+
+
+def get_observe() -> list[dict]:
+    ensure_layout()
+    from app.utils.quant_test_trim import truncate_list_for_test_phase
+
+    return truncate_list_for_test_phase(read_jsonl(state_file("observe.jsonl")))
+
+
+def save_observe(rows: list[dict]) -> None:
+    ensure_layout()
+    from app.utils.quant_test_trim import truncate_list_for_test_phase
+
+    rows = truncate_list_for_test_phase(rows)
+    write_jsonl(state_file("observe.jsonl"), rows)
 
 
 def get_optional() -> list[dict]:

@@ -10,7 +10,7 @@ import sys
 from dataclasses import asdict
 from datetime import date, datetime
 
-from app.utils.common_util import is_real_workday_cn
+from app.utils.common_util import extract_stock_code, is_real_workday_cn
 
 from app.core.config import get_settings
 
@@ -48,10 +48,17 @@ from quant.store.snapshot import save_derived, save_raw, save_review
 from quant.store.state import (
     append_lesson,
     get_holdings,
+    get_observe,
     get_optional,
     merge_payload_holdings,
+    save_observe,
     save_optional,
     write_news_summary,
+)
+from quant.store.observe_pool import (
+    supplement_observe_scores,
+    update_observe_pool_evening,
+    watchlist_observe_max_days,
 )
 from quant.store.watchlist import (
     apply_watchlist_fail_streak,
@@ -111,9 +118,10 @@ def _build_operation_section(
 
 
 def _update_watchlist_evening(ctx: ScoreContext) -> tuple[list[dict], list[dict], str, list]:
-    """晚间复盘：达标写入自选；连续 N 个交易日评分不达标则移出。"""
+    """晚间复盘：达标写入自选；连续 N 日不达标移观察池；观察池 nightly 评分。"""
     scope = "post_market_evening"
     fail_limit = watchlist_fail_streak_limit()
+    observe_limit = watchlist_observe_max_days()
     log_progress(scope, "合并三来源候选")
     engine = ScoringEngine()
     candidates = build_candidates(ctx.payload)
@@ -146,9 +154,25 @@ def _update_watchlist_evening(ctx: ScoreContext) -> tuple[list[dict], list[dict]
         passed_rows.append(row)
 
     existing = get_optional()
-    merged, added, removed = merge_watchlist_evening(existing, passed_rows)
+    pre_existing_codes = {
+        extract_stock_code(r) for r in existing if extract_stock_code(r)
+    }
+    merged, added, _ = merge_watchlist_evening(existing, passed_rows)
     score_by_code = {s.code: s for s in scores}
     enriched_by_code = index_enriched_watchlist(ctx.payload)
+
+    observe_existing = get_observe()
+    observe_scored = supplement_observe_scores(
+        ctx,
+        engine,
+        observe_existing,
+        scores=scores,
+        score_by_code=score_by_code,
+        enriched_by_code=enriched_by_code,
+    )
+    if observe_scored:
+        log_progress(scope, "补算观察池评分", detail=f"{observe_scored} 只")
+
     retained_scored = supplement_retained_watchlist_scores(
         ctx,
         engine,
@@ -164,12 +188,30 @@ def _update_watchlist_evening(ctx: ScoreContext) -> tuple[list[dict], list[dict]
             detail=f"{retained_scored} 只（未进候选池）",
         )
     threshold = float(engine.config.get("watchlist_threshold", 70))
-    merged, removed = apply_watchlist_fail_streak(
+    merged, to_observe = apply_watchlist_fail_streak(
         merged,
         score_by_code=score_by_code,
         threshold=threshold,
         max_streak=fail_limit,
     )
+
+    observe_input = observe_existing + to_observe
+    remaining_observe, restored, purged = update_observe_pool_evening(
+        observe_input,
+        ctx=ctx,
+        engine=engine,
+        score_by_code=score_by_code,
+        enriched_by_code=enriched_by_code,
+        threshold=threshold,
+        max_days=observe_limit,
+    )
+    restored_new = [
+        r for r in restored if extract_stock_code(r) not in pre_existing_codes
+    ]
+    restored_existing = [
+        r for r in restored if extract_stock_code(r) in pre_existing_codes
+    ]
+    merged.extend(restored)
     candidate_by_code = {**enriched_by_code, **by_code}
     refresh_merged_watchlist_reasons(
         merged,
@@ -183,11 +225,16 @@ def _update_watchlist_evening(ctx: ScoreContext) -> tuple[list[dict], list[dict]
             str(r.get("股票代码", "")),
         )
     )
-    save_optional(merged, delta={"added": added, "removed": removed})
+    save_optional(merged, delta={"added": added, "removed": to_observe + purged})
+    save_observe(remaining_observe)
     log_progress(
         scope,
-        "写入自选（连续未达标移出）",
-        detail=f"共 {len(merged)} 只，新增 {len(added)}，移出 {len(removed)}，阈值 {fail_limit} 日",
+        "写入自选/观察池",
+        detail=(
+            f"自选 {len(merged)} 只，新增 {len(added)}，"
+            f"移观察 {len(to_observe)}，观察池恢复 {len(restored)}，"
+            f"观察池删除 {len(purged)}，未达标阈值 {fail_limit} 日"
+        ),
     )
 
     save_derived("scores_watchlist.json", [s.to_dict() for s in scores])
@@ -195,13 +242,24 @@ def _update_watchlist_evening(ctx: ScoreContext) -> tuple[list[dict], list[dict]
         "optional_delta.json",
         {
             "added": added,
-            "removed": removed,
+            "moved_to_observe": to_observe,
+            "restored_from_observe": restored,
+            "purged_from_observe": purged,
             "total": len(merged),
+            "observe_total": len(remaining_observe),
             "fail_streak_limit": fail_limit,
+            "observe_max_days": observe_limit,
         },
     )
 
-    optional_section = build_watchlist_push_section(merged, added, removed)
+    optional_section = build_watchlist_push_section(
+        merged,
+        added,
+        to_observe,
+        restored_from_observe=restored_existing,
+        restored_new=restored_new,
+        purged=purged,
+    )
     return merged, added, optional_section, scores
 
 

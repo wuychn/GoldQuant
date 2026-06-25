@@ -30,7 +30,8 @@ scoring:
       - 历史新高
     include_zt_pool: false       # 涨停池不进入晚间自选候选
     include_ths_rank_pool: true  # 同花顺形态榜（创新高/持续上涨/持续放量/量价齐升）
-    watchlist_retain_days: 5     # 连续评分不达标 N 个交易日后移出自选
+    watchlist_retain_days: 3       # 连续评分不达标 N 个交易日后移入观察池
+    watchlist_observe_max_days: 30  # 观察池最长 N 个交易日，期满删除；期内达标恢复自选
 
   # 评分维度：enabled 关闭则不参与；weight 为加权系数
   dimensions:
@@ -201,9 +202,6 @@ gates:
         min_day_hits: 3
         max_window_minutes: 4320
         multi_day: true              # 允许多日累计，非日锁存
-      评分走弱:
-        min_span_minutes: 20
-        min_day_hits: 3
     强势:
       min_span_minutes: 10
       min_day_hits: 2
@@ -376,28 +374,34 @@ gates:
           ascent_relax_on_strong_day: true   # 上升途中+强势日：组1 + (动量|资金)
           ascent_relax_min_day_chg: 5.0
 
-  # 卖出：止损 + 日内走弱 + 神奇2点30 最终确认
+  # 卖出：止损（紧急）+ 趋势破位；非跌停趋近须 14:30 后
   sell:
-    stop_loss_pct: -5.0             # 浮亏 ≤ 此值 → 止损（不受 14:30 限制）
-    intraday_weakness:              # 智能盯盘：冲高回落且跌破分时均价（与 buy.intraday 对称）
-      enabled: true
+    stop_loss_pct: -5.0             # 须同时趋势破位；单独浮亏不触发
+    stop_loss_require_trend_break: true
+    stop_loss_eval_after_late_session: true  # 14:30 前不判止损（防早盘深跌午后拉回误卖）
+    stop_loss_exempt_min_day_chg_pct: 3.0   # 当日涨幅≥此值不止损（涨停/强阳）
+    stop_loss_exempt_near_limit_up: true
+    limit_up_exempt_margin_pct: 0.5         # 距涨停价≤0.5% 视为近涨停
+    urgent_sell_kinds: []                  # 仅趋近跌停可早于 14:30（见 sell_policy）
+    limit_down_approach_margin_pct: 1.0
+    intraday_weakness:              # 已关闭：不破趋势不卖
+      enabled: false
       modes:
         - during_market
-      max_drop_from_high_pct: 3.0   # 距日内最高回撤 ≥ 此值(%)
-      avg_break_margin_pct: 0.15    # 现价 < 均价×(1−margin) 视为有效跌破
-      min_minute_bars: 8            # 至少 N 根连续竞价分钟 K（过滤开盘噪声）
-      lookback_minutes: 10          # 近 N 分钟分时确认窗口
-      min_recent_drop_pct: 0.25     # 近 N 分钟累计跌幅 ≥ 此值(%)
-      min_down_bars_ratio: 0.55     # 近 N 分钟下跌 K 线占比 ≥
-      require_recent_weakness: true # 是否要求近端分时走弱（上述两项）
-    late_session_after: "14:30"     # 趋势类卖出第 3 次确认须在此之后
-    late_session_final_only: true     # true=第1/2次可早于此，第3次须晚于此
-    late_session_kinds:               # 适用神奇2点30 的 signal_kind（不含止损/时间止损/日内走弱）
+      max_drop_from_high_pct: 3.0
+      avg_break_margin_pct: 0.15
+      min_minute_bars: 8
+      lookback_minutes: 10
+      min_recent_drop_pct: 0.25
+      min_down_bars_ratio: 0.55
+      require_recent_weakness: true
+    late_session_after: "14:30"     # 非紧急卖出须在此之后成交
+    late_session_final_only: true
+    late_session_kinds:
       - 破5日线
       - 趋势衰竭
-      - 评分走弱
-    time_stop:                      # 时间/横盘止损（非固定止盈；浮盈>max_pnl 不触发）
-      enabled: true
+    time_stop:                      # 已关闭：不破趋势不卖
+      enabled: false
       min_hold_trading_days: 5      # 买入后至少 N 个交易日
       min_pnl_pct: -3.0             # 低于此由 stop_loss 处理；本规则覆盖 [-3%, +5%] 横盘区
       max_pnl_pct: 5.0              # 浮盈超过此豁免（继续持股，非止盈卖）

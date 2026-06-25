@@ -253,9 +253,7 @@ def _holding_hold_reason(
 ) -> str:
     """持仓未出现在卖出信号里时的说明（始终返回一行）。"""
     from quant.scoring.tech_indicators import quote_last_price
-    from quant.strategy.intraday import intraday_weakness_triggers_sell
     from quant.strategy.main_wave import detect_sell_setup
-    from quant.strategy.time_stop import parse_buy_date, time_stop_triggers_sell
 
     code = str(holding.get("股票代码", "")).strip()
     name = str(holding.get("股票名称", "")).strip() or code
@@ -270,28 +268,22 @@ def _holding_hold_reason(
     except (TypeError, ValueError):
         buy_price = 0.0
     pnl_pct = (price - buy_price) / buy_price * 100 if buy_price > 0 else 0.0
-    stop_loss = float(sell_cfg.get("stop_loss_pct", -5.0))
+    from quant.signals.sell_policy import stop_loss_triggers_sell
+
+    if stop_loss_triggers_sell(
+        enriched, code, pnl_pct=pnl_pct, ctx=ctx, mw_cfg=mw_cfg, price=price
+    )[0]:
+        return f"{name}：触及止损线"
     score = engine.score_stock(ctx, enriched)
     sell_threshold = float(engine.config.get("sell_threshold", 45))
-
-    if pnl_pct <= stop_loss:
-        return f"{name}：触及止损线"
-    ts_ok, _ = time_stop_triggers_sell(
-        enriched, sell_cfg, pnl_pct=pnl_pct, buy_date=parse_buy_date(enriched)
-    )
-    if ts_ok:
-        return f"{name}：时间止损待确认"
-    if _intraday_weakness_applies(ctx, sell_cfg):
-        ok_weak, _ = intraday_weakness_triggers_sell(enriched, sell_cfg)
-        if ok_weak:
-            return f"{name}：分时走弱，卖信号确认中"
     ok_sell, _, _ = detect_sell_setup(enriched, ctx, mw_cfg)
     if ok_sell:
         return f"{name}：卖点待确认"
     if pnl_pct >= 3.0:
         return f"{name}：浮盈{pnl_pct:.1f}%，持有"
+    stop_loss = float(sell_cfg.get("stop_loss_pct", -5.0))
     if pnl_pct <= stop_loss * 0.6:
-        return f"{name}：浮亏{pnl_pct:.1f}%，未触发止损"
+        return f"{name}：浮亏{pnl_pct:.1f}%，趋势未破暂止损"
     if score.total >= sell_threshold + 8:
         return f"{name}：评分尚可，暂不减"
     return f"{name}：暂不减仓"

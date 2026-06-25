@@ -229,11 +229,16 @@ def format_optional_performance_lines(rows: list[dict], *, limit: int = 12) -> l
 def build_watchlist_push_section(
     merged: list[dict],
     added: list[dict],
-    removed: list[dict],
+    moved_to_observe: list[dict] | None = None,
     *,
+    restored_from_observe: list[dict] | None = None,
+    restored_new: list[dict] | None = None,
+    purged: list[dict] | None = None,
+    removed: list[dict] | None = None,
     title: str = WATCHLIST_SECTION_TITLE,
 ) -> str:
     """晚间复盘文末「自选更新」段。"""
+    del removed  # 兼容旧调用
     section_lines = [title, ""]
     if merged:
         for r in merged:
@@ -245,9 +250,26 @@ def build_watchlist_push_section(
         section_lines.append("本轮新入选：")
         for r in added:
             section_lines.append(format_watchlist_reason_bullet(r))
-    if removed:
+    restored_existing = restored_from_observe or []
+    restored_brand_new = restored_new or []
+    if restored_existing:
         section_lines.append("")
-        section_lines.append("删除自选：")
-        for r in removed:
+        section_lines.append("观察池恢复：")
+        for r in restored_existing:
+            section_lines.append(format_watchlist_reason_bullet(r))
+    if restored_brand_new:
+        section_lines.append("")
+        section_lines.append("观察池恢复（新入选）：")
+        for r in restored_brand_new:
+            section_lines.append(format_watchlist_reason_bullet(r))
+    if moved_to_observe:
+        section_lines.append("")
+        section_lines.append("移入观察池：")
+        for r in moved_to_observe:
+            section_lines.append(format_name_code_bullet(r))
+    if purged:
+        section_lines.append("")
+        section_lines.append("观察池期满删除：")
+        for r in purged:
             section_lines.append(format_name_code_bullet(r))
     return "\n".join(section_lines)

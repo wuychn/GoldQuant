@@ -19,7 +19,8 @@ from quant.config import load_gates_config
 from quant.scoring.context import ScoreContext, infer_regime
 from quant.signals.models import TradeSignal
 from quant.store.paths import state_file
-from quant.trading_hours import is_late_session_for_trend_sell, sell_kinds_requiring_late_final
+from quant.signals.sell_policy import sell_requires_late_session
+from quant.trading_hours import is_late_session_for_trend_sell
 
 _PENDING_FILE = "signal_pending.json"
 _BUY_KINDS = {BUY_KIND_ASCENT, BUY_KIND_PULLBACK, "默认"}
@@ -231,12 +232,20 @@ def _purge_stale_pending(
             del pending[key]
 
 
-def _needs_late_final_confirm(sig: TradeSignal) -> bool:
+def _needs_late_final_confirm(sig: TradeSignal, ctx: ScoreContext | None = None) -> bool:
     if sig.action != "卖出":
         return False
-    if sig.signal_kind in ("止损", "时间止损", "日内走弱"):
-        return False
-    return sig.signal_kind in sell_kinds_requiring_late_final()
+    stock = None
+    code = sig.code
+    if ctx is not None:
+        for key in ("持仓股", "自选股"):
+            for row in ctx.payload.get(key) or []:
+                if str(row.get("股票代码", "")).strip() == code:
+                    stock = row
+                    break
+            if stock:
+                break
+    return sell_requires_late_session(sig, stock, code)
 
 
 def _waiting_late_session(
@@ -244,9 +253,10 @@ def _waiting_late_session(
     sig: TradeSignal,
     now: datetime,
     conf: dict,
+    ctx: ScoreContext | None = None,
 ) -> bool:
-    """累计确认已达标，但趋势类卖须等 14:30 后成交。"""
-    if not _needs_late_final_confirm(sig):
+    """累计确认已达标，但非紧急卖须等 14:30 后成交。"""
+    if not _needs_late_final_confirm(sig, ctx):
         return False
     if is_late_session_for_trend_sell(now):
         return False
@@ -346,9 +356,6 @@ def _try_execute(
     use_tm = conf.get("use_trading_minutes", False)
     elapsed = _elapsed_minutes(entry, now, use_trading_minutes=use_tm)
 
-    if _waiting_late_session(entry, sig, now, conf):
-        return None, "累计确认已达标，等待14:30后执行"
-
     if not persistence_satisfied(
         entry,
         now,
@@ -357,6 +364,9 @@ def _try_execute(
         use_trading_minutes=use_tm,
     ):
         return None, _pending_status(entry, conf, elapsed)
+
+    if _waiting_late_session(entry, sig, now, conf, ctx):
+        return None, "累计确认已达标，等待14:30后执行"
 
     if sig.action == "买入" and conf.get("verify_before_execute") and ctx is not None:
         from quant.signals.buy import verify_buy_signal_still_valid
@@ -499,7 +509,7 @@ def apply_three_confirmations(
 
         use_tm = conf.get("use_trading_minutes", False)
         elapsed = _elapsed_minutes(entry, now, use_trading_minutes=use_tm)
-        waiting_late = _waiting_late_session(entry, sig, now, conf)
+        waiting_late = _waiting_late_session(entry, sig, now, conf, ctx)
 
         if _should_reset_window(entry, conf, elapsed, waiting_late=waiting_late, today=today):
             reset_reason = (

@@ -142,28 +142,46 @@ class WatchlistFailStreakTests(unittest.TestCase):
     def test_fail_streak_resets_when_passes(self) -> None:
         score = SimpleNamespace(total=75.0)
         merged = [{"股票代码": "000636", "未达标连续天数": 3}]
-        kept, removed = apply_watchlist_fail_streak(
+        kept, to_observe = apply_watchlist_fail_streak(
             merged, score_by_code={"000636": score}, threshold=70, max_streak=5
         )
-        self.assertEqual(removed, [])
+        self.assertEqual(to_observe, [])
         self.assertEqual(kept[0]["未达标连续天数"], 0)
 
-    def test_fail_streak_removes_after_limit(self) -> None:
+    def test_fail_streak_moves_to_observe_after_limit(self) -> None:
         score = SimpleNamespace(total=60.0)
-        merged = [{"股票代码": "000636", "未达标连续天数": 4}]
-        kept, removed = apply_watchlist_fail_streak(
-            merged, score_by_code={"000636": score}, threshold=70, max_streak=5
+        merged = [{"股票代码": "000636", "未达标连续天数": 2}]
+        kept, to_observe = apply_watchlist_fail_streak(
+            merged, score_by_code={"000636": score}, threshold=70, max_streak=3
         )
         self.assertEqual(kept, [])
-        self.assertEqual(len(removed), 1)
-        self.assertEqual(removed[0]["未达标连续天数"], 5)
+        self.assertEqual(len(to_observe), 1)
+        self.assertEqual(to_observe[0]["未达标连续天数"], 0)
+        self.assertIn("进入观察池日期", to_observe[0])
+
+    def test_merge_existing_passed_not_counted_as_added(self) -> None:
+        existing = [
+            {"股票代码": "600487", "股票名称": "亨通光电", "评分": 72.0},
+            {"股票代码": "SH600522", "股票名称": "中天科技", "评分": 80.0},
+        ]
+        passed = [
+            {"股票代码": "600487", "股票名称": "亨通光电", "评分": 78.0},
+            {"股票代码": "000636", "股票名称": "风华高科", "评分": 85.0},
+        ]
+        merged, added, _ = merge_watchlist_evening(
+            existing, passed, today=__import__("datetime").date(2026, 6, 23)
+        )
+        self.assertEqual(len(added), 1)
+        self.assertEqual(added[0]["股票代码"], "000636")
+        codes = {r["股票代码"] for r in merged}
+        self.assertEqual(codes, {"600487", "600522", "000636"})
 
     def test_fail_streak_keeps_when_no_score(self) -> None:
         merged = [{"股票代码": "000636", "未达标连续天数": 4}]
-        kept, removed = apply_watchlist_fail_streak(
+        kept, to_observe = apply_watchlist_fail_streak(
             merged, score_by_code={}, threshold=70, max_streak=5
         )
-        self.assertEqual(removed, [])
+        self.assertEqual(to_observe, [])
         self.assertEqual(kept[0]["未达标连续天数"], 4)
 
 

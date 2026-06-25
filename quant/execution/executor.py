@@ -33,11 +33,8 @@ from quant.store.state import (
     save_holdings,
 )
 from quant.timeutil import cn_date_str, cn_datetime_str, cn_time_str
-from quant.trading_hours import (
-    is_a_share_continuous_auction_window,
-    is_late_session_for_trend_sell,
-    sell_kinds_requiring_late_final,
-)
+from quant.signals.sell_policy import sell_requires_late_session
+from quant.trading_hours import is_late_session_for_trend_sell
 
 _CASH_EPS = 1e-6
 
@@ -53,14 +50,13 @@ class ExecutedTrade:
     transfer_fee: float = 0.0
 
 
-def _sell_requires_late_session(signal: TradeSignal) -> bool:
-    """仅趋势类卖点须 14:30 后成交；止损/时间止损/日内走弱不受限。"""
-    if signal.sell_type in ("止损", "时间止损"):
-        return False
-    kind = str(signal.signal_kind or signal.sell_type or "").strip()
-    if kind in ("止损", "时间止损", "日内走弱"):
-        return False
-    return kind in sell_kinds_requiring_late_final()
+def _sell_requires_late_session(
+    signal: TradeSignal,
+    stock: dict | None,
+    code: str,
+) -> bool:
+    """非紧急卖出须 14:30 后成交。"""
+    return sell_requires_late_session(signal, stock, code)
 
 
 def _stock_map(payload: dict | None) -> dict[str, dict]:
@@ -109,8 +105,8 @@ def execute_signals(
         if signal.code in t1_locked:
             print(f"卖出跳过 T+1：{signal.name}({signal.code})")
             continue
-        if _sell_requires_late_session(signal) and not is_late_session_for_trend_sell():
-            print(f"卖出跳过（等待神奇2点30最终确认）：{signal.name}({signal.code}) {signal.sell_type}")
+        if _sell_requires_late_session(signal, stock, signal.code) and not is_late_session_for_trend_sell():
+            print(f"卖出跳过（等待14:30后执行）：{signal.name}({signal.code}) {signal.sell_type}")
             continue
         stock = quotes.get(signal.code) or holdings[i]
         if at_limit_up_down(stock, signal.code, side="sell", cfg=sim):

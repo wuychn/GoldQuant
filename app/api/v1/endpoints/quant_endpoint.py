@@ -161,6 +161,7 @@ def _finalize_quant_payload(obj: Any) -> Any:
         from quant.store.state import merge_payload_holdings
 
         out = merge_payload_holdings(out)
+        out.pop("_observe_enriched", None)
     from app.utils.quant_test_trim import maybe_trim_for_test_phase
 
     return maybe_trim_for_test_phase(out)
@@ -276,6 +277,12 @@ async def _enrich_stock_list(
         return rows
 
 
+async def _async_observe_rows(_settings: SettingsDep) -> list:
+    from quant.store.state import get_observe
+
+    return await run_in_threadpool(get_observe)
+
+
 async def _async_optional_rows(_settings: SettingsDep) -> list:
     from quant.store.state import get_optional
 
@@ -297,7 +304,8 @@ async def _enrich_optional_and_holding_from_rows(
     include_pre_snapshot: bool = True,
     skip_wencai: bool = False,
     skip_jbxx: bool = False,
-) -> tuple[list, list]:
+    extra_rows: list | None = None,
+) -> tuple[list, list, list]:
     """对已取到的自选/持仓行 enrich；同代码只 enrich 一次。
 
     ``skip_wencai=False``（默认）：日缓存优先，未命中或仅有空占位时再问财并写入缓存。
@@ -323,6 +331,15 @@ async def _enrich_optional_and_holding_from_rows(
         seen.add(c)
         unique_rows.append(dict(row))
     for row in holding:
+        if not isinstance(row, dict):
+            continue
+        c = _code(row)
+        if not c or c in seen:
+            continue
+        seen.add(c)
+        unique_rows.append(dict(row))
+
+    for row in extra_rows or []:
         if not isinstance(row, dict):
             continue
         c = _code(row)
@@ -359,14 +376,19 @@ async def _enrich_optional_and_holding_from_rows(
         for r in holding
         if isinstance(r, dict) and (c := _code(r)) in by_code
     ]
+    observe_out = [
+        by_code[c]
+        for r in (extra_rows or [])
+        if isinstance(r, dict) and (c := _code(r)) in by_code
+    ]
 
     if progress_scope:
         log_progress(
             progress_scope,
             "自选/持仓 enrich 完成",
-            detail=f"自选 {len(zxg)} 只，持仓 {len(ccg)} 只",
+            detail=f"自选 {len(zxg)} 只，持仓 {len(ccg)} 只，观察 {len(observe_out)} 只",
         )
-    return zxg, ccg
+    return zxg, ccg, observe_out
 
 
 async def _enrich_optional_and_holding(
@@ -377,11 +399,12 @@ async def _enrich_optional_and_holding(
     skip_wencai: bool = False,
     skip_jbxx: bool = False,
 ) -> tuple[list, list]:
-    optional, holding = await asyncio.gather(
+    optional, holding, observe = await asyncio.gather(
         _async_optional_rows(settings),
         _async_holding_rows(settings),
+        _async_observe_rows(settings),
     )
-    return await _enrich_optional_and_holding_from_rows(
+    zxg_, ccg_, observe_ = await _enrich_optional_and_holding_from_rows(
         settings,
         optional,
         holding,
@@ -389,7 +412,9 @@ async def _enrich_optional_and_holding(
         include_pre_snapshot=include_pre_snapshot,
         skip_wencai=skip_wencai,
         skip_jbxx=skip_jbxx,
+        extra_rows=observe if isinstance(observe, list) else [],
     )
+    return zxg_, ccg_, observe_
 
 
 def _quant_data_file(name: str) -> Path:
@@ -689,7 +714,7 @@ async def pre_market(settings: SettingsDep, background_tasks: BackgroundTasks) -
     log_progress(scope, "拉取涨停概况")
     ztgk_ = await _ztgk(settings)
 
-    zxg_, ccg_ = await _enrich_optional_and_holding(settings, progress_scope=scope)
+    zxg_, ccg_, _ = await _enrich_optional_and_holding(settings, progress_scope=scope)
 
     result = {
         "大盘指数": dpzs_,
@@ -756,7 +781,7 @@ async def during_market(settings: SettingsDep, background_tasks: BackgroundTasks
             zttj,
             hot_,
         ),
-        (zxg_, ccg_),
+        (zxg_, ccg_, _),
     ) = await asyncio.gather(macro_task, enrich_task)
 
     if concept_boards[0] is None:
@@ -826,7 +851,7 @@ async def post_market_lunch(settings: SettingsDep) -> Response:
     log_progress(scope, "拉取涨停统计")
     zttj = await _ztgk(settings, True)
 
-    zxg_, ccg_ = await _enrich_optional_and_holding(settings, progress_scope=scope)
+    zxg_, ccg_, _ = await _enrich_optional_and_holding(settings, progress_scope=scope)
 
     result = {
         "大盘指数": dpzs,
@@ -907,7 +932,7 @@ async def post_market(settings: SettingsDep, background_tasks: BackgroundTasks) 
     hot_ = enrich_list_with_ths_rank_tags(hot_, tag_map)
     zttj = enrich_zt_stats_with_ths_rank(zttj, tag_map)
 
-    zxg_, ccg_ = await _enrich_optional_and_holding(settings, progress_scope=scope)
+    zxg_, ccg_, observe_ = await _enrich_optional_and_holding(settings, progress_scope=scope)
 
     result = {
         "大盘指数": dpzs,
@@ -924,6 +949,7 @@ async def post_market(settings: SettingsDep, background_tasks: BackgroundTasks) 
         PAYLOAD_KEY_LJQS: sources[PAYLOAD_KEY_LJQS],
         "自选股": zxg_,
         "持仓股": ccg_,
+        "_observe_enriched": observe_,
     }
     log_progress_done(scope, "晚间 payload 完成")
     return Response(data=_finalize_quant_payload(result))

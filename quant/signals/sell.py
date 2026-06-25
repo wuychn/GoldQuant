@@ -1,43 +1,25 @@
-"""卖出原始信号：止损/时间横盘止损/日内走弱 + 顺势卖出。"""
+"""卖出原始信号：止损（紧急）+ 趋势破位（14:30 后）。"""
 
 from __future__ import annotations
 
 from quant.config import load_gates_config
 from quant.constants import (
     BUY_KIND_PULLBACK,
-    SELL_KIND_INTRADAY_WEAK,
     SELL_KIND_MA5_BREAK,
     SELL_KIND_TREND_ERODE,
-    SELL_KIND_TIME_STOP,
     STRATEGY_NAME,
 )
 from quant.scoring.context import ScoreContext
-from quant.scoring.engine import ScoringEngine
 from quant.signals.models import TradeSignal
 from quant.store.state import get_holdings
 from quant.scoring.tech_indicators import mas_from_stock, quote_last_price
-from quant.strategy.intraday import intraday_weakness_triggers_sell
+from quant.signals.sell_policy import stop_loss_triggers_sell
 from quant.strategy.main_wave import detect_sell_setup
-from quant.strategy.time_stop import parse_buy_date, time_stop_triggers_sell
-from quant.strategy.trend import (
-    PHASE_DOWN,
-    PHASE_PREPARING_DOWN,
-    PHASE_WEAK,
-    effective_ma20_break,
-    trend_allows_ascent_sell,
-)
+from quant.strategy.trend import effective_ma20_break, trend_allows_ascent_sell
 
 
 def _price(stock: dict) -> float | None:
     return quote_last_price(stock)
-
-
-def _intraday_weakness_applies(ctx: ScoreContext, sell_cfg: dict) -> bool:
-    weak = sell_cfg.get("intraday_weakness") or {}
-    if not weak.get("enabled", True):
-        return False
-    modes = weak.get("modes") or ["during_market"]
-    return bool(ctx.mode and ctx.mode in modes)
 
 
 def _position_buy_kind(holding: dict) -> str:
@@ -67,11 +49,9 @@ def verify_sell_signal_still_valid(
 
 
 def generate_sell_signals(ctx: ScoreContext) -> list[TradeSignal]:
-    """产生卖出原始信号（未经三确认）。"""
+    """产生卖出原始信号（未经三确认）。仅止损或趋势明确破位。"""
     mw_cfg = load_gates_config().get("main_wave") or {}
     sell_cfg = load_gates_config().get("sell") or {}
-    engine = ScoringEngine()
-    stop_loss = float(sell_cfg.get("stop_loss_pct", -5.0))
     signals: list[TradeSignal] = []
 
     for stock in get_holdings():
@@ -97,29 +77,22 @@ def generate_sell_signals(ctx: ScoreContext) -> list[TradeSignal]:
             continue
 
         buy_kind = _position_buy_kind(enriched)
-        score = engine.score_stock(ctx, enriched)
         sell_type = ""
         kind = ""
         reason = ""
-        buy_dt = parse_buy_date(enriched)
-        ts_ok, ts_reason = time_stop_triggers_sell(
-            enriched, sell_cfg, pnl_pct=pnl_pct, buy_date=buy_dt
-        )
 
-        if pnl_pct <= stop_loss:
+        ok_stop, stop_reason = stop_loss_triggers_sell(
+            enriched,
+            code,
+            pnl_pct=pnl_pct,
+            ctx=ctx,
+            mw_cfg=mw_cfg,
+            price=price,
+        )
+        if ok_stop:
             sell_type = "止损"
             kind = "止损"
-            reason = f"浮亏{pnl_pct:.2f}%≤{stop_loss}%"
-        elif ts_ok:
-            sell_type = "时间止损"
-            kind = SELL_KIND_TIME_STOP
-            reason = ts_reason
-        elif _intraday_weakness_applies(ctx, sell_cfg):
-            ok_weak, weak_reason = intraday_weakness_triggers_sell(enriched, sell_cfg)
-            if ok_weak:
-                sell_type = "日内走弱"
-                kind = SELL_KIND_INTRADAY_WEAK
-                reason = weak_reason
+            reason = stop_reason
         elif buy_kind == BUY_KIND_PULLBACK:
             m = mas_from_stock(enriched)
             ma20 = m.get("ma20")
@@ -128,21 +101,11 @@ def generate_sell_signals(ctx: ScoreContext) -> list[TradeSignal]:
                 kind = SELL_KIND_TREND_ERODE
                 reason = f"回调仓有效跌破MA20({ma20:.2f})"
         else:
-            ok_trend, phase, trend_note = trend_allows_ascent_sell(enriched, mw_cfg)
-            if not ok_trend:
-                pass
-            else:
+            ok_trend, _phase, _trend_note = trend_allows_ascent_sell(enriched, mw_cfg)
+            if ok_trend:
                 ok, kind, reason = detect_sell_setup(enriched, ctx, mw_cfg)
                 if ok:
                     sell_type = "破5日线" if kind == SELL_KIND_MA5_BREAK else "趋势衰竭"
-                elif score.total < float(engine.config.get("sell_threshold", 45)) and phase in (
-                    PHASE_WEAK,
-                    PHASE_PREPARING_DOWN,
-                    PHASE_DOWN,
-                ):
-                    sell_type = "去弱留强"
-                    kind = "评分走弱"
-                    reason = f"{trend_note}；评分{score.total:.1f}低于阈值"
 
         if not reason:
             continue

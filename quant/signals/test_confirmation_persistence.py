@@ -187,7 +187,7 @@ class ApplyPersistenceFlowTests(unittest.TestCase):
             saved = save_mock.call_args[0][0]
             self.assertIn(sell_entry.key(), saved)
 
-    def test_stop_loss_executes_first_run(self) -> None:
+    def test_stop_loss_waits_before_1430(self) -> None:
         from unittest.mock import patch
 
         from quant.scoring.context import ScoreContext
@@ -200,6 +200,26 @@ class ApplyPersistenceFlowTests(unittest.TestCase):
             patch.object(mod, "save_pending"),
             patch.object(mod, "_clear_opposite_pending"),
             patch.object(mod, "_now", return_value=_ts(10, 0)),
+            patch.object(mod, "confirmation_config", return_value=conf),
+        ):
+            ctx = ScoreContext.from_payload({}, mode="during_market")
+            executable, audit = mod.apply_three_confirmations([self._sig()], ctx)
+            self.assertEqual(len(executable), 0)
+            self.assertTrue(any("14:30" in str(r.get("状态", "")) for r in audit))
+
+    def test_stop_loss_executes_after_1430(self) -> None:
+        from unittest.mock import patch
+
+        from quant.scoring.context import ScoreContext
+        from quant.signals import confirmation as mod
+
+        conf = _day_latch_conf(min_span_minutes=0.0, min_day_hits=1)
+
+        with (
+            patch.object(mod, "load_pending", return_value={}),
+            patch.object(mod, "save_pending"),
+            patch.object(mod, "_clear_opposite_pending"),
+            patch.object(mod, "_now", return_value=_ts(14, 35)),
             patch.object(mod, "confirmation_config", return_value=conf),
         ):
             ctx = ScoreContext.from_payload({}, mode="during_market")
