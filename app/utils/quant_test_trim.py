@@ -1,4 +1,7 @@
-"""测试阶段（``GOLDQUANT_QUANT_TEST_PHASE``）下统一截断 API 数据侧列表长度。"""
+"""测试阶段（``GOLDQUANT_QUANT_TEST_PHASE``）下截断 API/候选池等展示侧列表长度。
+
+``~/.quant/state`` 持久化（自选/持仓/观察池）不在此截断，避免破坏真实状态。
+"""
 
 from __future__ import annotations
 

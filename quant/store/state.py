@@ -128,31 +128,22 @@ def write_jsonl(path: Path, rows: list[dict]) -> None:
 
 def get_observe() -> list[dict]:
     ensure_layout()
-    from app.utils.quant_test_trim import truncate_list_for_test_phase
-
-    return truncate_list_for_test_phase(read_jsonl(state_file("observe.jsonl")))
+    return read_jsonl(state_file("observe.jsonl"))
 
 
 def save_observe(rows: list[dict]) -> None:
     ensure_layout()
-    from app.utils.quant_test_trim import truncate_list_for_test_phase
-
-    rows = truncate_list_for_test_phase(rows)
     write_jsonl(state_file("observe.jsonl"), rows)
 
 
 def get_optional() -> list[dict]:
     ensure_layout()
-    from app.utils.quant_test_trim import truncate_list_for_test_phase
-
-    return truncate_list_for_test_phase(read_jsonl(state_file("optional.jsonl")))
+    return read_jsonl(state_file("optional.jsonl"))
 
 
 def get_holdings() -> list[dict]:
     ensure_layout()
-    from app.utils.quant_test_trim import truncate_list_for_test_phase
-
-    return truncate_list_for_test_phase(read_jsonl(state_file("holding.jsonl")))
+    return read_jsonl(state_file("holding.jsonl"))
 
 
 _HOLDING_META_KEYS = (
@@ -267,9 +258,6 @@ def merge_payload_holdings(payload: dict) -> dict:
 
 def save_optional(rows: list[dict], *, delta: dict | None = None) -> None:
     ensure_layout()
-    from app.utils.quant_test_trim import truncate_list_for_test_phase
-
-    rows = truncate_list_for_test_phase(rows)
     write_jsonl(state_file("optional.jsonl"), rows)
     _write_text_atomic(view_file("optional.md"), render_optional_md(rows))
     if delta:
@@ -280,9 +268,6 @@ def save_optional(rows: list[dict], *, delta: dict | None = None) -> None:
 
 def save_holdings(rows: list[dict]) -> None:
     ensure_layout()
-    from app.utils.quant_test_trim import truncate_list_for_test_phase
-
-    rows = truncate_list_for_test_phase(rows)
     write_jsonl(state_file("holding.jsonl"), rows)
     _write_text_atomic(view_file("holding.md"), render_holding_md(rows))
 
