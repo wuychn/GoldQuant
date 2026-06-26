@@ -37,7 +37,7 @@ scoring:
   dimensions:
     main_wave:              # 主升浪加速段形态 + 买点
       enabled: true
-      weight: 25
+      weight: 30
       accel_stack_buy_bonus: false   # 加速段不叠加买点 +12（避免重复奖励暴拉）
       penalty_v_reversal_max: 22     # 5 日前发散≤阈值且短期拉开发散
       v_reversal_spread_prev_max: 0.5
@@ -58,7 +58,7 @@ scoring:
       weight: 8
     ths_rank_signal:        # 同花顺形态榜（轻量加分）
       enabled: true
-      weight: 4
+      weight: 3
       base_score: 35        # 有标签时维度起分；1 标签≈40，4 标签≈55
       score_per_tag: 5
     technical:              # MACD、均线等技术指标
