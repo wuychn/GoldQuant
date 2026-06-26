@@ -105,10 +105,10 @@ def execute_signals(
         if signal.code in t1_locked:
             print(f"卖出跳过 T+1：{signal.name}({signal.code})")
             continue
+        stock = quotes.get(signal.code) or holdings[i]
         if _sell_requires_late_session(signal, stock, signal.code) and not is_late_session_for_trend_sell():
             print(f"卖出跳过（等待14:30后执行）：{signal.name}({signal.code}) {signal.sell_type}")
             continue
-        stock = quotes.get(signal.code) or holdings[i]
         if at_limit_up_down(stock, signal.code, side="sell", cfg=sim):
             print(f"卖出跳过 跌停：{signal.name}({signal.code})")
             continue
