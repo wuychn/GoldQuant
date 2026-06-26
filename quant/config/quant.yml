@@ -37,7 +37,7 @@ scoring:
   dimensions:
     main_wave:              # 主升浪加速段形态 + 买点
       enabled: true
-      weight: 22
+      weight: 25
       accel_stack_buy_bonus: false   # 加速段不叠加买点 +12（避免重复奖励暴拉）
       penalty_v_reversal_max: 22     # 5 日前发散≤阈值且短期拉开发散
       v_reversal_spread_prev_max: 0.5
@@ -52,7 +52,7 @@ scoring:
       penalty_parabolic_accel_max: 12
     concept_theme:          # 个股概念与板块概念权重共振
       enabled: true
-      weight: 12
+      weight: 9
     popularity_rank:        # 同花顺人气排名
       enabled: true
       weight: 8
@@ -63,10 +63,10 @@ scoring:
       score_per_tag: 5
     technical:              # MACD、均线等技术指标
       enabled: true
-      weight: 9
+      weight: 7
     stock_history:          # 近30日：5%+涨幅占比、均线发散、周/月线向上
       enabled: true
-      weight: 12
+      weight: 10
       lookback_days: 30
       big_move_pct: 5.0           # 单日涨幅≥此值(%) 计为大涨日
       big_move_weight: 0.40       # 大涨占比子分权重
@@ -108,7 +108,7 @@ scoring:
       weight: 4
     market_fund_flow:       # 大盘资金流
       enabled: true
-      weight: 4
+      weight: 2
     zt_count:               # 涨停家数（与 market_sentiment 重叠，已关闭）
       enabled: false
       weight: 0
@@ -222,6 +222,9 @@ gates:
     recency_decay: 0.88             # 时间衰减：越近权重越大（1.0=等权）；当日=1，9日前≈0.35
     fund_log_scale: true            # 资金净流入 log1p 后再归一化，减弱极端值挤压
     normalize_mode: percentile       # percentile | minmax；百分位排名抗极端值
+    presence_factor:                # 修正 percentile 把"几乎没上榜"的概念抬到 70+ 的问题
+      enabled: true                 # 按窗口入选天数缩放原始分
+      full_days: 2                  # 入选天数 >= 此值不衰减；不足则 raw 分 × (count/full_days, 封顶 1.0；count=0 → 0)
     dual_window:                    # 方案C：结构(持续性) + 动量(近端热度) 双窗口合成
       enabled: true
       structural_days: 10           # 结构窗口：看中期主线持续性
@@ -248,11 +251,16 @@ gates:
           structural_weight: 0.65
           momentum_weight: 0.35
     # past_board_days 默认 lookback_days-1：评分池 = 文件过去 N 日榜 + 当日榜
-    # 命中概念窗口排名分档（取命中里排名最靠前的一个定档）
+    # 命中概念窗口排名分档：连续衰减系数 × raw 权重分（替代原 off_top_penalty -50 硬覆盖，消除 rank10/11 的 128 分悬崖）
     rank_tiers:
-      low_score: 5                  # 保留字段；8–10 名已改用 raw 分
-      off_top_penalty: -50          # 排名第 11 及以后：负分减分
-      # 排名第 1–10：使用窗口 raw 权重分；11+ 负分
+      decay:                          # 按命中概念窗口排名衰减 raw 分；rank 越靠后系数越小
+        - {max_rank: 3, factor: 1.0, label: "前三"}
+        - {max_rank: 7, factor: 0.8, label: "中游(4-7)"}
+        - {max_rank: 10, factor: 0.6, label: "边缘(8-10)"}
+        - {max_rank: 15, factor: 0.3, label: "榜外(11-15)"}
+        - {max_rank: 100000, factor: 0.1, label: "榜外(16+)"}
+      off_top_penalty: -50          # 保留旧字段；decay 配置存在时不再生效
+      low_score: 5                  # 保留字段
     score_weights:                  # 概念权重：上榜次数 50 + 综合涨幅 30 + 净流入 20
       selection_count: 50           # 近 N 日累计入选涨/资金榜前十次数（同一日只计 1 次）
       composite_gain: 30            # 近 N 日综合涨幅(%，各上榜日涨跌幅累加)

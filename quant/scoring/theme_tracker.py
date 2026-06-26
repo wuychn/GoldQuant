@@ -600,6 +600,25 @@ def _prepare_fund_values(fund_vals: dict[str, float], *, cfg: dict[str, Any] | N
     return {k: math.log1p(max(0.0, v)) for k, v in fund_vals.items()}
 
 
+def _presence_factor(count: float, cfg: dict[str, Any] | None = None) -> float:
+    """按窗口入选天数缩放原始分。
+
+    percentile 归一化会把一堆 0 值概念垫底，导致"仅 1 天上榜"的概念也能拿 70+。
+    用 ``count / full_days``（封顶 1.0）做线性衰减：上榜天数不足则原始分等比缩水，
+    count=0 → 0。这样"几乎没上榜"的概念自然落到低分，无需 off_top 硬罚分补丁。
+    """
+    c = cfg or _concept_tracker_cfg()
+    block = c.get("presence_factor") or {}
+    if not bool(block.get("enabled", True)):
+        return 1.0
+    full = float(block.get("full_days", 2))
+    if full <= 0:
+        return 1.0
+    if count <= 0:
+        return 0.0
+    return min(1.0, count / full)
+
+
 def _scores_from_metrics(
     metrics: dict[str, dict[str, float]],
     *,
@@ -618,11 +637,12 @@ def _scores_from_metrics(
     norm_fund = _normalize_metric(fund_vals, cfg=c)
     scores: dict[str, float] = {}
     for name in metrics:
-        scores[name] = (
+        base = (
             w_count * norm_count.get(name, 50.0)
             + w_gain * norm_gain.get(name, 50.0)
             + w_fund * norm_fund.get(name, 50.0)
         ) / weight_sum
+        scores[name] = base * _presence_factor(metrics[name].get("入选次数", 0.0), cfg=c)
     return scores
 
 
@@ -814,18 +834,63 @@ def _top_n_concept_names(nets: dict[str, float], top_n: int) -> list[str]:
     return [name for name, _ in ranked[: max(1, top_n)]]
 
 
-def _rank_tier_cfg(cfg: dict[str, Any] | None = None) -> dict[str, float]:
+def _rank_tier_cfg(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
     c = cfg or _concept_tracker_cfg()
     tiers = c.get("rank_tiers") or {}
-    return {
+    out: dict[str, Any] = {
         "mid_score": float(tiers.get("mid_score", 45)),
         "low_score": float(tiers.get("low_score", 5)),
         "off_top_penalty": float(tiers.get("off_top_penalty", -50)),
     }
+    decay = _rank_decay_cfg(c)
+    if decay:
+        out["decay"] = decay
+    return out
+
+
+def _rank_decay_cfg(cfg: dict[str, Any] | None = None) -> list[dict[str, Any]] | None:
+    """解析 rank_tiers.decay：按窗口排名对 raw 分做连续衰减，替代 -50 硬覆盖。
+
+    配置形如 ``[{max_rank: 3, factor: 1.0, label: "前三"}, ...]``，按 max_rank 升序匹配。
+    缺失时返回 None，调用方回退到旧的 off_top_penalty 分档逻辑。
+    """
+    c = cfg or _concept_tracker_cfg()
+    tiers = c.get("rank_tiers") or {}
+    decay = tiers.get("decay")
+    if not isinstance(decay, list) or not decay:
+        return None
+    parsed: list[dict[str, Any]] = []
+    for item in decay:
+        if not isinstance(item, dict):
+            continue
+        parsed.append(
+            {
+                "max_rank": int(item.get("max_rank", 0)),
+                "factor": float(item.get("factor", 1.0)),
+                "label": str(item.get("label", "")),
+            }
+        )
+    return parsed or None
 
 
 def _score_by_hit_rank(rank: int | None, raw_score: float, cfg: dict[str, Any] | None = None) -> tuple[float, str]:
-    """按命中概念在窗口内的排名分档给分。"""
+    """按命中概念在窗口内的排名给分。
+
+    新逻辑（rank_tiers.decay 配置存在时）：``raw_score × factor``，factor 随排名衰减，
+    消除原 rank10/11 之间 128 分的悬崖；rank 越靠后系数越小，"掉出前十"自然落到弱正分。
+    旧逻辑（无 decay 配置时回退）：1–10 名用 raw 分，11+ 用 off_top_penalty 硬覆盖。
+    """
+    decay = _rank_decay_cfg(cfg)
+    if decay:
+        chosen = decay[-1]
+        if rank and rank > 0:
+            for tier in decay:
+                if rank <= tier["max_rank"]:
+                    chosen = tier
+                    break
+        factor = float(chosen["factor"])
+        return max(-100.0, min(100.0, raw_score * factor)), str(chosen["label"])
+
     tiers = _rank_tier_cfg(cfg)
     if rank is None or rank <= 0:
         return tiers["off_top_penalty"], "榜外"
