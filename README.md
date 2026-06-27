@@ -235,9 +235,13 @@ chmod +x run.sh
 
 | 阈值 | 默认 | 用途 |
 |------|-----:|------|
-| `watchlist_threshold` | **70** | 晚间复盘 **加入/保留自选** |
+| `watchlist_entry_threshold` | **72** | 晚间复盘 **新进自选 / 观察池恢复**（hysteresis 上沿）|
+| `watchlist_exit_threshold` | **66** | 连续未达标 **移观察池**（hysteresis 下沿）|
+| `watchlist_threshold` | 70 | 参考中位（ML 校准目标 / engine floor 引用）|
 | `buy_threshold` | **72** | 盘中/盘前 **买入信号** 最低分 |
 | `sell_threshold` | 45 | 已关闭「评分走弱卖出」；保留配置项 |
+
+> **自选 hysteresis（消除单点悬崖）**：进自选要 ≥72、清退要 <66，**[66,72) 为死区**——已在自选的票只要不低于 66 就保留、不计未达标；新票低于 72 不进。避免分数在 70 附近抖动导致自选来回 churn。`watchlist_threshold=70` 仅供 ML 校准与 engine floor 使用。
 
 **概念维度要点：**
 
@@ -254,11 +258,11 @@ chmod +x run.sh
         ↓ API 初筛 + enrich（行情/概念/资金流…）
         ↓ build_candidates 合并候选
         ↓ ScoringEngine 全量评分
-        ↓ 总分 ≥ watchlist_threshold → passed_rows
-        ↓ merge_watchlist_evening：合并历史自选
+        ↓ 总分 ≥ watchlist_entry_threshold(72) → passed_rows
+        ↓ merge_watchlist_evening：合并历史自选（存量总是保留）
         ↓ 保留自选若未进候选池 → 补算评分
-        ↓ 连续 N 日 < 阈值 → 移入观察池（默认 N=3）
-        ↓ 观察池内继续 nightly 评分；≥ 阈值 → 恢复自选
+        ↓ 连续 N 日 < watchlist_exit_threshold(66) → 移入观察池（默认 N=3）
+        ↓ 观察池内继续 nightly 评分；≥ entry(72) → 恢复自选
         ↓ 观察超过 M 日仍不达标 → 删除（默认 M=30）
         ↓ save_optional / save_observe → 推送「自选更新」
 ```
@@ -302,10 +306,12 @@ chmod +x run.sh
 
 | 类型 | 条件概要 | 执行时间 |
 |------|----------|----------|
-| **止损** | 浮亏达线 **且** 趋势已破位；豁免近涨停/当日强势 | 默认 **14:30 前不评估**；**趋近跌停** 可提前 |
-| **趋势破位** | 加速仓：破 5 日线 / 趋势衰竭；回调仓：破 MA20 | 非紧急卖须 **14:30 后** |
+| **止损** | 浮亏 ≤ `stop_loss_pct`（**-7%**）**且** 趋势已破位（快口径）；豁免近涨停/当日强势 | 默认 **14:30 前不评估**；**趋近跌停** 可提前 |
+| **趋势破位** | 加速仓：破 5 日线（**慢口径 3% + 双根确认**）/ 趋势衰竭；回调仓：破 MA20 | 非紧急卖须 **14:30 后** |
 
-原则：**不破趋势不卖**；避免早盘快照误触止损（如深跌后拉回）。
+原则：**不破趋势不卖**；**让利润飞**（趋势退出用慢口径，容忍正常回踩、不被插针洗出）；避免早盘快照误触止损（如深跌后拉回）。
+
+> **快/慢口径解耦（防闷杀）**：趋势退出走慢口径（`ma5_break_ratio=0.97` + 连续 2 根确认）让利润飞；**止损走快口径**（`ma5_break_ratio_fast=0.995`，单根即触发）——松绑 MA5 不会拖慢止损，"第一天破 MA5、第二天闷杀"由 -7% 快止损兜底。
 
 卖出同样走 **持续确认**  pipeline，成交前 `verify_sell_signal_still_valid` 再验。
 
@@ -394,6 +400,21 @@ python -m quant post_market_evening
 
 「操作」「自选更新」由 **引擎确定性产出**；LLM 叙述须与 `engine_brief` 一致，不得虚构未出现的概念名。
 
+### 4.5 历史回测
+
+重放 `~/.quant/daily/{date}/raw/during*.json` 盘中快照，用 **与实盘一致的三确认 pipeline** 产出可执行信号，交模拟撮合器成交（佣金/印花税/过户费/滑点/涨跌停/T+1 齐全）。
+
+```powershell
+python -m quant.backtest --from 2026-06-17 --to 2026-06-26 --cash 100000
+# 加 --json 输出机器可读结果
+```
+
+- **与实盘对齐**：走 `generate_confirmed_signals`，三确认的 `_now` 用快照时间、`signal_pending` 内存隔离（不污染实盘状态）。
+- **估值**：持仓掉出当日自选快照时，用 akshare 日线真实收盘价估值（带缓存），权益曲线不失真。
+- **输出**：交易笔数、卖出笔数、已实现盈亏、胜率、盈亏比、最大回撤、总回报、期末权益。
+
+> 回测显著度取决于快照积累量；系统自身 ML 校准要求 ≥100 样本，建议至少覆盖一轮趋势 + 一轮震荡再下结论。
+
 ---
 
 ## 五、配置说明
@@ -406,7 +427,9 @@ python -m quant post_market_evening
 主要字段：
 
 ```yaml
-watchlist_threshold: 70   # 加自选最低分
+watchlist_threshold: 70            # 参考中位（ML/floor 引用）
+watchlist_entry_threshold: 72      # 新进自选 & 观察池恢复（hysteresis 上沿）
+watchlist_exit_threshold: 66       # 连续未达标移观察池（下沿）；[66,72) 死区
 buy_threshold: 72         # 买入最低分
 sell_threshold: 45        # 保留；评分走弱卖已关闭
 candidate:
@@ -468,6 +491,8 @@ python -m quant.ml calibrate --method bayesian --apply
 ### 6.3 生效方式
 
 `--apply` 写入 `~/.quant/config/ml_calibration.yml`，下次 `python -m quant` 启动时自动合并到评分配置（优先级高于包内默认值）。
+
+> 注：ML 目前只优化单一的 `watchlist_threshold`（参考中位）。自选 hysteresis 的上下沿（`watchlist_entry_threshold` / `watchlist_exit_threshold`）为固定值，不随 ML 调整——如需让数据定死区宽度，可后续扩展校准目标。
 
 文件示例：
 
