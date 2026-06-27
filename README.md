@@ -45,7 +45,7 @@ GoldQuant/
 │       └── ...                 # 其他行情/热度接口
 ├── quant/                      # 量化决策机器人
 │   ├── orchestrator.py         # 五模式编排
-│   ├── config/                 # quant.yml / gates.yml 默认配置
+│   ├── config/                 # quant.yml（含 scoring + gates）/ industry_aliases.yml
 │   ├── scoring/                # 100 分制评分引擎
 │   ├── gates/                  # 硬门禁（T+1、熔断、标的池…）
 │   ├── signals/                # 买卖信号
@@ -67,7 +67,7 @@ GoldQuant/
 ├── state/          # optional.jsonl、holding.jsonl、account.json（程序读写）
 ├── views/          # optional.md、holding.md（自动生成，勿手改）
 ├── daily/{date}/   # raw/ derived/ trades/ review/
-├── config/         # quant.yml、gates.yml、ml_calibration.yml（用户覆盖）
+├── config/         # quant.yml（含 gates 段）、ml_calibration.yml（用户覆盖）
 └── memory/         # 新闻摘要、经验教训
 ```
 
@@ -168,7 +168,7 @@ chmod +x run.sh
 
 | 模式 | 命令 | 默认调度* | 改自选 | 买卖 | 推送正文 |
 |------|------|-----------|:------:|:----:|----------|
-| 新闻 | `news` | 07–23 点整点 | — | — | LLM |
+| 新闻 | `news` | 07–23 部分整点（避开盘中/午间） | — | — | LLM |
 | 盘前 | `pre_market` | 09:25 | 否 | 信号落盘，**不成交** | LLM |
 | 盘中 | `during_market` | **09:37 起每 7 分钟**（至 15:00） | 否 | **可成交** | **模板**（非 LLM） |
 | 午间复盘 | `post_market_lunch` | 11:50 | 否 | 否 | LLM |
@@ -217,15 +217,16 @@ chmod +x run.sh
 
 | 维度 | 默认权重 | 说明 |
 |------|---------:|------|
-| `main_wave` | 22 | 主升浪加速段形态、震荡剔除、买点结构 |
-| `stock_history` | 12 | 近 30 日大涨占比、均线发散、周/月线 |
-| `concept_theme` | 12 | 概念/行业与板块榜 **共振**；概念优先 **同花顺 F10 粘合度** 加权 |
+| `main_wave` | 30 | 主升浪加速段形态、震荡剔除、买点结构 |
+| `stock_history` | 10 | 近 30 日大涨占比、均线发散、周/月线 |
+| `concept_theme` | 9 | 概念/行业与板块榜 **共振**；概念优先 **同花顺 F10 粘合度** 加权 |
 | `stock_fund_flow` | 11 | 个股资金流（流出可负分） |
-| `technical` | 9 | MACD、均线等 |
+| `technical` | 7 | MACD、均线等 |
 | `day_bar_shape` | 8 | 收阴、冲高回落（晚间候选加重收阴惩罚） |
 | `popularity_rank` | 8 | 同花顺人气榜排名 |
-| `ths_rank_signal` | 4 | 形态榜标签（创新高/量价齐升等） |
+| `ths_rank_signal` | 3 | 形态榜标签（创新高/量价齐升等） |
 | `market_sentiment` | 4 | 涨跌家数、涨停家数 |
+| `market_fund_flow` | 2 | 大盘资金流 |
 | `market_index` | 3 | 大盘指数涨跌 |
 | `zt_height` | 3 | 连板高度 |
 | `global_macro` | 2 | 新闻解读后的宏观多空 |
@@ -275,7 +276,7 @@ chmod +x run.sh
 
 须 **全部通过**（顺序简化）：
 
-1. **硬门禁** `check_buy_gates`：标的池、熔断、仓位上限、ST 等（见 `gates.yml`）。  
+1. **硬门禁** `check_buy_gates`：标的池、熔断、仓位上限、ST 等（见 `quant.yml` 的 `gates` 段）。  
 2. **趋势** `trend_allows_buy`：须处于允许做多的趋势阶段。  
 3. **动能** `momentum_score` ≥ 配置下限。  
 4. **总分** ≥ `buy_threshold`（72，可按市场档位动态调整）。  
@@ -283,7 +284,7 @@ chmod +x run.sh
 6. **涨幅上限**：追高过滤（加速/回调类型可不同上限）。  
 7. **盘中额外**：`intraday_allows_buy` 分时确认（盘前只生成信号，不做此项拦截落盘）。
 
-通过者按总分排序，在 **剩余仓位空位** 内按分数分配数量。
+通过者按总分排序（动能分有约 20% 加成参与排序键），在 **剩余仓位空位** 内按分数分配数量。
 
 **持续确认（仅盘中计入）**：
 
@@ -352,7 +353,7 @@ python -m quant post_market_evening
 | 时间 | 模式 |
 |------|------|
 | 05:00 | 预取概念/粘合度（可选） |
-| 07–23 点整点 | `news` |
+| 07–23 部分整点（避开盘中/午间） | `news` |
 | 09:25 | `pre_market` |
 | **09:37–15:00 每 7 分钟** | `during_market` |
 | 11:50 | `post_market_lunch` |
@@ -412,15 +413,15 @@ candidate:
   watchlist_retain_days: 3      # 连续未达标移观察池（交易日）
   watchlist_observe_max_days: 30
 dimensions:               # 各维度 enabled + weight
-  main_wave: { enabled: true, weight: 22 }
-  concept_theme: { enabled: true, weight: 12 }
+  main_wave: { enabled: true, weight: 30 }
+  concept_theme: { enabled: true, weight: 9 }
   ...
 ```
 
 ### 5.2 硬门禁与仓位
 
-默认：`quant/config/gates.yml`  
-用户覆盖：`~/.quant/config/gates.yml`
+默认：`quant/config/quant.yml` 中的 `gates:` 段  
+用户覆盖：`~/.quant/config/quant.yml`（deep merge）
 
 含：标的池、极端熔断、每日亏损限额、止损冷却、分档仓位上限、**三确认**与 **买卖/卖出** 子配置等。
 
@@ -443,7 +444,7 @@ ML **不参与盘中推理**，仅在收盘后（或周末）用历史数据优�
 - 次日行情涨幅（`daily/{next}/raw/*.json`）
 - 后续成交盈亏（`daily/*/trades/executed.json`）
 
-构建标签后做校准。**至少积累约 20 条样本**后再跑（默认 `--min-samples 20`）。
+构建标签后做校准。**至少积累约 100 条样本**后再跑（默认 `--min-samples 100`）。
 
 ### 6.2 命令
 
