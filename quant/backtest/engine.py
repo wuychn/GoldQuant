@@ -1,9 +1,11 @@
-"""回测引擎：按日重放 daily/raw 盘中快照。"""
+"""回测引擎：按日重放 daily/raw 盘中快照（与实盘三确认一致）。"""
 
 from __future__ import annotations
 
 import json
+import re
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Iterator
 from unittest.mock import patch
@@ -11,10 +13,9 @@ from unittest.mock import patch
 from quant.backtest.broker import BrokerConfig, SimBroker
 from quant.backtest.metrics import compute_metrics
 from quant.scoring.context import ScoreContext
-from quant.signals.buy import generate_buy_signals
-from quant.signals.models import TradeSignal
-from quant.signals.sell import generate_sell_signals
+from quant.signals.pipeline import generate_confirmed_signals
 from quant.store.paths import QUANT_HOME
+from quant.timeutil import CN_TZ, cn_now
 
 
 def _list_trading_dates(from_date: str | None, to_date: str | None) -> list[str]:
@@ -29,12 +30,25 @@ def _list_trading_dates(from_date: str | None, to_date: str | None) -> list[str]
     return dates
 
 
-def _load_during_payloads(day_dir: Path) -> list[dict]:
+def _snapshot_datetime(fname: str, date_str: str) -> datetime:
+    """during_HHMM.json + 当日日期 -> CN_TZ 时刻；解析失败回退 15:00。"""
+    m = re.search(r"(\d{4})", fname)
+    hh, mm = (int(m.group(1)[:2]), int(m.group(1)[2:])) if m else (15, 0)
+    try:
+        y, mo, d = (int(x) for x in date_str.split("-"))
+        return datetime(y, mo, d, hh, mm, tzinfo=CN_TZ)
+    except Exception:
+        return cn_now()
+
+
+def _load_during_payloads(day_dir: Path) -> list[tuple[datetime, dict]]:
+    """返回 [(快照时刻, payload), ...]，按文件名升序。"""
     raw = day_dir / "raw"
     if not raw.is_dir():
         return []
     files = sorted(raw.glob("during*.json"))
-    out: list[dict] = []
+    out: list[tuple[datetime, dict]] = []
+    date_str = day_dir.name
     for fp in files:
         try:
             obj = json.loads(fp.read_text(encoding="utf-8"))
@@ -44,7 +58,7 @@ def _load_during_payloads(day_dir: Path) -> list[dict]:
             continue
         inner = obj.get("data")
         data = inner if isinstance(inner, dict) else obj
-        out.append(data)
+        out.append((_snapshot_datetime(fp.name, date_str), data))
     return out
 
 
@@ -60,7 +74,19 @@ def _stock_map(payload: dict) -> dict[str, dict]:
 
 
 @contextmanager
-def _patch_broker_state(broker: SimBroker) -> Iterator[None]:
+def _patch_runtime_state(
+    broker: SimBroker,
+    pending_box: list[dict],
+    clock: list[datetime],
+) -> Iterator[None]:
+    """隔离回测运行时：持仓/现金指向 broker，三确认走内存 + 快照时间。
+
+    - pending_box：跨快照/跨日共享的内存 pending（等价实盘 signal_pending.json，
+      但不读写真实文件，避免污染实盘状态）。
+    - clock：快照时刻；三确认的 _now / 14:30 判定均以此为准，而非墙钟。
+    """
+    import quant.signals.confirmation as confirmation
+
     def _codes_sold_today(date_str: str | None = None) -> set[str]:
         del date_str
         return set(broker.sold_today)
@@ -68,6 +94,12 @@ def _patch_broker_state(broker: SimBroker) -> Iterator[None]:
     def _holding_codes_bought_today(holdings=None) -> set[str]:
         del holdings
         return set(broker.bought_today)
+
+    def _mem_load_pending() -> dict:
+        return dict(pending_box[0])
+
+    def _mem_save_pending(pending: dict) -> None:
+        pending_box[0] = dict(pending)
 
     with (
         patch("quant.signals.buy.get_holdings", broker.holdings_rows),
@@ -79,8 +111,54 @@ def _patch_broker_state(broker: SimBroker) -> Iterator[None]:
         patch("quant.signals.pipeline.codes_sold_today", _codes_sold_today),
         patch("quant.signals.pipeline.holding_codes_bought_today", _holding_codes_bought_today),
         patch("quant.gates.rules.codes_sold_today", _codes_sold_today),
+        patch.object(confirmation, "_now", lambda: clock[0]),
+        patch.object(confirmation, "load_pending", _mem_load_pending),
+        patch.object(confirmation, "save_pending", _mem_save_pending),
     ):
         yield
+
+
+def _make_close_provider(start_yyyymmdd: str | None, end_yyyymmdd: str | None):
+    """构建带缓存的独立收盘价取价器 (code, YYYY-MM-DD) -> 收盘价。
+
+    持仓掉出当日自选/持仓快照时，用 akshare 日线真实收盘价估值，
+    避免 mark_to_market 回退到买入价导致权益失真。每只 code 只拉一次。
+    网络失败返回 None（回退买入价），不改变原有最坏行为。
+    """
+    from app.utils.dfcf_util import hist
+
+    cache: dict[str, dict[str, float]] = {}
+
+    def _row_close(row: dict) -> float | None:
+        for k in ("收盘", "close", "收盘价"):
+            v = row.get(k)
+            if isinstance(v, (int, float)) and v > 0:
+                return float(v)
+        return None
+
+    def _get(code: str, date_str: str) -> float | None:
+        if code not in cache:
+            try:
+                rows = hist(
+                    code,
+                    period="daily",
+                    start_date=start_yyyymmdd,
+                    end_date=end_yyyymmdd,
+                )
+            except Exception:
+                rows = None
+            closes: dict[str, float] = {}
+            for r in rows or []:
+                if not isinstance(r, dict):
+                    continue
+                d = str(r.get("日期") or r.get("date") or "")[:10]
+                c = _row_close(r)
+                if d and c:
+                    closes[d] = c
+            cache[code] = closes
+        return cache[code].get(date_str[:10])
+
+    return _get
 
 
 def run_backtest(
@@ -89,33 +167,45 @@ def run_backtest(
     to_date: str | None = None,
     broker_cfg: BrokerConfig | None = None,
 ) -> dict:
-    """重放 daily/raw 下 during*.json；跳过三确认，直接执行原始信号。"""
-    broker = SimBroker(cfg=broker_cfg or BrokerConfig())
+    """重放 daily/raw 下 during*.json，经与实盘一致的三确认 pipeline 后成交。"""
     dates = _list_trading_dates(from_date, to_date)
+    start = dates[0].replace("-", "") if dates else None
+    end = dates[-1].replace("-", "") if dates else None
+    price_provider = _make_close_provider(start, end) if dates else None
+    broker = SimBroker(
+        cfg=broker_cfg or BrokerConfig(),
+        price_provider=price_provider,
+    )
+    pending_box: list[dict] = [{}]  # 三确认内存状态，跨快照/跨日共享，每回测独立
+    clock: list[datetime] = [cn_now()]
     days_run = 0
 
     for d in dates:
-        payloads = _load_during_payloads(QUANT_HOME / "daily" / d)
-        if not payloads:
+        snapshots = _load_during_payloads(QUANT_HOME / "daily" / d)
+        if not snapshots:
             continue
         broker.reset_daily(d)
         days_run += 1
-        last_payload = payloads[-1]
+        last_payload = snapshots[-1][1]
 
-        with _patch_broker_state(broker):
-            for payload in payloads:
+        with _patch_runtime_state(broker, pending_box, clock):
+            for snap_dt, payload in snapshots:
+                clock[0] = snap_dt
                 payload = dict(payload)
                 payload["持仓股"] = broker.holdings_rows()
                 ctx = ScoreContext.from_payload(payload, mode="during_market")
                 stock_by_code = _stock_map(payload)
 
-                raw_sell = generate_sell_signals(ctx)
-                for sig in raw_sell:
-                    broker.try_sell(sig, stock_by_code.get(sig.code, {}))
-
-                raw_buy = generate_buy_signals(ctx, mode="during_market")
-                for sig in raw_buy:
-                    broker.try_buy(sig, stock_by_code.get(sig.code, {}))
+                # 与实盘一致：原始信号 -> 同日防翻转 -> 三确认 -> 可执行
+                _raw_buy, _raw_sell, executable, _audit = generate_confirmed_signals(
+                    ctx, mode="during_market"
+                )
+                # executable = 先卖后买（exec_sell + exec_buy），按序撮合
+                for sig in executable:
+                    if sig.action == "卖出":
+                        broker.try_sell(sig, stock_by_code.get(sig.code, {}))
+                    else:
+                        broker.try_buy(sig, stock_by_code.get(sig.code, {}))
 
         broker.mark_to_market(last_payload)
 

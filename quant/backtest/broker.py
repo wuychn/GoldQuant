@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from quant.execution.sim_rules import (
     at_limit_up_down,
@@ -13,6 +13,10 @@ from quant.execution.sim_rules import (
 )
 from quant.scoring.tech_indicators import quote_last_price
 from quant.signals.models import TradeSignal
+
+# 独立收盘价取价器：(股票代码, YYYY-MM-DD) -> 收盘价 或 None。
+# 用于 mark_to_market：持仓掉出当日自选/持仓快照时，按真实收盘价估值，而非回退买入价。
+PriceProvider = Callable[[str, str], "float | None"]
 
 
 @dataclass
@@ -43,6 +47,7 @@ class SimBroker:
     bought_today: set[str] = field(default_factory=set)
     current_date: str = ""
     equity_curve: list[dict[str, float]] = field(default_factory=list)
+    price_provider: PriceProvider | None = None
 
     def __post_init__(self) -> None:
         if self.cash <= 0:
@@ -150,7 +155,12 @@ class SimBroker:
                 if code and px:
                     price_map[code] = px
         for code, h in self.holdings.items():
-            px = price_map.get(code) or float(h.get("买入价", 0) or 0)
+            # 估值优先级：当日快照最新价 → 独立收盘价（掉出自选时）→ 买入价（兜底）
+            px = price_map.get(code)
+            if not px and self.price_provider:
+                px = self.price_provider(code, self.current_date)
+            if not px:
+                px = float(h.get("买入价", 0) or 0)
             mv += px * int(h.get("持仓股数", 0) or 0)
         equity = self.cash + mv
         self.equity_curve.append(
