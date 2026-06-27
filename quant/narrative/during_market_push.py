@@ -609,16 +609,18 @@ def _format_buy_signal_line(
     executed: dict[str, ExecutedTrade],
     executable_codes: set[str],
     audit_row: dict | None = None,
+    rejected: dict[str, str] | None = None,
 ) -> str:
     trigger = _signal_trigger_text(sig)
     px = _fmt_price(sig.price if sig.price > 0 else None)
     qty = _signal_qty_label(sig.quantity)
     qty_part = f" {qty}" if qty else ""
     progress = _confirm_progress_suffix(audit_row)
+    reject_note = _reject_suffix(rejected, sig.code)
     if sig.code in executed:
         return f"{_RED} 已买：{sig.name}{qty_part}{progress}  触发「{trigger}」现价{px}"
     if sig.code in executable_codes:
-        return f"⚠️ 买入·未成交：{sig.name}{qty_part}{progress}  触发「{trigger}」现价{px}"
+        return f"⚠️ 买入·未成交：{sig.name}{qty_part}{progress}{reject_note}  触发「{trigger}」现价{px}"
     return f"{_RED} 买信号·确认中：{sig.name}{qty_part}{progress}  触发「{trigger}」现价{px}"
 
 
@@ -628,16 +630,18 @@ def _format_sell_signal_line(
     executed: dict[str, ExecutedTrade],
     executable_codes: set[str],
     audit_row: dict | None = None,
+    rejected: dict[str, str] | None = None,
 ) -> str:
     trigger = _signal_trigger_text(sig)
     px = _fmt_price(sig.price if sig.price > 0 else None)
     qty = _signal_qty_label(sig.quantity)
     qty_part = f" {qty}" if qty else ""
     progress = _confirm_progress_suffix(audit_row)
+    reject_note = _reject_suffix(rejected, sig.code)
     if sig.code in executed:
         return f"{_GREEN} 已卖：{sig.name}{qty_part}{progress}  触发「{trigger}」现价{px}"
     if sig.code in executable_codes:
-        return f"⚠️ 卖出·未成交：{sig.name}{qty_part}{progress}  触发「{trigger}」现价{px}"
+        return f"⚠️ 卖出·未成交：{sig.name}{qty_part}{progress}{reject_note}  触发「{trigger}」现价{px}"
     return f"{_GREEN} 卖信号·确认中：{sig.name}{qty_part}{progress}  触发「{trigger}」现价{px}"
 
 
@@ -652,12 +656,21 @@ def _has_signal_activity(
     return bool(raw_buy or raw_sell or executed or pending_buy or pending_sell)
 
 
+def _reject_suffix(rejected: dict[str, str] | None, code: str) -> str:
+    """未成交原因后缀（来自撮合器拒绝记录），如 ·涨停封板 / ·资金不足。"""
+    if not rejected:
+        return ""
+    reason = rejected.get(code)
+    return f" ·{reason}" if reason else ""
+
+
 def _format_audit_pending_sell_line(
     row: dict,
     payload: dict,
     *,
     executed: dict[str, ExecutedTrade],
     executable_codes: set[str],
+    rejected: dict[str, str] | None = None,
 ) -> str:
     code = str(row.get("股票代码") or "").strip()
     name = str(row.get("股票名称") or code).strip()
@@ -666,10 +679,11 @@ def _format_audit_pending_sell_line(
     qty = _signal_qty_label(_holding_qty_for_code(payload, code))
     qty_part = f" {qty}" if qty else ""
     px = _fmt_price(_holding_mark_price_for_code(payload, code))
+    reject_note = _reject_suffix(rejected, code)
     if code in executed:
         return f"{_GREEN} 已卖：{name}{qty_part}{progress}  触发「{trigger}」现价{px}"
     if code in executable_codes:
-        return f"⚠️ 卖出·未成交：{name}{qty_part}{progress}  触发「{trigger}」现价{px}"
+        return f"⚠️ 卖出·未成交：{name}{qty_part}{progress}{reject_note}  触发「{trigger}」现价{px}"
     return f"{_GREEN} 卖信号·确认中：{name}{qty_part}{progress}  触发「{trigger}」现价{px}"
 
 
@@ -679,16 +693,18 @@ def _format_audit_pending_buy_line(
     *,
     executed: dict[str, ExecutedTrade],
     executable_codes: set[str],
+    rejected: dict[str, str] | None = None,
 ) -> str:
     code = str(row.get("股票代码") or "").strip()
     name = str(row.get("股票名称") or code).strip()
     trigger = str(row.get("信号类型") or "买信号").strip()
     progress = _confirm_progress_suffix(row)
     px = _fmt_price(_watchlist_mark_price_for_code(payload, code))
+    reject_note = _reject_suffix(rejected, code)
     if code in executed:
         return f"{_RED} 已买：{name}{progress}  触发「{trigger}」现价{px}"
     if code in executable_codes:
-        return f"⚠️ 买入·未成交：{name}{progress}  触发「{trigger}」现价{px}"
+        return f"⚠️ 买入·未成交：{name}{progress}{reject_note}  触发「{trigger}」现价{px}"
     return f"{_RED} 买信号·确认中：{name}{progress}  触发「{trigger}」现价{px}"
 
 
@@ -743,6 +759,7 @@ def _format_signal_lines(
     executable: list[TradeSignal] | None = None,
     executed: list[ExecutedTrade] | None = None,
     audit: list[dict] | None = None,
+    rejected: dict[str, str] | None = None,
     payload: dict | None = None,
     ctx: ScoreContext | None = None,
     mode: str = "during_market",
@@ -750,6 +767,7 @@ def _format_signal_lines(
     lines: list[str] = [_section_heading(_ICON_SIGNAL, "买卖信号")]
     exec_sold, exec_bought = _partition_executed(executed)
     buy_ready, sell_ready = _partition_executable(executable)
+    rejected = rejected or {}
     audit_index = index_confirmation_audit(audit)
     pending_buy, pending_sell = pending_confirm_codes(audit)
 
@@ -770,6 +788,7 @@ def _format_signal_lines(
                     executed=exec_sold,
                     executable_codes=sell_ready,
                     audit_row=audit_index.get((sig.code, "卖出")),
+                    rejected=rejected,
                 )
             )
             shown_sell.add(sig.code)
@@ -784,6 +803,7 @@ def _format_signal_lines(
                         payload,
                         executed=exec_sold,
                         executable_codes=sell_ready,
+                        rejected=rejected,
                     )
                 )
                 shown_sell.add(code)
@@ -794,6 +814,7 @@ def _format_signal_lines(
                     executed=exec_bought,
                     executable_codes=buy_ready,
                     audit_row=audit_index.get((sig.code, "买入")),
+                    rejected=rejected,
                 )
             )
             shown_buy.add(sig.code)
@@ -808,6 +829,7 @@ def _format_signal_lines(
                         payload,
                         executed=exec_bought,
                         executable_codes=buy_ready,
+                        rejected=rejected,
                     )
                 )
                 shown_buy.add(code)
@@ -820,6 +842,7 @@ def _format_signal_lines(
                     executed=exec_sold,
                     executable_codes=sell_ready,
                     audit_row=audit_index.get((code, "卖出")),
+                    rejected=rejected,
                 )
             )
             shown_sell.add(code)
@@ -832,6 +855,7 @@ def _format_signal_lines(
                     executed=exec_bought,
                     executable_codes=buy_ready,
                     audit_row=audit_index.get((code, "买入")),
+                    rejected=rejected,
                 )
             )
             shown_buy.add(code)
@@ -877,6 +901,7 @@ def build_during_market_push(
     executable: list[TradeSignal] | None = None,
     executed: list[ExecutedTrade] | None = None,
     audit: list[dict] | None = None,
+    rejected: dict[str, str] | None = None,
     ctx: ScoreContext | None = None,
     mode: str = "during_market",
 ) -> str:
@@ -895,6 +920,7 @@ def build_during_market_push(
         executable=executable,
         executed=executed,
         audit=audit,
+        rejected=rejected,
         payload=payload,
         ctx=ctx,
         mode=mode,

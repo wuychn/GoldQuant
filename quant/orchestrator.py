@@ -187,11 +187,14 @@ def _update_watchlist_evening(ctx: ScoreContext) -> tuple[list[dict], list[dict]
             "补算保留自选评分",
             detail=f"{retained_scored} 只（未进候选池）",
         )
-    threshold = float(engine.config.get("watchlist_threshold", 70))
+    base_threshold = float(engine.config.get("watchlist_threshold", 70))
+    # hysteresis：清退用下沿、观察池恢复（再进）用上沿；[exit,entry) 为死区
+    exit_threshold = float(engine.config.get("watchlist_exit_threshold", base_threshold))
+    entry_threshold = float(engine.config.get("watchlist_entry_threshold", base_threshold))
     merged, to_observe = apply_watchlist_fail_streak(
         merged,
         score_by_code=score_by_code,
-        threshold=threshold,
+        threshold=exit_threshold,
         max_streak=fail_limit,
     )
 
@@ -202,7 +205,7 @@ def _update_watchlist_evening(ctx: ScoreContext) -> tuple[list[dict], list[dict]
         engine=engine,
         score_by_code=score_by_code,
         enriched_by_code=enriched_by_code,
-        threshold=threshold,
+        threshold=entry_threshold,
         max_days=observe_limit,
     )
     restored_new = [
@@ -335,7 +338,10 @@ def process_during_market(raw: dict, *, timestamp: str = "") -> str:
     log_progress(scope, "生成买卖信号")
     raw_buy, raw_sell, executable, audit = generate_confirmed_signals(ctx, mode="during_market")
     log_progress(scope, "执行模拟成交", detail=f"可执行 {len(executable)} 条")
-    executed = execute_signals(executable, payload=payload) if executable else []
+    if executable:
+        executed, rejected = execute_signals(executable, payload=payload)
+    else:
+        executed, rejected = [], {}
 
     _sync_account_for_brief(payload)
     engine = ScoringEngine()
@@ -362,6 +368,7 @@ def process_during_market(raw: dict, *, timestamp: str = "") -> str:
         executable=executable,
         executed=executed,
         audit=audit,
+        rejected=rejected,
         ctx=ctx,
         mode=scope,
     )

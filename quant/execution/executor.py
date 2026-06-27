@@ -76,12 +76,12 @@ def execute_signals(
     signals: list[TradeSignal],
     *,
     payload: dict | None = None,
-) -> list[ExecutedTrade]:
+) -> tuple[list[ExecutedTrade], dict[str, str]]:
     if not signals:
-        return []
+        return [], {}
     if not is_a_share_continuous_auction_window():
         print("交易跳过：不在连续竞价时段或未启用时间豁免")
-        return []
+        return [], {}
 
     sim = load_trade_sim_config()
     quotes = _stock_map(payload)
@@ -92,6 +92,7 @@ def execute_signals(
     ts = cn_time_str()
     date_str = cn_date_str()
     executed: list[ExecutedTrade] = []
+    rejected: dict[str, str] = {}  # code -> 未成交原因（供推送透出）
     idx_map = {str(h.get("股票代码", "")).strip(): i for i, h in enumerate(holdings)}
     to_remove: set[int] = set()
 
@@ -104,13 +105,16 @@ def execute_signals(
             continue
         if signal.code in t1_locked:
             print(f"卖出跳过 T+1：{signal.name}({signal.code})")
+            rejected[signal.code] = "T+1当日买入不可卖"
             continue
         stock = quotes.get(signal.code) or holdings[i]
         if _sell_requires_late_session(signal, stock, signal.code) and not is_late_session_for_trend_sell():
             print(f"卖出跳过（等待14:30后执行）：{signal.name}({signal.code}) {signal.sell_type}")
+            rejected[signal.code] = "等14:30后执行"
             continue
         if at_limit_up_down(stock, signal.code, side="sell", cfg=sim):
             print(f"卖出跳过 跌停：{signal.name}({signal.code})")
+            rejected[signal.code] = "跌停封板"
             continue
         h = holdings[i]
         qty = int(h.get("持仓股数", 0) or 0)
@@ -151,12 +155,14 @@ def execute_signals(
             continue
         if signal.code in sold_today:
             print(f"买入跳过 当日已卖：{signal.name}({signal.code})")
+            rejected[signal.code] = "当日已卖不回补"
             continue
         if signal.code in held_codes:
             continue
         stock = quotes.get(signal.code) or {}
         if at_limit_up_down(stock, signal.code, side="buy", cfg=sim):
             print(f"买入跳过 涨停：{signal.name}({signal.code})")
+            rejected[signal.code] = "涨停封板"
             continue
         cost = calc_buy_cost(signal.price, signal.quantity, signal.code, sim)
         if cost.total > cash + _CASH_EPS:
@@ -164,6 +170,7 @@ def execute_signals(
                 f"买入跳过 可用不足：{signal.name}({signal.code}) "
                 f"需{cost.total:.2f}含佣{cost.commission:.2f}"
             )
+            rejected[signal.code] = "资金不足"
             continue
         cash -= cost.total
         holdings.append(
@@ -191,14 +198,14 @@ def execute_signals(
         append_trade(date_str, _trade_record(signal, ts, date_str, signal.quantity, cost))
 
     if not executed:
-        return []
+        return [], rejected
 
     final = merge_holdings_by_code(holdings)
     mv = compute_holdings_market_value(final)
     realized = sum(e.pnl for e in executed)
     save_account(cash=cash, position_mv=mv, daily_realized_delta=realized)
     save_holdings(final)
-    return executed
+    return executed, rejected
 
 
 def _trade_record(

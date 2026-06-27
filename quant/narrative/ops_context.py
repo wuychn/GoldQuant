@@ -49,14 +49,23 @@ def _simplify_reason(text: str) -> str:
 
 
 def _confirm_progress_suffix(audit_row: dict | None) -> str:
-    """从审计行提取「5/10分，1/2轮」类进度后缀。"""
+    """从审计行提取进度/阻断原因后缀。
+
+    优先取「（5/10分，1/2轮）」类括号进度；若无括号但状态含阻断原因
+    （买/卖点失效、等待14:30），返回精简原因，避免推送只显示通用「确认中」
+    而丢失真正未成交的理由。
+    """
     if not audit_row:
         return ""
     status = str(audit_row.get("状态") or "")
     m = re.search(r"（([^）]+)）", status)
-    if not m:
-        return ""
-    return f"（{m.group(1)}）"
+    if m:
+        return f"（{m.group(1)}）"
+    if "失效" in status:
+        return "·买点已失效" if "买点" in status else "·卖点已失效"
+    if "14:30" in status or "等待" in status:
+        return "·等14:30后执行"
+    return ""
 
 
 def index_confirmation_audit(audit: list[dict] | None) -> dict[tuple[str, str], dict]:
