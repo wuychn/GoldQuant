@@ -65,7 +65,8 @@ def trend_broken_for_stop(
 
     ok_trend, _phase, _note = trend_allows_ascent_sell(stock, mw_cfg)
     if ok_trend:
-        ok, _kind, _reason = detect_sell_setup(stock, ctx, mw_cfg)
+        # 快口径：止损的趋势判定不受趋势退出松绑(MA5 a+b)影响，闷杀时即时响应
+        ok, _kind, _reason = detect_sell_setup(stock, ctx, mw_cfg, fast=True)
         return ok
     return True
 

@@ -15,7 +15,9 @@
 scoring:
 
   # 总分阈值：各场景最低通过分
-  watchlist_threshold: 70   # 晚间复盘加自选
+  watchlist_threshold: 70   # 参考中位阈值（ML 校准目标 / engine floor 引用）
+  watchlist_entry_threshold: 72   # 新进自选 & 观察池恢复（hysteresis 上沿）
+  watchlist_exit_threshold: 66    # 连续未达标移观察池（hysteresis 下沿）；[66,72) 死区，已在自选者只要≥66 即留
   buy_threshold: 72         # 产生买入原始信号
   sell_threshold: 45        # 持仓「去弱留强」：低于此分可触发卖出
 
@@ -193,7 +195,7 @@ gates:
       回调企稳:
         min_span_minutes: 15
         min_day_hits: 2
-      # 破5日线 / 趋势衰竭 / 评分走弱：卖出侧仍偏长确认
+      # 破5日线 / 趋势衰竭：卖出侧仍偏长确认
       破5日线:
         min_span_minutes: 20
         min_day_hits: 3
@@ -294,7 +296,8 @@ gates:
     monthly_return_days: 22         # 保留：其他模块近 N 日涨幅参考
     pullback_ma_zone_low: 0.985     # 回调企稳：现价/MA10 下限
     pullback_ma_zone_high: 1.015    # 回调企稳：现价/MA10 上限
-    ma5_break_ratio: 0.995          # 卖-破5日线：现价 < MA5×此值
+    ma5_break_ratio: 0.97           # 卖-趋势退出(慢口径,让利润飞)：现价<MA5×此值 且双根确认
+    ma5_break_ratio_fast: 0.995     # 卖-止损(快口径,防闷杀)：现价<MA5×此值，单根即触发
     ma20_break_ratio: 0.995         # 卖-趋势衰竭：现价 < MA20×此值
 
     # 近端动能：发散双窗口、价强豁免、高位衰减、排序/买入
@@ -387,7 +390,7 @@ gates:
 
   # 卖出：止损（紧急）+ 趋势破位；非跌停趋近须 14:30 后
   sell:
-    stop_loss_pct: -5.0             # 须同时趋势破位；单独浮亏不触发
+    stop_loss_pct: -7.0             # 须同时趋势破位(快口径)；单独浮亏不触发；防闷杀硬止损
     stop_loss_require_trend_break: true
     stop_loss_eval_after_late_session: true  # 14:30 前不判止损（防早盘深跌午后拉回误卖）
     stop_loss_exempt_min_day_chg_pct: 3.0   # 当日涨幅≥此值不止损（涨停/强阳）

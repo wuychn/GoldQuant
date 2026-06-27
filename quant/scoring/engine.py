@@ -98,8 +98,16 @@ class ScoringEngine:
         *,
         kind: str = "watchlist",
     ) -> list[StockScore]:
-        key = f"{kind}_threshold"
-        threshold = float(self.config.get(key, 65))
+        if kind == "watchlist":
+            # hysteresis 上沿：新进自选用 entry 阈值（存量去留由 fail-streak 下沿决定）
+            threshold = float(
+                self.config.get(
+                    "watchlist_entry_threshold",
+                    self.config.get("watchlist_threshold", 65),
+                )
+            )
+        else:
+            threshold = float(self.config.get(f"{kind}_threshold", 65))
         out: list[StockScore] = []
         for s in scores:
             s.passed_threshold = s.total >= threshold

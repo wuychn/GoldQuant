@@ -441,8 +441,16 @@ def detect_sell_setup(
     stock: dict,
     ctx: ScoreContext,
     cfg: dict[str, Any],
+    *,
+    fast: bool = False,
 ) -> tuple[bool, str, str]:
-    """卖点分型：破5日线（当日） vs 趋势衰竭（可跨日）。"""
+    """卖点分型：破5日线（当日） vs 趋势衰竭（可跨日）。
+
+    ``fast=True`` 走快口径（单根 + 紧 buffer），供止损 ``trend_broken_for_stop``
+    使用——与趋势退出的慢口径解耦，松绑 MA5 不会拖慢止损的闷杀防护。
+    ``fast=False``（默认，趋势退出）走慢口径：3% buffer + 双根确认，让利润飞、
+    过滤单日插针。
+    """
     del ctx
     from quant.constants import SELL_KIND_MA5_BREAK, SELL_KIND_TREND_ERODE
 
@@ -452,11 +460,19 @@ def detect_sell_setup(
     if not last:
         return False, "", ""
 
-    ma5_ratio = float(cfg.get("ma5_break_ratio", 0.995))
+    ma5_ratio = float(cfg.get("ma5_break_ratio_fast" if fast else "ma5_break_ratio", 0.995))
     ma20_ratio = float(cfg.get("ma20_break_ratio", 0.995))
 
-    if ma5 and last < ma5 * ma5_ratio:
-        return True, SELL_KIND_MA5_BREAK, f"有效跌破MA5({ma5:.2f})"
+    ma5_broken = bool(ma5) and last < ma5 * ma5_ratio
+    if ma5_broken:
+        if fast:
+            return True, SELL_KIND_MA5_BREAK, f"有效跌破MA5({ma5:.2f})"
+        # 慢口径双根确认：昨收也需跌破同一阈值，过滤单日插针；
+        # 无历史收盘时不阻塞（退化为单根，避免数据缺失导致卖点失效）
+        prev_close = hist_closes(stock.get("历史行情") or [])
+        prev = prev_close[-1] if prev_close else None
+        if prev is None or prev < ma5 * ma5_ratio:
+            return True, SELL_KIND_MA5_BREAK, f"连续跌破MA5({ma5:.2f})"
 
     reasons: list[str] = []
     if ma5 and ma10 and ma5 < ma10:
