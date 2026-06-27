@@ -55,7 +55,7 @@ def sell_kinds_requiring_late_final() -> set[str]:
     sell_cfg = load_gates_config().get("sell") or {}
     if sell_cfg.get("late_session_final_only") is False:
         return set()
-    raw = sell_cfg.get("late_session_kinds") or ["破5日线", "趋势衰竭", "评分走弱"]
+    raw = sell_cfg.get("late_session_kinds") or ["破5日线", "趋势衰竭"]
     return {str(x).strip() for x in raw if str(x).strip()}
 
 

@@ -32,7 +32,7 @@ def load_candidate_config() -> dict:
 
 def popularity_limit(cfg: dict | None = None) -> int:
     c = cfg or load_candidate_config()
-    return int(c.get("popularity_limit", 30))
+    return int(c.get("popularity_limit", 20))
 
 
 def zt_min_boards(cfg: dict | None = None) -> int:

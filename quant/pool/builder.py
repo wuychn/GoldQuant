@@ -35,7 +35,7 @@ def _merge_source_label(existing: dict, row: dict) -> None:
 def build_candidates(payload: dict) -> list[dict]:
     """合并三来源候选（payload 中应已通过通用漏斗）。"""
     cfg = load_candidate_config()
-    if not bool(cfg.get("include_zt_pool", True)):
+    if not bool(cfg.get("include_zt_pool", False)):
         zt_key = None
     else:
         zt_key = PAYLOAD_KEY_ZT
