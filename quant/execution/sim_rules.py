@@ -36,7 +36,7 @@ def load_trade_sim_config() -> TradeSimConfig:
 
 def limit_pct(code: str, cfg: TradeSimConfig) -> float:
     c = str(code).strip()
-    if c.startswith(("300", "688")):
+    if c.startswith(("30", "68")):
         return cfg.gem_limit_pct
     return cfg.main_limit_pct
 
