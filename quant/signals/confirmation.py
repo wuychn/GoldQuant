@@ -19,6 +19,7 @@ from quant.config import load_gates_config
 from quant.scoring.context import ScoreContext, infer_regime
 from quant.signals.models import TradeSignal
 from quant.store.paths import state_file
+from quant.store.state import resolve_payload_holdings
 from quant.signals.sell_policy import sell_requires_late_session
 from quant.trading_hours import is_late_session_for_trend_sell
 
@@ -215,9 +216,17 @@ def _purge_stale_pending(
     now: datetime,
     ctx: ScoreContext,
 ) -> None:
-    """跨日清日锁存；多日窗口类按 max_window 清。"""
+    """跨日清日锁存；多日窗口类按 max_window 清；卖出确认须仍持仓。"""
+    held = {
+        str(h.get("股票代码", "")).strip()
+        for h in resolve_payload_holdings(ctx.payload)
+        if isinstance(h, dict)
+    }
     for key in list(pending.keys()):
         entry = pending[key]
+        if entry.action == "卖出" and entry.code not in held:
+            del pending[key]
+            continue
         conf = confirmation_config(ctx, entry.signal_kind, action=entry.action)
         if conf.get("day_latch"):
             if entry.first_date and entry.first_date != today:

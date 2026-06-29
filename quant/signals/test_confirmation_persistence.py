@@ -111,6 +111,7 @@ class ApplyPersistenceFlowTests(unittest.TestCase):
             patch.object(mod, "_clear_opposite_pending"),
             patch.object(mod, "_now", return_value=_ts(14, 47)),
             patch.object(mod, "cn_date_str", return_value="2026-06-11"),
+            patch.object(mod, "resolve_payload_holdings", return_value=[{"股票代码": "600498"}]),
             patch.object(mod, "confirmation_config", return_value=_day_latch_conf()),
         ):
             ctx = ScoreContext.from_payload({}, mode="during_market")
@@ -121,6 +122,41 @@ class ApplyPersistenceFlowTests(unittest.TestCase):
             self.assertEqual(saved[entry.key()].count, 1)
             self.assertEqual(saved[entry.key()].miss_streak, 1)
             self.assertTrue(any("锁存" in str(r.get("状态", "")) for r in audit))
+
+    def test_sold_out_code_purges_sell_pending(self) -> None:
+        from unittest.mock import patch
+
+        from quant.scoring.context import ScoreContext
+        from quant.signals import confirmation as mod
+
+        entry = PendingSignal(
+            code="600498",
+            action="卖出",
+            signal_kind="日内走弱",
+            count=1,
+            first_at=_ts(14, 37).isoformat(),
+            last_at=_ts(14, 37).isoformat(),
+            regime="震荡",
+            first_date="2026-06-11",
+            name="烽火通信",
+        )
+        pending = {entry.key(): entry}
+
+        with (
+            patch.object(mod, "load_pending", return_value=dict(pending)),
+            patch.object(mod, "save_pending") as save_mock,
+            patch.object(mod, "_clear_opposite_pending"),
+            patch.object(mod, "_now", return_value=_ts(14, 47)),
+            patch.object(mod, "cn_date_str", return_value="2026-06-11"),
+            patch.object(mod, "resolve_payload_holdings", return_value=[]),
+            patch.object(mod, "confirmation_config", return_value=_day_latch_conf()),
+        ):
+            ctx = ScoreContext.from_payload({}, mode="during_market")
+            executable, audit = mod.apply_three_confirmations([], ctx, scope_action="卖出")
+            self.assertEqual(executable, [])
+            saved = save_mock.call_args[0][0]
+            self.assertNotIn(entry.key(), saved)
+            self.assertFalse(audit)
 
     def test_sell_second_hit_executes_after_span(self) -> None:
         from unittest.mock import patch
@@ -148,6 +184,7 @@ class ApplyPersistenceFlowTests(unittest.TestCase):
             patch.object(mod, "_clear_opposite_pending"),
             patch.object(mod, "_now", return_value=_ts(14, 47)),
             patch.object(mod, "cn_date_str", return_value="2026-06-11"),
+            patch.object(mod, "resolve_payload_holdings", return_value=[{"股票代码": "600498"}]),
             patch.object(mod, "confirmation_config", return_value=_day_latch_conf(verify_before_execute=True)),
             patch("quant.signals.sell.verify_sell_signal_still_valid", return_value=True),
         ):
@@ -180,6 +217,7 @@ class ApplyPersistenceFlowTests(unittest.TestCase):
             patch.object(mod, "_clear_opposite_pending"),
             patch.object(mod, "_now", return_value=_ts(9, 47)),
             patch.object(mod, "cn_date_str", return_value="2026-06-11"),
+            patch.object(mod, "resolve_payload_holdings", return_value=[{"股票代码": "600226"}]),
             patch.object(mod, "confirmation_config", return_value=_day_latch_conf()),
         ):
             ctx = ScoreContext.from_payload({}, mode="during_market")

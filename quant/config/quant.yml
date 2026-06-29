@@ -54,10 +54,10 @@ scoring:
       penalty_parabolic_accel_max: 12
     concept_theme:          # 个股概念与板块概念权重共振
       enabled: true
-      weight: 9
+      weight: 10
     popularity_rank:        # 同花顺人气排名
       enabled: true
-      weight: 8
+      weight: 7
     ths_rank_signal:        # 同花顺形态榜（轻量加分）
       enabled: true
       weight: 3
