@@ -407,6 +407,37 @@ class DuringMarketPushTests(unittest.TestCase):
         for i in range(25):
             self.assertIn(f"股{i}", text)
 
+    def test_watchlist_anomaly_dedups_by_code(self) -> None:
+        """同代码重复行（历史 optional.jsonl 重复）应去重，仅展示一次。"""
+        watchlist = [
+            {"股票代码": "600584", "股票名称": "长电科技", "盘口": {"涨幅": 3.0, "最新": 30.0}},
+            {"股票代码": "600584", "股票名称": "长电科技", "盘口": {"涨幅": 3.0, "最新": 30.0}},
+            {"股票代码": "000636", "股票名称": "风华高科", "盘口": {"涨幅": 1.0, "最新": 20.0}},
+        ]
+        payload = {"大盘指数": [], "概念板块": {}, "自选股": watchlist, "持仓股": []}
+        with patch("quant.store.state.get_holdings", return_value=[]):
+            text = build_during_market_push(payload, timestamp="2026-06-18 14:35:00")
+        self.assertIn("自选异动（2）", text)
+        self.assertEqual(text.count("长电科技"), 1)
+
+    def test_watchlist_anomaly_price_range_filters(self) -> None:
+        """启用价格区间后，仅展示区间内自选，标题带区间标注。"""
+        watchlist = [
+            {"股票代码": "000001", "股票名称": "低价股", "盘口": {"涨幅": 2.0, "最新": 5.0}},
+            {"股票代码": "000002", "股票名称": "中价股", "盘口": {"涨幅": 1.0, "最新": 25.0}},
+            {"股票代码": "600519", "股票名称": "高价股", "盘口": {"涨幅": 3.0, "最新": 1500.0}},
+        ]
+        payload = {"大盘指数": [], "概念板块": {}, "自选股": watchlist, "持仓股": []}
+        with patch(
+            "quant.config.load_push_config",
+            return_value={"watchlist_price_range": {"enabled": True, "min": 10, "max": 100}},
+        ), patch("quant.store.state.get_holdings", return_value=[]):
+            text = build_during_market_push(payload, timestamp="2026-06-18 14:35:00")
+        self.assertIn("中价股", text)
+        self.assertNotIn("低价股", text)
+        self.assertNotIn("高价股", text)
+        self.assertIn("10-100元", text)
+
     def test_board_brief_shows_outflow_minus(self) -> None:
         payload = {
             "行业板块": {

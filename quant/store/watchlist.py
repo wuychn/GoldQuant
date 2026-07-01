@@ -63,12 +63,17 @@ def merge_watchlist_evening(
             pre_existing_codes.add(code)
 
     merged: list[dict] = []
+    kept_existing_codes: set[str] = set()
     for row in existing:
         code = _normalize_row_code(row)
         if not code:
             continue
         if code in passed_codes:
             continue
+        # 历史 optional.jsonl 可能含同代码重复行（旧逻辑未去重），此处按代码去重
+        if code in kept_existing_codes:
+            continue
+        kept_existing_codes.add(code)
         kept = dict(row)
         kept["股票代码"] = code
         if not kept.get("最后入选日期"):

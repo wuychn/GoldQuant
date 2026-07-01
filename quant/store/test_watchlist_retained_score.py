@@ -184,6 +184,20 @@ class WatchlistFailStreakTests(unittest.TestCase):
         self.assertEqual(to_observe, [])
         self.assertEqual(kept[0]["未达标连续天数"], 4)
 
+    def test_merge_dedups_existing_duplicate_codes(self) -> None:
+        """历史 optional.jsonl 同代码重复行应被合并去重。"""
+        existing = [
+            {"股票代码": "600584", "股票名称": "长电科技", "评分": 83.66},
+            {"股票代码": "600584", "股票名称": "长电科技", "评分": 83.66},
+            {"股票代码": "000636", "股票名称": "风华高科", "评分": 72.0},
+        ]
+        merged, added, _ = merge_watchlist_evening(
+            existing, [], today=__import__("datetime").date(2026, 6, 30)
+        )
+        codes = [r["股票代码"] for r in merged]
+        self.assertEqual(codes, ["600584", "000636"])
+        self.assertEqual(added, [])
+
 
 if __name__ == "__main__":
     unittest.main()

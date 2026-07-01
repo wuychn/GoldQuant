@@ -11,12 +11,53 @@ from quant.scoring.dimensions.concept_theme import (
     format_stock_concepts_brief,
     stock_concept_display_names,
 )
-from quant.scoring.tech_indicators import stock_daily_change_pct
+from quant.scoring.tech_indicators import quote_last_price, stock_daily_change_pct
 from quant.config import load_gates_config
 from quant.strategy.momentum import momentum_score
 from quant.strategy.trend import quantify_trend
 
 WATCHLIST_SECTION_TITLE = "六、自选更新"
+
+
+def watchlist_price_range_cfg() -> dict | None:
+    """推送价格区间配置；enabled=false 或未配置时返回 None（不过滤）。"""
+    from quant.config import load_push_config
+
+    cfg = load_push_config().get("watchlist_price_range") or {}
+    if not cfg.get("enabled"):
+        return None
+    return cfg
+
+
+def _in_watchlist_price_range(price: float | None, cfg: dict | None) -> bool:
+    """价格是否落在配置区间内；cfg=None 不过滤，价格未知视为保留（不误删）。"""
+    if not cfg:
+        return True
+    if price is None:
+        return True
+    lo = cfg.get("min")
+    hi = cfg.get("max")
+    try:
+        if lo is not None and price < float(lo):
+            return False
+        if hi is not None and price > float(hi):
+            return False
+    except (TypeError, ValueError):
+        return True
+    return True
+
+
+def watchlist_row_price(
+    row: dict, price_by_code: dict[str, float] | None = None
+) -> float | None:
+    """取自选行现价：行内盘口优先，其次 price_by_code 索引（晚间 merged 无盘口时用）。"""
+    p = quote_last_price(row)
+    if p is not None:
+        return p
+    code = stock_code(row)
+    if price_by_code and code:
+        return price_by_code.get(code)
+    return None
 
 
 def stock_code(row: dict) -> str:
@@ -254,9 +295,32 @@ def build_watchlist_push_section(
     purged: list[dict] | None = None,
     removed: list[dict] | None = None,
     title: str = WATCHLIST_SECTION_TITLE,
+    price_by_code: dict[str, float] | None = None,
 ) -> str:
-    """晚间复盘文末「自选更新」段。"""
+    """晚间复盘文末「自选更新」段。
+
+    ``price_by_code`` 仅供推送价格区间过滤：当 ``push.watchlist_price_range.enabled``
+    时，仅展示现价落在区间内的标的（加自选/买卖/落盘不受影响，价格未知保留不误删）。
+    """
     del removed  # 兼容旧调用
+    price_cfg = watchlist_price_range_cfg()
+    if price_cfg:
+        merged = [
+            r for r in merged
+            if _in_watchlist_price_range(watchlist_row_price(r, price_by_code), price_cfg)
+        ]
+        added = [
+            r for r in added
+            if _in_watchlist_price_range(watchlist_row_price(r, price_by_code), price_cfg)
+        ]
+        restored_from_observe = [
+            r for r in (restored_from_observe or [])
+            if _in_watchlist_price_range(watchlist_row_price(r, price_by_code), price_cfg)
+        ] or None
+        restored_new = [
+            r for r in (restored_new or [])
+            if _in_watchlist_price_range(watchlist_row_price(r, price_by_code), price_cfg)
+        ] or None
     section_lines = [title, ""]
     if merged:
         for r in merged:

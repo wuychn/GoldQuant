@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from quant.narrative.stock_lines import (
     build_watchlist_human_reason,
@@ -89,6 +90,85 @@ class WatchlistReasonTests(unittest.TestCase):
         ]
         section = build_watchlist_push_section(merged, [], [])
         self.assertIn("· 国瓷材料，所属行业元件，创新高，评分80", section)
+
+    def test_push_section_price_range_filters_out_of_range(self) -> None:
+        merged = [
+            {
+                "股票代码": "000001",
+                "股票名称": "低价股",
+                "评分": 80,
+                "盘口": {"最新": 5.0},
+                "加入自选原因": "低价股，评分80",
+            },
+            {
+                "股票代码": "600519",
+                "股票名称": "高价股",
+                "评分": 78,
+                "盘口": {"最新": 1500.0},
+                "加入自选原因": "高价股，评分78",
+            },
+        ]
+        with patch(
+            "quant.config.load_push_config",
+            return_value={"watchlist_price_range": {"enabled": True, "min": 10, "max": 100}},
+        ):
+            section = build_watchlist_push_section(merged, [], [])
+        # 5 元低于下限 10、1500 元高于上限 100，均被过滤
+        self.assertNotIn("低价股", section)
+        self.assertNotIn("高价股", section)
+        self.assertIn("暂无自选标的", section)
+
+    def test_push_section_price_range_keeps_in_range(self) -> None:
+        merged = [
+            {
+                "股票代码": "000001",
+                "股票名称": "中价股",
+                "评分": 80,
+                "盘口": {"最新": 25.0},
+                "加入自选原因": "中价股，评分80",
+            },
+        ]
+        with patch(
+            "quant.config.load_push_config",
+            return_value={"watchlist_price_range": {"enabled": True, "min": 10, "max": 100}},
+        ):
+            section = build_watchlist_push_section(merged, [], [])
+        self.assertIn("中价股", section)
+
+    def test_push_section_price_range_via_price_by_code(self) -> None:
+        merged = [
+            {"股票代码": "000001", "股票名称": "无盘口股", "评分": 80,
+             "加入自选原因": "无盘口股，评分80"},
+        ]
+        with patch(
+            "quant.config.load_push_config",
+            return_value={"watchlist_price_range": {"enabled": True, "min": 10, "max": 100}},
+        ):
+            # 行内无现价，依靠 price_by_code 命中
+            section = build_watchlist_push_section(
+                merged, [], [], price_by_code={"000001": 30.0}
+            )
+        self.assertIn("无盘口股", section)
+        with patch(
+            "quant.config.load_push_config",
+            return_value={"watchlist_price_range": {"enabled": True, "min": 10, "max": 100}},
+        ):
+            section = build_watchlist_push_section(
+                merged, [], [], price_by_code={"000001": 200.0}
+            )
+        self.assertNotIn("无盘口股", section)
+
+    def test_push_section_no_filter_when_disabled(self) -> None:
+        merged = [
+            {"股票代码": "000001", "股票名称": "A股", "评分": 80,
+             "盘口": {"最新": 5.0}, "加入自选原因": "A股，评分80"},
+        ]
+        with patch(
+            "quant.config.load_push_config",
+            return_value={"watchlist_price_range": {"enabled": False}},
+        ):
+            section = build_watchlist_push_section(merged, [], [])
+        self.assertIn("A股", section)
 
     def test_format_watchlist_reason_bullet_fallback(self) -> None:
         row = {"股票代码": "000001", "股票名称": "平安银行", "评分": 72}

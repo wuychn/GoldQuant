@@ -214,7 +214,22 @@ def _update_watchlist_evening(ctx: ScoreContext) -> tuple[list[dict], list[dict]
     restored_existing = [
         r for r in restored if extract_stock_code(r) in pre_existing_codes
     ]
-    merged.extend(restored)
+    # 恢复自选若与今晚新进候选（已在 merged）同代码，则并入主列表、不重复展示
+    merged_codes = {extract_stock_code(r) for r in merged if extract_stock_code(r)}
+    restored_kept: list[dict] = []
+    for r in restored:
+        c = extract_stock_code(r)
+        if not c or c in merged_codes:
+            continue
+        merged_codes.add(c)
+        restored_kept.append(r)
+        merged.append(r)
+    restored_existing = [
+        r for r in restored_kept if extract_stock_code(r) in pre_existing_codes
+    ]
+    restored_new = [
+        r for r in restored_kept if extract_stock_code(r) not in pre_existing_codes
+    ]
     candidate_by_code = {**enriched_by_code, **by_code}
     refresh_merged_watchlist_reasons(
         merged,
@@ -223,8 +238,8 @@ def _update_watchlist_evening(ctx: ScoreContext) -> tuple[list[dict], list[dict]
     )
     merged.sort(
         key=lambda r: (
-            -float(r.get("动能分") or 0),
             -float(r.get("评分") or 0),
+            -float(r.get("动能分") or 0),
             str(r.get("股票代码", "")),
         )
     )
@@ -255,6 +270,17 @@ def _update_watchlist_evening(ctx: ScoreContext) -> tuple[list[dict], list[dict]
         },
     )
 
+    # 价格区间过滤用：从候选 enrich 行取现价（晚间 merged 行无盘口）
+    from quant.scoring.tech_indicators import quote_last_price
+
+    price_by_code: dict[str, float] = {}
+    for code, cand in candidate_by_code.items():
+        if not isinstance(cand, dict):
+            continue
+        px = quote_last_price(cand)
+        if px is not None:
+            price_by_code[code] = px
+
     optional_section = build_watchlist_push_section(
         merged,
         added,
@@ -262,6 +288,7 @@ def _update_watchlist_evening(ctx: ScoreContext) -> tuple[list[dict], list[dict]
         restored_from_observe=restored_existing,
         restored_new=restored_new,
         purged=purged,
+        price_by_code=price_by_code,
     )
     return merged, added, optional_section, scores
 

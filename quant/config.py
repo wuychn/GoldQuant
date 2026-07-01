@@ -124,10 +124,17 @@ def load_gates_config() -> dict:
     return gates
 
 
+@lru_cache(maxsize=1)
+def load_push_config() -> dict:
+    """推送展示过滤配置（如自选价格区间）。仅影响推送展示，不影响决策。"""
+    return copy.deepcopy(load_quant_config().get("push") or {})
+
+
 def reload_config_cache() -> None:
     load_quant_config.cache_clear()
     load_scoring_config.cache_clear()
     load_gates_config.cache_clear()
+    load_push_config.cache_clear()
 
 
 def trading_time_checks_enabled() -> bool:

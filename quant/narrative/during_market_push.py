@@ -429,11 +429,45 @@ def _format_watchlist_theme_brief(row: dict, payload: dict) -> str:
 
 def _format_watchlist_anomaly_lines(payload: dict) -> tuple[str, list[str]]:
     rows = [r for r in (payload.get("自选股") or []) if isinstance(r, dict)]
-    total = len(rows)
+    # 按代码去重（保留涨跌幅靠前者），防御历史 optional.jsonl 重复行
+    seen: set[str] = set()
+    deduped: list[dict] = []
+    for r in rows:
+        code = str(r.get("股票代码") or r.get("代码") or "").strip()
+        if not code or code in seen:
+            continue
+        seen.add(code)
+        deduped.append(r)
+    rows = deduped
     if not rows:
         return _section_heading(_ICON_WATCH, "自选异动"), ["暂无自选股"]
     ranked = sorted(rows, key=_watchlist_change_pct, reverse=True)
-    title = _section_heading(_ICON_WATCH, f"自选异动（{total}）")
+    # 价格区间过滤（仅展示，不影响加自选/买卖/落盘）
+    from quant.narrative.stock_lines import (
+        _in_watchlist_price_range,
+        watchlist_price_range_cfg,
+        watchlist_row_price,
+    )
+
+    price_cfg = watchlist_price_range_cfg()
+    if price_cfg:
+        ranked = [
+            r for r in ranked
+            if _in_watchlist_price_range(watchlist_row_price(r), price_cfg)
+        ]
+    total = len(ranked)
+    if not total:
+        lo = price_cfg.get("min") if price_cfg else None
+        hi = price_cfg.get("max") if price_cfg else None
+        rng = f"{lo:g}-{hi:g}元" if (lo is not None and hi is not None) else "区间"
+        return _section_heading(_ICON_WATCH, f"自选异动（0·{rng}）"), [f"区间内暂无自选股"]
+    if price_cfg:
+        lo = price_cfg.get("min")
+        hi = price_cfg.get("max")
+        rng = f"{lo:g}-{hi:g}元" if (lo is not None and hi is not None) else ""
+        title = _section_heading(_ICON_WATCH, f"自选异动（{total}·{rng}）") if rng else _section_heading(_ICON_WATCH, f"自选异动（{total}）")
+    else:
+        title = _section_heading(_ICON_WATCH, f"自选异动（{total}）")
     lines: list[str] = []
     for row in ranked:
         name = stock_name(row)
