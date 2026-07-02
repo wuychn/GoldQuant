@@ -1,56 +1,36 @@
-"""个股资金流维度：净流入为正分；净流出为负分，流出占比越大、连续流出越久负分越大。"""
+"""个股资金流维度：净流入为正分；净流出为负分，流出占比越大、连续流出越久负分越大。
+
+数据源口径见 ``quant.market.fund_flow``（评分 / 买入门禁 / 展示 / 快照统一）：
+- 智能盯盘：大单流入 − 大单流出；
+- 晚间复盘：个股资金流日线当日 ``主力净流入-净额`` 优先，否则回退大单净。
+"""
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from quant.config import load_scoring_config
+from quant.market.fund_flow import (
+    daily_net_yuan,
+    intraday_big_net_yuan,
+    resolve_main_net_yuan,
+)
 from quant.scoring.context import ScoreContext
 from quant.scoring.dimensions.base import clamp
 from quant.scoring.models import DimensionResult
-
-
-def _parse_amount(v: object) -> float | None:
-    if v is None:
-        return None
-    if isinstance(v, (int, float)):
-        return float(v)
-    s = str(v).strip()
-    m = re.search(r"-?\d+(?:\.\d+)?", s.replace(",", ""))
-    if not m:
-        return None
-    return float(m.group())
+from quant.timeutil import cn_today
 
 
 def _float_market_cap_yuan(stock: dict) -> float | None:
+    from quant.market.fund_flow import amount_to_yuan
+
     for key in ("流通市值", "总市值"):
         v = stock.get(key)
         if isinstance(v, (int, float)) and float(v) > 0:
             return float(v)
-    return None
-
-
-def _net_yuan_from_intraday(flow: dict) -> float | None:
-    """当日 flash 净额，单位元（源数据为万元）。"""
-    wan = _parse_amount(flow.get("净额"))
-    if wan is None:
-        return None
-    return wan * 10_000.0
-
-
-def _daily_net_yuan(row: dict) -> float | None:
-    for key in ("主力净流入-净额", "净额", "净流入"):
-        v = row.get(key)
-        if v is None:
-            continue
-        if isinstance(v, (int, float)):
-            return float(v)
-        wan = _parse_amount(v)
-        if wan is not None:
-            if "万" in str(v):
-                return wan * 10_000.0
-            return wan
+        yuan = amount_to_yuan(v) if v is not None else None
+        if yuan and yuan > 0:
+            return yuan
     return None
 
 
@@ -59,7 +39,7 @@ def _consecutive_outflow_days(daily: list[dict]) -> int:
     for row in reversed(daily):
         if not isinstance(row, dict):
             break
-        net = _daily_net_yuan(row)
+        net = daily_net_yuan(row)
         if net is None:
             break
         if net < 0:
@@ -95,7 +75,13 @@ def _streak_penalty_magnitude(
     return min(streak_max, streak * per_day)
 
 
-def score_stock_fund_flow(stock: dict, *, cfg: dict[str, Any] | None = None) -> tuple[float, dict[str, Any]]:
+def score_stock_fund_flow(
+    stock: dict,
+    *,
+    cfg: dict[str, Any] | None = None,
+    mode: str = "",
+    today_s: str = "",
+) -> tuple[float, dict[str, Any]]:
     c = cfg or (load_scoring_config().get("dimensions") or {}).get("stock_fund_flow") or {}
     neutral = float(c.get("neutral_score", 0))
     inflow_score = float(c.get("inflow_score", 80))
@@ -111,13 +97,10 @@ def score_stock_fund_flow(stock: dict, *, cfg: dict[str, Any] | None = None) -> 
     score_min = float(c.get("score_min", -100))
     score_max = float(c.get("score_max", 95))
 
-    flow = stock.get("个股资金流") or {}
-    if not isinstance(flow, dict) or not flow:
-        return neutral, {"available": False}
-
-    net_yuan = _net_yuan_from_intraday(flow)
+    today = today_s or cn_today().isoformat()
+    net_yuan, source = resolve_main_net_yuan(stock, mode=mode or "", today_s=today)
     if net_yuan is None:
-        return neutral, {"available": False}
+        return neutral, {"available": False, "来源": "无数据"}
 
     float_mv = _float_market_cap_yuan(stock)
     ratio_pct = abs(net_yuan) / float_mv * 100 if float_mv and net_yuan < 0 else 0.0
@@ -152,6 +135,7 @@ def score_stock_fund_flow(stock: dict, *, cfg: dict[str, Any] | None = None) -> 
 
     score = clamp(score, lo=score_min, hi=score_max)
     detail = {
+        "来源": source,
         "净额": round(net_yuan / 10_000.0, 2),
         "净额单位": "万元",
         "流通市值": float_mv,
@@ -168,9 +152,8 @@ class StockFundFlowScorer:
     name = "stock_fund_flow"
 
     def score(self, ctx: ScoreContext, stock: dict) -> DimensionResult:
-        del ctx
         cfg = (load_scoring_config().get("dimensions") or {}).get(self.name) or {}
-        s, detail = score_stock_fund_flow(stock, cfg=cfg)
+        s, detail = score_stock_fund_flow(stock, cfg=cfg, mode=getattr(ctx, "mode", ""))
         available = bool(detail.get("available", True))
         if not available:
             detail = {}

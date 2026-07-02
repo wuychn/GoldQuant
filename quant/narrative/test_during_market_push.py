@@ -108,6 +108,41 @@ class DuringMarketPushTests(unittest.TestCase):
         self.assertIn("100股", executed)
         self.assertNotIn("卖信号·确认中", executed)
 
+    def test_executed_sell_has_no_late_session_suffix(self) -> None:
+        """已卖成交行不再追加「（14:30后）」进度后缀。"""
+        sell_sig = TradeSignal(
+            action="卖出",
+            code="600519",
+            name="贵州茅台",
+            price=1680.0,
+            quantity=100,
+            strategy="主升浪",
+            reason="日内走弱",
+            sell_type="日内走弱",
+        )
+        audit = [
+            {
+                "股票代码": "600519",
+                "股票名称": "贵州茅台",
+                "方向": "卖出",
+                "信号类型": "日内走弱",
+                "状态": "累计确认完成（14:30后），可交易",
+                "可执行": True,
+            }
+        ]
+        with patch("quant.store.state.get_holdings", return_value=[]):
+            text = build_during_market_push(
+                {"自选股": [], "持仓股": []},
+                timestamp="2026-06-18 14:40:00",
+                raw_sell=[sell_sig],
+                audit=audit,
+                executed=[
+                    ExecutedTrade(signal=sell_sig, timestamp="14:40:00", pnl=-120.0)
+                ],
+            )
+        self.assertIn("已卖", text)
+        self.assertNotIn("14:30", text)
+
     def test_pending_sell_not_shown_as_skip(self) -> None:
         ctx = ScoreContext.from_payload(
             {
@@ -397,7 +432,10 @@ class DuringMarketPushTests(unittest.TestCase):
             "自选股": watchlist,
             "持仓股": [],
         }
-        with patch("quant.store.state.get_holdings", return_value=[]):
+        with patch("quant.store.state.get_holdings", return_value=[]), patch(
+            "quant.config.load_push_config",
+            return_value={"watchlist_price_range": {"enabled": False}},
+        ):
             text = build_during_market_push(
                 payload,
                 timestamp="2026-06-18 14:35:00",
@@ -415,7 +453,10 @@ class DuringMarketPushTests(unittest.TestCase):
             {"股票代码": "000636", "股票名称": "风华高科", "盘口": {"涨幅": 1.0, "最新": 20.0}},
         ]
         payload = {"大盘指数": [], "概念板块": {}, "自选股": watchlist, "持仓股": []}
-        with patch("quant.store.state.get_holdings", return_value=[]):
+        with patch("quant.store.state.get_holdings", return_value=[]), patch(
+            "quant.config.load_push_config",
+            return_value={"watchlist_price_range": {"enabled": False}},
+        ):
             text = build_during_market_push(payload, timestamp="2026-06-18 14:35:00")
         self.assertIn("自选异动（2）", text)
         self.assertEqual(text.count("长电科技"), 1)

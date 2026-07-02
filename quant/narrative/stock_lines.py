@@ -20,13 +20,16 @@ WATCHLIST_SECTION_TITLE = "六、自选更新"
 
 
 def watchlist_price_range_cfg() -> dict | None:
-    """推送价格区间配置；enabled=false 或未配置时返回 None（不过滤）。"""
+    """推送价格区间配置；默认激活（enabled 仅在显式 False 时关闭）。
+
+    min/max 为 None 表示该侧无边界。返回 None 表示不过滤。
+    """
     from quant.config import load_push_config
 
     cfg = load_push_config().get("watchlist_price_range") or {}
-    if not cfg.get("enabled"):
+    if cfg.get("enabled") is False:
         return None
-    return cfg
+    return cfg or None
 
 
 def _in_watchlist_price_range(price: float | None, cfg: dict | None) -> bool:
@@ -45,6 +48,37 @@ def _in_watchlist_price_range(price: float | None, cfg: dict | None) -> bool:
     except (TypeError, ValueError):
         return True
     return True
+
+
+def watchlist_score_filter_cfg() -> dict | None:
+    """晚间自选推送评分过滤配置；默认激活，min_score 缺省取 scoring.watchlist_threshold。"""
+    from quant.config import load_push_config, load_scoring_config
+
+    cfg = load_push_config().get("watchlist_score_filter") or {}
+    if cfg.get("enabled") is False:
+        return None
+    if cfg.get("min_score") is None:
+        threshold = load_scoring_config().get("watchlist_threshold", 70)
+        try:
+            threshold = float(threshold)
+        except (TypeError, ValueError):
+            threshold = 70.0
+        cfg = {**cfg, "min_score": threshold}
+    return cfg or None
+
+
+def _meets_watchlist_score(row: dict, cfg: dict | None) -> bool:
+    """当天评分是否达推送下限；cfg=None 不过滤，评分缺失视为保留（不误删）。"""
+    if not cfg:
+        return True
+    try:
+        score = float(row.get("评分") or 0)
+    except (TypeError, ValueError):
+        return True
+    try:
+        return score >= float(cfg.get("min_score") or 0)
+    except (TypeError, ValueError):
+        return True
 
 
 def watchlist_row_price(
@@ -299,27 +333,30 @@ def build_watchlist_push_section(
 ) -> str:
     """晚间复盘文末「自选更新」段。
 
-    ``price_by_code`` 仅供推送价格区间过滤：当 ``push.watchlist_price_range.enabled``
-    时，仅展示现价落在区间内的标的（加自选/买卖/落盘不受影响，价格未知保留不误删）。
+    推送展示过滤（仅影响展示，不影响加自选/买卖/评分/落盘）：
+    - ``push.watchlist_price_range``：现价落在 [min, max] 区间外的不推送；
+    - ``push.watchlist_score_filter``：当天评分 < min_score 的不推送
+      （hysteresis 死区保留但不再推送）；min_score 缺省取 scoring.watchlist_threshold。
+    价格/评分缺失视为保留不误删。``price_by_code`` 供无盘口的 merged 行查价。
+    移入观察池 / 观察池期满删除为变更日志，不受此过滤影响。
     """
     del removed  # 兼容旧调用
     price_cfg = watchlist_price_range_cfg()
-    if price_cfg:
-        merged = [
-            r for r in merged
-            if _in_watchlist_price_range(watchlist_row_price(r, price_by_code), price_cfg)
-        ]
-        added = [
-            r for r in added
-            if _in_watchlist_price_range(watchlist_row_price(r, price_by_code), price_cfg)
-        ]
+    score_cfg = watchlist_score_filter_cfg()
+
+    def _keep(row: dict) -> bool:
+        return _in_watchlist_price_range(
+            watchlist_row_price(row, price_by_code), price_cfg
+        ) and _meets_watchlist_score(row, score_cfg)
+
+    if price_cfg or score_cfg:
+        merged = [r for r in merged if _keep(r)]
+        added = [r for r in added if _keep(r)]
         restored_from_observe = [
-            r for r in (restored_from_observe or [])
-            if _in_watchlist_price_range(watchlist_row_price(r, price_by_code), price_cfg)
+            r for r in (restored_from_observe or []) if _keep(r)
         ] or None
         restored_new = [
-            r for r in (restored_new or [])
-            if _in_watchlist_price_range(watchlist_row_price(r, price_by_code), price_cfg)
+            r for r in (restored_new or []) if _keep(r)
         ] or None
     section_lines = [title, ""]
     if merged:

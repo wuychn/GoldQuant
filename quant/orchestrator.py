@@ -83,6 +83,14 @@ def _prepare_payload(raw: dict, *, mode: str = "") -> dict:
     return trim_quant_payload(merge_payload_holdings(unwrap_payload(raw)))
 
 
+def _score_in_main_wave(score) -> bool:
+    """评分对象的 main_wave 维度是否判定为「主升波段」（硬门禁依据）。"""
+    for d in getattr(score, "dimensions", []) or []:
+        if getattr(d, "name", "") == "main_wave":
+            return bool(d.detail.get("主升波段"))
+    return False
+
+
 def _build_operation_section(
     executed: list[ExecutedTrade],
     *,
@@ -131,11 +139,16 @@ def _update_watchlist_evening(ctx: ScoreContext) -> tuple[list[dict], list[dict]
         engine.score_many(ctx, candidates),
         kind="watchlist",
     )
-    passed = sorted(
-        [s for s in scores if s.passed_threshold],
-        key=lambda x: x.total,
-        reverse=True,
-    )
+    passed = [s for s in scores if s.passed_threshold]
+    # B 硬门禁：加自选强制要求主升浪（主升波段=True）；开关关则仅靠软权重（A）
+    require_main_wave = bool(engine.config.get("watchlist_require_main_wave", False))
+    if require_main_wave:
+        gated = [s for s in passed if _score_in_main_wave(s)]
+        dropped_n = len(passed) - len(gated)
+        passed = gated
+        if dropped_n:
+            log_progress(scope, "硬门禁过滤非主升浪", detail=f"剔除 {dropped_n} 只")
+    passed.sort(key=lambda x: x.total, reverse=True)
     log_progress(scope, "评分完成", detail=f"达标 {len(passed)}/{len(scores)} 只")
 
     passed_rows: list[dict] = []

@@ -217,15 +217,15 @@ chmod +x run.sh
 
 | 维度 | 默认权重 | 说明 |
 |------|---------:|------|
-| `main_wave` | 30 | 主升浪加速段形态、震荡剔除、买点结构 |
-| `stock_history` | 10 | 近 30 日大涨占比、均线发散、周/月线 |
+| `main_wave` | **35** | 主升浪加速段形态、震荡剔除、买点结构（趋势核心，集中奖励） |
+| `stock_fund_flow` | 11 | 个股资金流（流出可负分）。**数据源按模式**：智能盯盘始终用 `个股资金流` 的 `大单流入−大单流出`；晚间复盘优先取 `个股资金流日线` 最新一条，若为当天则用其 `主力净流入-净额`，否则回退 `大单流入−大单流出`。原始值带「万/亿」单位已换算为元。**全口径统一**（评分/买入门禁/推送展示/资金快照均同源，见 `quant.market.fund_flow`） |
 | `concept_theme` | 9 | 概念/行业与板块榜 **共振**；概念优先 **同花顺 F10 粘合度** 加权 |
-| `stock_fund_flow` | 11 | 个股资金流（流出可负分） |
-| `technical` | 7 | MACD、均线等 |
+| `stock_history` | **8** | 近 30 日大涨占比、均线发散、周/月线（与 main_wave 重叠，已下调） |
 | `day_bar_shape` | 8 | 收阴、冲高回落（晚间候选加重收阴惩罚） |
-| `popularity_rank` | 8 | 同花顺人气榜排名 |
-| `ths_rank_signal` | 3 | 形态榜标签（创新高/量价齐升等） |
+| `popularity_rank` | **6** | 同花顺人气榜排名 |
+| `technical` | **5** | MACD、均线等（与 main_wave MA 重叠，已下调） |
 | `market_sentiment` | 4 | 涨跌家数、涨停家数 |
+| `ths_rank_signal` | **2** | 形态榜标签（创新高/量价齐升等，已下调） |
 | `market_fund_flow` | 2 | 大盘资金流 |
 | `market_index` | 3 | 大盘指数涨跌 |
 | `zt_height` | 3 | 连板高度 |
@@ -240,16 +240,19 @@ chmod +x run.sh
 | `watchlist_threshold` | 70 | 参考中位（ML 校准目标 / engine floor 引用）|
 | `buy_threshold` | **72** | 盘中/盘前 **买入信号** 最低分 |
 | `sell_threshold` | 45 | 已关闭「评分走弱卖出」；保留配置项 |
+| `watchlist_require_main_wave` | **true** | **B 硬门禁**：加自选强制 `主升波段=True`（非主升浪票即便总分达标也不进自选）；`false`=仅靠 main_wave 高权重软抑制（A） |
 
 **推送展示过滤**（`push`，仅影响推送展示，**不**影响加自选/买卖/评分/落盘）：
 
 | 配置 | 默认 | 用途 |
 |------|-----:|------|
-| `push.watchlist_price_range.enabled` | false | 启用「自选异动 / 自选更新」价格区间过滤 |
-| `push.watchlist_price_range.min` | 0 | 现价下限（元，含）|
-| `push.watchlist_price_range.max` | 1000 | 现价上限（元，含）|
+| `push.watchlist_price_range.enabled` | true | 启用「自选异动 / 自选更新」价格区间过滤 |
+| `push.watchlist_price_range.min` | 5 | 现价下限（元，含；null=无下限）|
+| `push.watchlist_price_range.max` | 150 | 现价上限（元，含；null=无上限）|
+| `push.watchlist_score_filter.enabled` | true | 启用晚间「自选更新」当天评分过滤 |
+| `push.watchlist_score_filter.min_score` | 70 | 当天评分下限；未配置时取 `scoring.watchlist_threshold` |
 
-> 启用后，盘中「自选异动」与晚间「自选更新」**仅推送**现价落在 `[min, max]` 的标的；加自选、买卖、评分、落盘均不受限。价格未知（enrich 缺失）的标的保留不误删。
+> 启用后，盘中「自选异动」与晚间「自选更新」**仅推送**现价落在 `[min, max]` 的标的；晚间「自选更新」另过滤当天评分 `< min_score` 的标的（hysteresis 死区保留但不再推送）。加自选、买卖、评分、落盘均不受限；价格/评分缺失的标的保留不误删；移入观察池 / 观察池期满删除为变更日志，不受此过滤影响。
 
 > **自选 hysteresis（消除单点悬崖）**：进自选要 ≥72、清退要 <66，**[66,72) 为死区**——已在自选的票只要不低于 66 就保留、不计未达标；新票低于 72 不进。避免分数在 70 附近抖动导致自选来回 churn。`watchlist_threshold=70` 仅供 ML 校准与 engine floor 使用。
 
@@ -282,6 +285,7 @@ chmod +x run.sh
 - **加入原因** 人类可读单行，含粘合度 Top3 概念、形态标签、人气排名、总分等。
 - **去重**：合并历史自选 / 观察池恢复时按代码去重，避免 `optional.jsonl` 重复行在「自选更新」「自选异动」重复展示。
 - **价格区间过滤**（可选）：`push.watchlist_price_range.enabled=true` 时，盘中「自选异动」与晚间「自选更新」仅推送现价落在 `[min, max]` 区间的标的；**加自选 / 买卖 / 评分 / 落盘均不受限**，价格未知（enrich 缺失）的标的保留不误删。
+- **评分过滤**（可选）：`push.watchlist_score_filter.enabled=true` 时，晚间「自选更新」仅推送当天评分 ≥ `min_score`（默认 `scoring.watchlist_threshold=70`）的标的；hysteresis 死区 `[66,72)` 保留但不再推送。
 
 ---
 

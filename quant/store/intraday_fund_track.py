@@ -1,28 +1,18 @@
-"""盘中个股净额快照：跨调度轮次判断「流出收敛 / 改善」。"""
+"""盘中个股主力净额快照：跨调度轮次判断「流出收敛 / 改善」。
+
+口径与资金流维度一致：大单流入 − 大单流出（万元）。
+"""
 
 from __future__ import annotations
 
 import json
-import re
 from typing import Any
 
+from quant.market.fund_flow import intraday_main_net_wan
 from quant.store.paths import state_file
 from quant.timeutil import cn_date_str, cn_now
 
 _FILE = "intraday_fund_snapshots.json"
-
-
-def _parse_net_wan(flow: object) -> float | None:
-    if not isinstance(flow, dict):
-        return None
-    raw = flow.get("净额")
-    if raw is None:
-        return None
-    if isinstance(raw, (int, float)):
-        return float(raw)
-    s = str(raw).strip()
-    m = re.search(r"-?\d+(?:\.\d+)?", s.replace(",", ""))
-    return float(m.group()) if m else None
 
 
 def _load() -> dict[str, Any]:
@@ -70,7 +60,7 @@ def record_watchlist_fund_snapshots(stocks: list[dict]) -> None:
         code = str(stock.get("股票代码", "")).strip()
         if not code:
             continue
-        record_net_flow(code, _parse_net_wan(stock.get("个股资金流")))
+        record_net_flow(code, intraday_main_net_wan(stock))
 
 
 def net_flow_improving(

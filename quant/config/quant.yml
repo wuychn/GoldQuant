@@ -21,6 +21,11 @@ scoring:
   buy_threshold: 72         # 产生买入原始信号
   sell_threshold: 45        # 持仓「去弱留强」：低于此分可触发卖出
 
+  # 硬门禁开关：加自选是否强制要求"主升波段=True"
+  #   true  = B 硬门禁：非主升浪票一律不进自选（即便总分达标）
+  #   false = 仅 A 软权重：靠 main_wave 高权重自然抑制（理论极限下仍可能进自选）
+  watchlist_require_main_wave: true
+
   # 晚间候选池（初筛在 quant/pool/sources.py，问财+enrich 在 quant/pool/pipeline.py）
   candidate:
     popularity_limit: 20        # 人气榜初筛：取前 N
@@ -39,7 +44,7 @@ scoring:
   dimensions:
     main_wave:              # 主升浪加速段形态 + 买点
       enabled: true
-      weight: 30
+      weight: 35              # A 调权：30→35（形态核心加重，集中趋势奖励）
       accel_stack_buy_bonus: false   # 加速段不叠加买点 +12（避免重复奖励暴拉）
       penalty_v_reversal_max: 22     # 5 日前发散≤阈值且短期拉开发散
       v_reversal_spread_prev_max: 0.5
@@ -57,18 +62,18 @@ scoring:
       weight: 10
     popularity_rank:        # 同花顺人气排名
       enabled: true
-      weight: 7
+      weight: 6              # A 调权：7→6（情绪代理，略降）
     ths_rank_signal:        # 同花顺形态榜（轻量加分）
       enabled: true
-      weight: 3
+      weight: 2              # A 调权：3→2（与 stock_history 重叠）
       base_score: 35        # 有标签时维度起分；1 标签≈40，4 标签≈55
       score_per_tag: 5
     technical:              # MACD、均线等技术指标
       enabled: true
-      weight: 7
+      weight: 5              # A 调权：7→5（与 main_wave MA 重叠）
     stock_history:          # 近30日：5%+涨幅占比、均线发散、周/月线向上
       enabled: true
-      weight: 10
+      weight: 8              # A 调权：10→8（与 main_wave 路径/发散重叠）
       lookback_days: 30
       big_move_pct: 5.0           # 单日涨幅≥此值(%) 计为大涨日
       big_move_weight: 0.40       # 大涨占比子分权重
@@ -430,8 +435,15 @@ push:
 
   # 自选推送价格区间：盘中「自选异动」与晚间「自选更新」仅推送现价落在
   # [min, max] 区间的标的；加自选、买卖、评分、落盘均不受此限制。
-  # enabled=false 表示不过滤；价格未知（enrich 缺失）的标的保留不误删。
+  # enabled 默认 true；min/max 为 null 表示该侧无边界（即不过滤）。
   watchlist_price_range:
-    enabled: false
-    min: 5                # 现价下限（元），含
-    max: 150             # 现价上限（元），含
+    enabled: true
+    min: 5                # 现价下限（元），含；null=无下限
+    max: 150              # 现价上限（元），含；null=无上限
+
+  # 自选推送评分过滤：晚间「自选更新」仅推送当天评分 ≥ min_score 的标的
+  # （加自选/买卖/落盘不受限，hysteresis 死区保留但不再推送）。
+  # min_score 未配置时默认取 scoring.watchlist_threshold（70）。
+  watchlist_score_filter:
+    enabled: true
+    min_score: 70         # null=取 scoring.watchlist_threshold

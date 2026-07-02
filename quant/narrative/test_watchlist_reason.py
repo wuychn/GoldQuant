@@ -170,6 +170,44 @@ class WatchlistReasonTests(unittest.TestCase):
             section = build_watchlist_push_section(merged, [], [])
         self.assertIn("A股", section)
 
+    def test_push_section_score_filter_drops_below_threshold(self) -> None:
+        """当天评分 < min_score 的标的不推送（hysteresis 死区保留但不展示）。"""
+        merged = [
+            {"股票代码": "000001", "股票名称": "达标股", "评分": 80,
+             "加入自选原因": "达标股，评分80"},
+            {"股票代码": "000002", "股票名称": "死区股", "评分": 68,
+             "加入自选原因": "死区股，评分68"},
+        ]
+        with patch(
+            "quant.config.load_push_config",
+            return_value={
+                "watchlist_price_range": {"enabled": False},
+                "watchlist_score_filter": {"enabled": True, "min_score": 70},
+            },
+        ):
+            section = build_watchlist_push_section(merged, [], [])
+        self.assertIn("达标股", section)
+        self.assertNotIn("死区股", section)
+
+    def test_push_section_score_filter_default_uses_watchlist_threshold(self) -> None:
+        """min_score 未配置时默认取 scoring.watchlist_threshold（70）。"""
+        merged = [
+            {"股票代码": "000001", "股票名称": "刚好达标", "评分": 70,
+             "加入自选原因": "刚好达标，评分70"},
+            {"股票代码": "000002", "股票名称": "未达标", "评分": 69,
+             "加入自选原因": "未达标，评分69"},
+        ]
+        with patch(
+            "quant.config.load_push_config",
+            return_value={"watchlist_score_filter": {"enabled": True}},
+        ), patch(
+            "quant.config.load_scoring_config",
+            return_value={"watchlist_threshold": 70},
+        ):
+            section = build_watchlist_push_section(merged, [], [])
+        self.assertIn("刚好达标", section)
+        self.assertNotIn("未达标", section)
+
     def test_format_watchlist_reason_bullet_fallback(self) -> None:
         row = {"股票代码": "000001", "股票名称": "平安银行", "评分": 72}
         self.assertIn("平安银行", format_watchlist_reason_bullet(row))

@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 from quant.constants import BUY_KIND_ASCENT, BUY_KIND_PULLBACK
+from quant.market.fund_flow import intraday_main_net_wan
 from quant.scoring.tech_indicators import (
     quote_avg_price,
     quote_change_pct,
@@ -50,18 +51,6 @@ def session_minute_bars(stock: dict) -> list[dict]:
 
 def _session_minute_bars(stock: dict) -> list[dict]:
     return session_minute_bars(stock)
-
-
-def _parse_amount_wan(v: object) -> float | None:
-    if v is None:
-        return None
-    if isinstance(v, (int, float)):
-        return float(v)
-    s = str(v).strip()
-    m = re.search(r"-?\d+(?:\.\d+)?", s.replace(",", ""))
-    if not m:
-        return None
-    return float(m.group())
 
 
 def _vwap(bars: list[dict]) -> float | None:
@@ -132,8 +121,8 @@ def _strength_signal_ok(
         and vwap
         and last >= vwap
     )
-    flow = stock.get("个股资金流") or {}
-    net = _parse_amount_wan(flow.get("净额")) if isinstance(flow, dict) else None
+    # 主力资金统一口径：大单流入 − 大单流出（万元）
+    net = intraday_main_net_wan(stock)
     min_delta = float(intra.get("fund_improve_min_delta_wan", 50.0))
     net_ok = net is not None and net > 0
     improving = net_flow_improving(code, min_delta_wan=min_delta, current_net=net)
@@ -345,11 +334,11 @@ def intraday_allows_buy(
     if chg is not None and chg < min_chg:
         return False, f"当日涨幅{chg:.2f}%偏弱"
 
-    flow = stock.get("个股资金流") or {}
-    if isinstance(flow, dict) and flow:
-        net = _parse_amount_wan(flow.get("净额"))
+    # 主力资金统一口径：大单流入 − 大单流出（万元）；净流出过大拒买
+    net = intraday_main_net_wan(stock)
+    if net is not None:
         hard = float(intra.get("hard_net_outflow_wan", 8000))
-        if net is not None and net < -hard:
+        if net < -hard:
             return False, f"当日净流出{abs(net):.0f}万过大"
 
     return True, group_note or "分时确认通过"

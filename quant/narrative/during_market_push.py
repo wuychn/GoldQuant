@@ -351,18 +351,11 @@ def _format_board_brief_section(
 
 
 def _stock_flow_yi(stock: dict) -> float | None:
-    flow = stock.get("个股资金流") or {}
-    if not isinstance(flow, dict):
-        return None
-    raw = flow.get("净额")
-    if raw is None:
-        return None
-    s = str(raw).strip().replace(",", "")
-    m = re.search(r"-?\d+(?:\.\d+)?", s)
-    if not m:
-        return None
-    wan = float(m.group())
-    return wan / 10000.0
+    """自选异动展示用主力资金（亿元）= 大单流入 − 大单流出，与资金流维度同口径。"""
+    from quant.market.fund_flow import intraday_main_net_yuan
+
+    yuan = intraday_main_net_yuan(stock)
+    return None if yuan is None else yuan / 1e8
 
 
 def _flow_brief(yi: float | None) -> str:
@@ -649,7 +642,8 @@ def _format_buy_signal_line(
     px = _fmt_price(sig.price if sig.price > 0 else None)
     qty = _signal_qty_label(sig.quantity)
     qty_part = f" {qty}" if qty else ""
-    progress = _confirm_progress_suffix(audit_row)
+    # 已成交不再追加「（14:30后）」「·等14:30后执行」等确认进度后缀
+    progress = "" if sig.code in executed else _confirm_progress_suffix(audit_row)
     reject_note = _reject_suffix(rejected, sig.code)
     if sig.code in executed:
         return f"{_RED} 已买：{sig.name}{qty_part}{progress}  触发「{trigger}」现价{px}"
@@ -670,7 +664,7 @@ def _format_sell_signal_line(
     px = _fmt_price(sig.price if sig.price > 0 else None)
     qty = _signal_qty_label(sig.quantity)
     qty_part = f" {qty}" if qty else ""
-    progress = _confirm_progress_suffix(audit_row)
+    progress = "" if sig.code in executed else _confirm_progress_suffix(audit_row)
     reject_note = _reject_suffix(rejected, sig.code)
     if sig.code in executed:
         return f"{_GREEN} 已卖：{sig.name}{qty_part}{progress}  触发「{trigger}」现价{px}"
@@ -709,7 +703,7 @@ def _format_audit_pending_sell_line(
     code = str(row.get("股票代码") or "").strip()
     name = str(row.get("股票名称") or code).strip()
     trigger = str(row.get("信号类型") or "卖信号").strip()
-    progress = _confirm_progress_suffix(row)
+    progress = "" if code in executed else _confirm_progress_suffix(row)
     qty = _signal_qty_label(_holding_qty_for_code(payload, code))
     qty_part = f" {qty}" if qty else ""
     px = _fmt_price(_holding_mark_price_for_code(payload, code))
@@ -732,7 +726,7 @@ def _format_audit_pending_buy_line(
     code = str(row.get("股票代码") or "").strip()
     name = str(row.get("股票名称") or code).strip()
     trigger = str(row.get("信号类型") or "买信号").strip()
-    progress = _confirm_progress_suffix(row)
+    progress = "" if code in executed else _confirm_progress_suffix(row)
     px = _fmt_price(_watchlist_mark_price_for_code(payload, code))
     reject_note = _reject_suffix(rejected, code)
     if code in executed:

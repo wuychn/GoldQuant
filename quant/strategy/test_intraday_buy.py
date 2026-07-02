@@ -48,7 +48,7 @@ class IntradayStrengthTests(unittest.TestCase):
             "股票代码": "000636",
             "盘口": {"最新": 71.0, "均价": 68.0, "最高": 71.5, "涨幅": 7.5},
             "分钟行情": _bars([68.0, 68.2, 68.5, 69.0, 69.5, 70.0, 70.5, 70.8, 71.0, 71.1, 71.2, 71.4]),
-            "个股资金流": {"净额": "100 万元"},
+            "个股资金流": {"大单流入": "200 万元", "大单流出": "100 万元"},
         }
         ok, note = intraday_allows_buy(stock, _intra_cfg(), buy_kind=BUY_KIND_ASCENT)
         self.assertTrue(ok, note)
@@ -60,7 +60,8 @@ class IntradayStrengthTests(unittest.TestCase):
             "股票代码": "000001",
             "盘口": {"最新": closes[-1], "均价": 10.2, "最高": closes[-1] + 0.1, "涨幅": 2.0},
             "分钟行情": _bars(closes),
-            "个股资金流": {"净额": "-500 万元"},
+            # 大单净 = 100 − 600 = -500 万（流出），但 net_flow_improving 放行
+            "个股资金流": {"大单流入": "100 万元", "大单流出": "600 万元"},
         }
         ok, note = intraday_allows_buy(
             stock,
@@ -73,7 +74,7 @@ class IntradayStrengthTests(unittest.TestCase):
             "股票代码": "000001",
             "盘口": {"最新": 9.8, "均价": 10.0, "最高": 10.6, "涨幅": 1.0},
             "分钟行情": _bars([10.0, 10.05, 10.1, 10.0, 9.95, 9.9, 9.85, 9.82]),
-            "个股资金流": {"净额": "100 万元"},
+            "个股资金流": {"大单流入": "200 万元", "大单流出": "100 万元"},
         }
         ok, note = intraday_allows_buy(stock, _intra_cfg())
         self.assertFalse(ok)
@@ -85,7 +86,7 @@ class IntradayStrengthTests(unittest.TestCase):
             "股票代码": "000001",
             "盘口": {"最新": 9.75, "均价": 9.7, "最高": 10.2, "涨幅": 1.0},
             "分钟行情": _bars(closes),
-            "个股资金流": {"净额": "200 万元"},
+            "个股资金流": {"大单流入": "300 万元", "大单流出": "100 万元"},
         }
         ok, note = intraday_allows_buy(
             stock,
@@ -100,7 +101,7 @@ class IntradayStrengthTests(unittest.TestCase):
             "股票代码": "000001",
             "盘口": {"最新": 10.16, "均价": 10.0, "最高": 10.18, "涨幅": 2.0},
             "分钟行情": _bars(closes),
-            "个股资金流": {"净额": "300 万元"},
+            "个股资金流": {"大单流入": "400 万元", "大单流出": "100 万元"},
         }
         ok, note = intraday_allows_buy(
             stock,
@@ -125,7 +126,7 @@ class IntradayStrengthTests(unittest.TestCase):
             "股票代码": "300285",
             "盘口": {"最新": 89.0, "均价": 85.0, "最高": 91.0, "涨幅": 13.0},
             "分钟行情": _bars([84.0, 85.0, 86.0, 87.0, 88.0, 88.5, 89.0, 89.2, 89.0, 89.1]),
-            "个股资金流": {"净额": "500 万元"},
+            "个股资金流": {"大单流入": "600 万元", "大单流出": "100 万元"},
         }
         ok, note = intraday_allows_buy(stock, _intra_cfg(), buy_kind=BUY_KIND_ASCENT)
         self.assertTrue(ok, note)
