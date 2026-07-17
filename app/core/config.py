@@ -177,6 +177,10 @@ class Settings(BaseSettings):
     QUANT_ARCHIVE_ENABLED: bool = True
     #: 归档根目录；未设置时默认为用户目录下 ``~/.quant/archive``
     QUANT_ARCHIVE_DIR: str | None = None
+    #: 量化运行时数据根目录（state/views/daily/config/memory/cache 均位于其下）；
+    #: 未设置时默认为用户目录下 ``~/.quant``。可在 ``.env`` 写 ``GOLDQUANT_QUANT_HOME_DIR``，
+    #: 或在 shell 中 ``export QUANT_HOME=...``（无需前缀，便于临时覆盖）。
+    QUANT_HOME_DIR: str | None = None
     #: 某股票本地尚无日线归档时，日线全量拉取的起始日期（``YYYYMMDD``，可含 ``-``）
     QUANT_HIST_FULL_START_DATE: str = "19900101"
     #: 本地最后一根日线已是「今天」时，向前重叠拉取的交易日数（复权修正、同日多次刷新）；**补缺**时用「末根次日→今天」，不依赖本项。

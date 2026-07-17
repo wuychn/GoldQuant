@@ -1,3 +1,6 @@
+[tool.poetry]
+package-mode = false
+
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
@@ -7,7 +10,7 @@ name = "goldquant"
 version = "0.1.0"
 description = "GoldQuant stock data API (FastAPI + AKShare)"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11,<3.14"
 dependencies = [
     "fastapi==0.136.0",
     "uvicorn[standard]==0.44.0",

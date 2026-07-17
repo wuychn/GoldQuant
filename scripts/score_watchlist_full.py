@@ -9,13 +9,14 @@ from quant.config import load_scoring_config
 from quant.scoring.context import ScoreContext
 from quant.scoring.engine import ScoringEngine
 from quant.scoring.tech_indicators import quote_change_pct
+from quant.store.paths import quant_home
 from quant.store.state import get_optional
 from quant.strategy.momentum import momentum_score
 from quant.strategy.trend import quantify_trend
 
 
 def _latest_during_payload() -> tuple[dict, Path]:
-    root = Path.home() / ".quant/daily"
+    root = quant_home() / "daily"
     candidates: list[Path] = []
     for day_dir in sorted(root.iterdir(), reverse=True):
         raw = day_dir / "raw"
@@ -85,7 +86,7 @@ def main() -> None:
 
     rows.sort(key=lambda r: (-r["total"], -r["momentum"], r["code"]))
 
-    out_path = Path.home() / ".quant/state/watchlist_full_scores.json"
+    out_path = quant_home() / "state/watchlist_full_scores.json"
     out_path.write_text(
         json.dumps(
             {

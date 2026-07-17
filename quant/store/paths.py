@@ -14,11 +14,42 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from pathlib import Path
 
 from quant.timeutil import cn_now
-QUANT_HOME = Path.home() / ".quant"
+
+
+def quant_home() -> Path:
+    """量化运行时数据根目录。
+
+    解析优先级（高 → 低）：
+
+    1. ``GOLDQUANT_QUANT_HOME_DIR`` —— 来自环境变量或 ``.env``（经 ``Settings`` 读取）；
+    2. ``QUANT_HOME`` —— 环境变量，便于 shell 临时覆盖、无需 ``GOLDQUANT_`` 前缀；
+    3. 用户主目录下 ``~/.quant``（默认）。
+
+    返回路径仅做 ``expanduser``，不做 ``resolve``，避免目录尚不存在时报错。
+    运行期改环境变量后再次调用本函数即可生效；模块级 ``QUANT_HOME`` 常量仅在导入时刻解析一次。
+    """
+    raw = ""
+    try:
+        from app.core.config import get_settings
+
+        raw = (get_settings().QUANT_HOME_DIR or "").strip()
+    except Exception:
+        # 初始化期或测试桩未注入 settings 时回退到环境变量，保持本模块可独立使用。
+        raw = ""
+    if not raw:
+        raw = (os.environ.get("QUANT_HOME") or "").strip()
+    if raw:
+        return Path(raw).expanduser()
+    return Path.home() / ".quant"
+
+
+#: 向后兼容：模块级常量，导入时刻解析。运行期改环境变量请改用 :func:`quant_home`。
+QUANT_HOME = quant_home()
 
 
 def ensure_layout() -> None:
@@ -32,7 +63,7 @@ def ensure_layout() -> None:
         "memory",
         "cache",
     ):
-        (QUANT_HOME / sub).mkdir(parents=True, exist_ok=True)
+        (quant_home() / sub).mkdir(parents=True, exist_ok=True)
 
 
 def today_str(now: datetime | None = None) -> str:
@@ -42,8 +73,8 @@ def today_str(now: datetime | None = None) -> str:
 
 
 def daily_dir(d: str | None = None) -> Path:
-    """某日归档根目录 ~/.quant/daily/{date}。"""
-    return QUANT_HOME / "daily" / (d or today_str())
+    """某日归档根目录 $QUANT_HOME/daily/{date}。"""
+    return quant_home() / "daily" / (d or today_str())
 
 
 def daily_raw(name: str, d: str | None = None) -> Path:
@@ -67,33 +98,33 @@ def daily_review(name: str, d: str | None = None) -> Path:
 
 
 def daily_cache(name: str, d: str | None = None) -> Path:
-    """当日可复用缓存：daily/{date}/cache/{name}（个股概念已迁至 ~/.quant/cache/ 周缓存）。"""
+    """当日可复用缓存：daily/{date}/cache/{name}（个股概念已迁至 $QUANT_HOME/cache/ 周缓存）。"""
     return daily_dir(d) / "cache" / name
 
 
 def quant_cache_file(name: str) -> Path:
-    """跨日短缓存：~/.quant/cache/{name}。"""
-    return QUANT_HOME / "cache" / name
+    """跨日短缓存：$QUANT_HOME/cache/{name}。"""
+    return quant_home() / "cache" / name
 
 
 def state_file(name: str) -> Path:
     """热状态：optional.jsonl、holding.jsonl、account.json 等。"""
-    return QUANT_HOME / "state" / name
+    return quant_home() / "state" / name
 
 
 def view_file(name: str) -> Path:
     """只读视图 MD，勿手改。"""
-    return QUANT_HOME / "views" / name
+    return quant_home() / "views" / name
 
 
 def memory_file(name: str) -> Path:
     """长期记忆：news_summary.txt、lessons.md。"""
-    return QUANT_HOME / "memory" / name
+    return quant_home() / "memory" / name
 
 
 def config_file(name: str) -> Path:
     """用户级配置，覆盖 quant/config/ 包内默认。"""
-    return QUANT_HOME / "config" / name
+    return quant_home() / "config" / name
 
 
 def package_config(name: str) -> Path:

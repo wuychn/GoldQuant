@@ -52,6 +52,7 @@ from quant.pool.ths_rank_util import (
 from quant.pool.sources import prefilter_popularity
 from quant.pool.symbol_filter import apply_symbol_pool_filter
 from quant.progress_log import log_progress, log_progress_count, log_progress_done
+from quant.store.paths import quant_home
 
 logger = logging.getLogger(__name__)
 
@@ -418,7 +419,7 @@ async def _enrich_optional_and_holding(
 
 
 def _quant_data_file(name: str) -> Path:
-    return Path.home() / ".quant" / name
+    return quant_home() / name
 
 
 def _parse_jsonl_stock_text(text: str) -> list:

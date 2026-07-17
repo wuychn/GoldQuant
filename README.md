@@ -62,6 +62,14 @@ GoldQuant/
 
 **运行时数据目录**（自动创建）：`~/.quant/`
 
+可通过环境变量覆盖存储位置（解析优先级从高到低）：
+
+1. `GOLDQUANT_QUANT_HOME_DIR`（写进 `.env` 即可，与其它 `GOLDQUANT_` 前缀配置一致）；
+2. `QUANT_HOME`（shell 临时覆盖，无需前缀）；
+3. 默认 `~/.quant`。
+
+> 跨日归档目录（`~/data/quant/archive`）单独由 `GOLDQUANT_QUANT_ARCHIVE_DIR` 控制，二者相互独立。
+
 ```text
 ~/.quant/
 ├── state/          # optional.jsonl、holding.jsonl、account.json（程序读写）

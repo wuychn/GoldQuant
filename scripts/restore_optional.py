@@ -7,9 +7,10 @@ import re
 from pathlib import Path
 
 from quant.constants import STRATEGY_NAME
+from quant.store.paths import quant_home
 from quant.store.state import save_optional
 
-_QUANT = Path.home() / ".quant"
+_QUANT = quant_home()
 
 # 6/24 晚间 get_optional 仅 3 只（测试阶段读截断），merge 后 total=26 的另 3 只保留自选
 _RETAINED_6_24 = {
