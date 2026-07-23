@@ -5,8 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from quant.pool.ths_rank_util import format_ths_rank_tags_brief, stock_ths_rank_tags
-from quant.scoring.dimensions.concept_theme import (
+from quant.candidates.ths_rank_util import format_ths_rank_tags_brief, stock_ths_rank_tags
+from quant.scoring.concept_theme import (
     DISPLAY_CONCEPT_LIMIT,
     format_stock_concepts_brief,
     stock_concept_display_names,

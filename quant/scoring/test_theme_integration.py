@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from unittest.mock import patch
 
 from quant.scoring.context import ScoreContext
-from quant.scoring.dimensions.concept_theme import ConceptThemeScorer, _stock_concepts, _stock_industry
+from quant.scoring.concept_theme import ConceptThemeScorer, _stock_concepts, _stock_industry
 from quant.scoring.industry_aliases import expand_industries, load_industry_alias_maps, reload_industry_aliases_cache
 from quant.scoring.theme_boards import BOARD_CONCEPT, BOARD_INDUSTRY
 from quant.scoring.theme_tracker import (

@@ -6,27 +6,18 @@
 # 加载顺序
 #   1. quant/config/quant.yml（本文件，包内默认）
 #   2. ~/.quant/config/quant.yml（用户覆盖，deep merge）
-#   3. ~/.quant/config/ml_calibration.yml（ML 离线校准，apply: true 时生效）
+#   3. ~/.quant/config/ml_calibration.yml（可选用户覆盖，R1 九维分已移除）
 # =============================================================================
 
 # -----------------------------------------------------------------------------
-# scoring — 评分引擎（100 分制，与硬门禁分离）
+# scoring — 候选 enrich + brief 展示参考（R2 决策不读九维分）
 # -----------------------------------------------------------------------------
 scoring:
 
-  # 总分阈值：各场景最低通过分
-  watchlist_threshold: 70   # 参考中位阈值（ML 校准目标 / engine floor 引用）
-  watchlist_entry_threshold: 72   # 新进自选 & 观察池恢复（hysteresis 上沿）
-  watchlist_exit_threshold: 66    # 连续未达标移观察池（hysteresis 下沿）；[66,72) 死区，已在自选者只要≥66 即留
-  buy_threshold: 72         # 产生买入原始信号
-  sell_threshold: 45        # 持仓「去弱留强」：低于此分可触发卖出
+  # brief/推送 min_score 缺省参考
+  watchlist_threshold: 70
 
-  # 硬门禁开关：加自选是否强制要求"主升波段=True"
-  #   true  = B 硬门禁：非主升浪票一律不进自选（即便总分达标）
-  #   false = 仅 A 软权重：靠 main_wave 高权重自然抑制（理论极限下仍可能进自选）
-  watchlist_require_main_wave: true
-
-  # 晚间候选池（初筛在 quant/pool/sources.py，问财+enrich 在 quant/pool/pipeline.py）
+  # 晚间候选 enrich（初筛 quant/candidates/sources.py，问财+enrich 在 quant/candidates/pipeline.py）
   candidate:
     popularity_limit: 20        # 人气榜初筛：取前 N
     zt_min_boards: 3            # 涨停池初筛：连板数 ≥（晚间复盘仅纳入 3 板及以上）
@@ -37,108 +28,6 @@ scoring:
       - 历史新高
     include_zt_pool: false       # 涨停池不进入晚间自选候选
     include_ths_rank_pool: true  # 同花顺形态榜（创新高/持续上涨/持续放量/量价齐升）
-    watchlist_retain_days: 7       # 连续评分不达标 N 个交易日后移入观察池
-    watchlist_observe_max_days: 30  # 观察池最长 N 个交易日，期满删除；期内达标恢复自选
-
-  # 评分维度：enabled 关闭则不参与；weight 为加权系数
-  dimensions:
-    main_wave:              # 主升浪加速段形态 + 买点
-      enabled: true
-      weight: 35              # A 调权：30→35（形态核心加重，集中趋势奖励）
-      accel_stack_buy_bonus: false   # 加速段不叠加买点 +12（避免重复奖励暴拉）
-      penalty_v_reversal_max: 22     # 5 日前发散≤阈值且短期拉开发散
-      v_reversal_spread_prev_max: 0.5
-      v_reversal_min_jump_pct: 12
-      penalty_path_ratio_start: 2.2  # 路径/|净涨幅| 超此开始扣分
-      penalty_path_ratio_max: 18
-      choppy_penalty_lookback: 60
-      penalty_spike_concentration: 15
-      spike_10d_share_of_30d: 0.55   # 近10日涨幅占近30日净涨比例过高
-      penalty_spread_overheat_pct: 22
-      penalty_spread_overheat_max: 10
-      penalty_parabolic_accel_max: 12
-    concept_theme:          # 个股概念与板块概念权重共振
-      enabled: true
-      weight: 10
-    popularity_rank:        # 同花顺人气排名
-      enabled: true
-      weight: 6              # A 调权：7→6（情绪代理，略降）
-    ths_rank_signal:        # 同花顺形态榜（轻量加分）
-      enabled: true
-      weight: 2              # A 调权：3→2（与 stock_history 重叠）
-      base_score: 35        # 有标签时维度起分；1 标签≈40，4 标签≈55
-      score_per_tag: 5
-    technical:              # MACD、均线等技术指标
-      enabled: true
-      weight: 5              # A 调权：7→5（与 main_wave MA 重叠）
-    stock_history:          # 近30日：5%+涨幅占比、均线发散、周/月线向上
-      enabled: true
-      weight: 8              # A 调权：10→8（与 main_wave 路径/发散重叠）
-      lookback_days: 30
-      big_move_pct: 5.0           # 单日涨幅≥此值(%) 计为大涨日
-      big_move_weight: 0.40       # 大涨占比子分权重
-      ma_diverge_weight: 0.35     # 均线发散向上子分权重
-      weekly_monthly_weight: 0.25 # 周/月线向上子分权重
-      min_ma_spread_pct: 0.8      # MA5 相对 MA20 最小发散(%)
-    stock_fund_flow:        # 个股资金流：流入为正分，流出为负分
-      enabled: true
-      weight: 11
-      neutral_score: 0
-      inflow_score: 80
-      inflow_max_score: 95
-      inflow_boost_cap: 15
-      outflow_any_penalty: 12        # 任意当日净流出基础惩罚（正数幅度，维度分为负）
-      outflow_mild_ratio_pct: 0.025  # 流入加分 / 占比惩罚参考档
-      outflow_heavy_ratio_pct: 0.12  # |净流出|/流通市值(%) 达此档占比惩罚触顶
-      outflow_ratio_penalty_max: 75  # 按占流通比附加惩罚上限（正数幅度）
-      streak_lookback_days: 5
-      streak_penalty_per_day: 15     # 连续流出：每多 1 日附加惩罚（含当日计 1 天）
-      streak_max_penalty: 60
-      score_min: -100
-      score_max: 95
-    day_bar_shape:          # 当日收阴、冲高回落（晚间加自选：收阴加重惩罚）
-      enabled: true
-      weight: 8
-      base_score: 82
-      min_score: 8
-      bearish_penalty_min: 15        # 任意收阴至少扣（维度内）
-      bearish_penalty_max: 38
-      bearish_penalty_scale: 4.5
-      spike_fade_min_pct: 1.5
-      spike_fade_penalty_max: 18
-      spike_fade_penalty_scale: 2.0
-    market_index:           # 大盘指数涨跌
-      enabled: true
-      weight: 3
-    market_sentiment:       # 赚钱效应（涨跌比 + 涨停家数）
-      enabled: true
-      weight: 4
-    market_fund_flow:       # 大盘资金流
-      enabled: true
-      weight: 2
-    zt_count:               # 涨停家数（与 market_sentiment 重叠，已关闭）
-      enabled: false
-      weight: 0
-    zt_height:              # 连板高度
-      enabled: true
-      weight: 3
-    minute_bars:            # 分钟 K 形态
-      enabled: false
-      weight: 0
-    us_overnight:           # 美股隔夜（数据未接入，暂关闭）
-      enabled: false
-      weight: 0
-    stock_news:             # 个股新闻情绪
-      enabled: false
-      weight: 0
-    global_macro:           # 全球宏观/地缘（news 模式 LLM 判定，仅智能盯盘参与加权）
-      enabled: true
-      weight: 2
-      modes:
-        - during_market
-      bearish_score: 5        # 利空 0～10 区间取中
-      neutral_score: 50
-      bullish_score: 95       # 利好 90～100 区间取中
 
 # -----------------------------------------------------------------------------
 # gates — 硬门禁 + 战法参数 + 三确认（不可被 LLM 修改）
@@ -147,7 +36,7 @@ gates:
 
   # 模拟成交时段校验（executor.py）
   trading:
-    time_validation_enabled: false  # true=仅连续竞价时段允许成交
+    time_validation_enabled: true  # true=仅连续竞价时段允许成交
     simulation:
       commission_rate: 0.0001     # 佣金万一（买卖双向）
       min_commission: 5.0         # 单笔最低佣金（元）
@@ -195,8 +84,8 @@ gates:
         min_span_minutes: 10
         min_day_hits: 2
       上升途中:
-        min_span_minutes: 5
-        min_day_hits: 1
+        min_span_minutes: 10
+        min_day_hits: 2
       回调企稳:
         min_span_minutes: 15
         min_day_hits: 2
@@ -357,7 +246,28 @@ gates:
         回调企稳: 8.0
         上升途中: 9.5
       ascent_high_score: 78           # 上升途中且评分≥此值可再放宽
-      ascent_high_score_max_chg: 10.0
+      ascent_high_score_max_chg: 8.0
+      concept_theme_min_score: 55     # 买入时 concept_theme 维度最低分（缺失则不拦）
+      block_ascent_in_weak_regime: true
+      block_ascent_when_profit_null: true
+      weak_market:
+        enabled: true
+        block_new_buys: true
+        treat_null_profit_as_weak: true
+        null_profit_threshold_delta: 2   # 赚钱效应 null 时买入线 +2
+        up_down_ratio_min: 0.25          # 上涨/下跌低于此值暂停新开仓
+        buy_threshold_delta: 3             # 弱势档买入线 +3
+      recent_gain_guard:                 # 近端涨幅：条件过滤，非硬禁（强者恒强豁免）
+        enabled: true
+        apply_to_kinds:
+          - 上升途中
+        lookback_days: 3
+        limits:
+          强势: 25.0
+          震荡: 18.0
+          弱势: 12.0
+        exempt_min_score: 80
+        exempt_require_no_momentum_decay: true
       strong_market:                # 强市动态放宽（独立于仓位档位 infer_regime）
         enabled: true
         index_min_pct: 1.0          # 上证涨幅 ≥ 此值

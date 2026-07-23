@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 
 from quant.config import load_gates_config
 from quant.constants import STRATEGY_NAME
+from quant.gates.buy_policy import market_allows_new_buy
 from quant.narrative.push_style import profit_effect_level
 from quant.scoring.context import ScoreContext, index_change, infer_regime
 from quant.store.state import (
@@ -114,7 +115,7 @@ def check_global_gates(ctx: ScoreContext) -> GateReport:
 
 
 def check_buy_gates(stock: dict, ctx: ScoreContext) -> GateReport:
-    """单票买入前：标的池 + 冷却 + 全局。"""
+    """单票买入前：标的池 + 冷却 + 全局 + 市场环境。"""
     cfg = load_gates_config()
     code = str(stock.get("股票代码", "")).strip()
     name = str(stock.get("股票名称", "")).strip()
@@ -129,6 +130,14 @@ def check_buy_gates(stock: dict, ctx: ScoreContext) -> GateReport:
 
     global_report = check_global_gates(ctx)
     results.extend(global_report.results)
+
+    buy_cfg = ((cfg.get("buy") or {}).get("during_market") or {}) if ctx.mode == "during_market" else (
+        (cfg.get("buy") or {}).get("pre_market") or {}
+    )
+    ok_market, market_reason = market_allows_new_buy(ctx.payload, buy_cfg)
+    if not ok_market:
+        results.append(GateResult(False, "市场环境", market_reason))
+
     return GateReport(results=results)
 
 

@@ -19,7 +19,7 @@ from quant.execution.sim_rules import (
     calc_sell_proceeds,
     load_trade_sim_config,
 )
-from quant.signals.models import TradeSignal
+from quant.trading.models import TradeSignal
 from quant.store.state import (
     append_stoploss,
     append_trade,
@@ -33,7 +33,7 @@ from quant.store.state import (
     save_holdings,
 )
 from quant.timeutil import cn_date_str, cn_datetime_str, cn_time_str
-from quant.signals.sell_policy import sell_requires_late_session
+from quant.trading.sell_policy import sell_requires_late_session
 from quant.trading_hours import is_a_share_continuous_auction_window, is_late_session_for_trend_sell
 
 _CASH_EPS = 1e-6

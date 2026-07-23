@@ -29,6 +29,8 @@ ml = [
     "scipy>=1.10.0",
     "numpy>=1.24.0",
     "lightgbm>=4.0.0",
+    "joblib>=1.3.0",
+    "pyarrow>=14.0.0",
 ]
 
 [tool.setuptools.packages.find]

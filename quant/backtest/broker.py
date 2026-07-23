@@ -12,7 +12,7 @@ from quant.execution.sim_rules import (
     load_trade_sim_config,
 )
 from quant.scoring.tech_indicators import quote_last_price
-from quant.signals.models import TradeSignal
+from quant.trading.models import TradeSignal
 
 # 独立收盘价取价器：(股票代码, YYYY-MM-DD) -> 收盘价 或 None。
 # 用于 mark_to_market：持仓掉出当日自选/持仓快照时，按真实收盘价估值，而非回退买入价。

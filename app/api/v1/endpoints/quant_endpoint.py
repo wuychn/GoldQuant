@@ -34,7 +34,7 @@ from app.services.stock_enrich import enrich_stock_rows
 from app.utils.etf52_util import zdfb_52etf
 from app.utils.ths_util import concept_board_top_lists, hyylb, hot_stock, zdfb_ths, zdfb_v2_realtime
 from quant.scoring.theme_boards import normalize_industry_board_rows
-from quant.pool.candidate_config import (
+from quant.candidates.candidate_config import (
     PAYLOAD_KEY_CXFL,
     PAYLOAD_KEY_CXG,
     PAYLOAD_KEY_LJQS,
@@ -43,14 +43,14 @@ from quant.pool.candidate_config import (
     PAYLOAD_KEY_ZT,
     THS_RANK_PAYLOAD_KEYS,
 )
-from quant.pool.candidate_sources import build_all_source_candidates
-from quant.pool.ths_rank_util import (
+from quant.candidates.candidate_sources import build_all_source_candidates
+from quant.candidates.ths_rank_util import (
     build_ths_rank_tag_map,
     enrich_list_with_ths_rank_tags,
     enrich_zt_stats_with_ths_rank,
 )
-from quant.pool.sources import prefilter_popularity
-from quant.pool.symbol_filter import apply_symbol_pool_filter
+from quant.candidates.sources import prefilter_popularity
+from quant.candidates.symbol_filter import apply_symbol_pool_filter
 from quant.progress_log import log_progress, log_progress_count, log_progress_done
 from quant.store.paths import quant_home
 

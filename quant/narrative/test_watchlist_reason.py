@@ -13,7 +13,7 @@ from quant.narrative.stock_lines import (
     format_watchlist_reason_bullet,
     refresh_merged_watchlist_reasons,
 )
-from quant.pool.ths_rank_util import format_ths_rank_tags_brief
+from quant.candidates.ths_rank_util import format_ths_rank_tags_brief
 
 
 class WatchlistReasonTests(unittest.TestCase):

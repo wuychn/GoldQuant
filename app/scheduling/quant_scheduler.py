@@ -1,6 +1,6 @@
 """量化流水线定时任务：在服务启动后按配置触发 `python -m quant <mode>`。
 
-交易日历与 `quant.orchestrator.pipeline_allowed_for_mode` 一致（`common_util.is_real_workday_cn`）。
+交易日历与 Web 侧 `is_real_workday_cn` 一致。
 子进程调用 CLI，避免 fetch 失败时 `sys.exit` 拖垮 Web  worker。
 """
 
@@ -64,7 +64,12 @@ def _parse_time_list_csv(s: str) -> list[tuple[int, int]]:
 
 
 def _invoke_quant_cli(mode: str) -> None:
-    cmd = [sys.executable, "-m", "quant", mode]
+    """执行 ``python -m quant <mode>``。"""
+    _invoke_subprocess([sys.executable, "-m", "quant", mode])
+
+
+def _invoke_subprocess(cmd: list[str]) -> None:
+    mode_label = cmd[-1] if len(cmd) > 2 else " ".join(cmd)
     logger.info("[quant-scheduler] 执行: cwd=%s %s", _PROJECT_ROOT, " ".join(cmd))
     env = os.environ.copy()
     env.setdefault("PYTHONIOENCODING", "utf-8")
@@ -79,18 +84,23 @@ def _invoke_quant_cli(mode: str) -> None:
             errors="replace",
         )
     except Exception as e:
-        log_caught_error(logger, f"[quant-scheduler] 子进程启动失败 mode={mode}", e)
+        log_caught_error(logger, f"[quant-scheduler] 子进程启动失败 {mode_label}", e)
         return
     if proc.returncode != 0:
         err_tail = (proc.stderr or proc.stdout or "").strip().splitlines()
         snippet = " | ".join(line.strip() for line in err_tail[-3:] if line.strip()) or "(无输出)"
         logger.error(
             color_red(
-                f"[子进程异常退出] mode={mode} 退出码={proc.returncode} — {snippet}"
+                f"[子进程异常退出] cmd={' '.join(cmd)} 退出码={proc.returncode} — {snippet}"
             )
         )
     else:
-        logger.info("[quant-scheduler] 完成 mode=%s", mode)
+        logger.info("[quant-scheduler] 完成 %s", mode_label)
+
+
+def _invoke_quant_module(module: str, *args: str) -> None:
+    """执行 ``python -m <module> [args...]``。"""
+    _invoke_subprocess([sys.executable, "-m", module, *args])
 
 
 def _job_news(_settings: Settings) -> None:
@@ -136,16 +146,13 @@ def _job_prefetch_stock_concepts(_settings: Settings) -> None:
         log_caught_error(logger, "[quant-scheduler] 预取个股静态数据", e)
 
 
-def _job_weekly_backtest(settings: Settings) -> None:
-    from quant.jobs.weekly_reports import run_weekly_backtest
-
-    run_weekly_backtest(settings)
+def _job_weekly_backtest(_settings: Settings) -> None:
+    _invoke_quant_module("quant.backtest", "--json")
 
 
-def _job_weekly_ml(settings: Settings) -> None:
-    from quant.jobs.weekly_reports import run_weekly_ml
-
-    run_weekly_ml(settings)
+def _job_weekly_ml(_settings: Settings) -> None:
+    _invoke_quant_cli("r2_ml_etl")
+    _invoke_quant_cli("r2_ml_train")
 
 
 def build_quant_scheduler(settings: Settings) -> BackgroundScheduler | None:

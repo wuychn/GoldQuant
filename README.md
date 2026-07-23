@@ -1,6 +1,6 @@
 # GoldQuant
 
-A 股短线量化辅助系统：**FastAPI 数据聚合服务** + **评分引擎决策机器人** + **LLM 复盘叙述** + **飞书推送** + **ML 离线校准**。
+A 股短线量化辅助系统：**FastAPI 数据聚合** + **R2 决策内核（环境→板块→双池→买卖）** + **LLM 复盘** + **R2 ML**。
 
 > 本仓库仅做数据聚合与模拟交易辅助，**不构成投资建议**。行情来自 AKShare / 东财 / 同花顺等第三方，存在延迟、字段变更或访问失败的可能。
 
@@ -16,11 +16,11 @@ A 股短线量化辅助系统：**FastAPI 数据聚合服务** + **评分引擎�
                             │ HTTP
 ┌───────────────────────────▼─────────────────────────────────┐
 │  quant/  决策机器人（python -m quant <mode>）                 │
-│  评分引擎 + 硬门禁 → 买卖信号 → 模拟成交 → LLM 叙述 → 飞书    │
+│  quant/r2/  R2 内核 → 模拟成交 → LLM 叙述                   │
 └───────────────────────────┬─────────────────────────────────┘
                             │ 离线
 ┌───────────────────────────▼─────────────────────────────────┐
-│  quant/ml  读取 ~/.quant/daily 历史 → 校准阈值/权重           │
+│  quant/r2/ml  ETL + 训练 + gate（~/.quant/ml/）               │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -43,17 +43,17 @@ GoldQuant/
 │   └── api/v1/endpoints/
 │       ├── quant_endpoint.py   # 量化五时段聚合接口（核心）
 │       └── ...                 # 其他行情/热度接口
-├── quant/                      # 量化决策机器人
-│   ├── orchestrator.py         # 五模式编排
-│   ├── config/                 # quant.yml（含 scoring + gates）/ industry_aliases.yml
-│   ├── scoring/                # 100 分制评分引擎
-│   ├── gates/                  # 硬门禁（T+1、熔断、标的池…）
-│   ├── signals/                # 买卖信号
+├── quant/
+│   ├── main.py                 # CLI 入口
+│   ├── r2/                     # R2 决策内核（regime/sector/池/信号/ML/回测）
+│   ├── candidates/             # API 候选 enrich（非 R2 作战池）
+│   ├── config/                 # quant.yml / industry_aliases.yml；R2 见 r2/config/r2.yml
+│   ├── scoring/                # payload 解析、主题/别名（无 R1 评分引擎）
+│   ├── strategy/               # 主升浪/分时战法
+│   ├── trading/                # 三确认 + sell_policy + TradeSignal
 │   ├── execution/              # 模拟成交
-│   ├── narrative/              # LLM 叙述
-│   ├── push/                   # 飞书推送
-│   ├── ml/                     # ML 离线校准
-│   └── strategy.md             # 策略条文（人工维护）
+│   ├── narrative/              # LLM brief
+│   └── backtest/               # broker/metrics（R2 回测复用）
 ├── data/                       # 接口返回样例 JSON（离线调试）
 ├── requirements.txt
 ├── pyproject.toml

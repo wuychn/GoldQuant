@@ -5,7 +5,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from unittest.mock import patch
 
-from quant.scoring.dimensions.concept_theme import _stock_concepts, _stock_industry
+from quant.scoring.concept_theme import _stock_concepts, _stock_industry
 from quant.scoring.industry_aliases import expand_industries, reload_industry_aliases_cache
 from quant.scoring.theme_tracker import score_theme_resonance, snapshot_boards
 from quant.scoring.theme_boards import BOARD_CONCEPT, BOARD_INDUSTRY

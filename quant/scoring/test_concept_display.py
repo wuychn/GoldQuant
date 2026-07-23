@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from quant.scoring.dimensions.concept_theme import (
+from quant.scoring.concept_theme import (
     format_stock_concepts_brief,
     stock_concept_display_names,
 )
