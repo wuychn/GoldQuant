@@ -1,20 +1,28 @@
-"""卖出原始信号：止损（紧急）+ 趋势破位（14:30 后）。"""
+"""卖出原始信号：止损（紧急）+ 止盈 + 日亏强减 + 趋势破位（14:30 后）。"""
 
 from __future__ import annotations
 
-from quant.config import load_gates_config
+from quant.config import load_gates_config, load_scoring_config
 from quant.constants import (
     BUY_KIND_PULLBACK,
     SELL_KIND_MA5_BREAK,
+    SELL_KIND_SCORE_WEAK,
     SELL_KIND_TREND_ERODE,
     STRATEGY_NAME,
 )
+from quant.portfolio.risk import daily_loss_force_reduce
 from quant.scoring.context import ScoreContext
+from quant.scoring.engine import ScoringEngine
 from quant.signals.models import TradeSignal
-from quant.store.state import get_holdings
+from quant.store.state import get_holdings, get_total_assets, sum_today_realized_pnl
 from quant.scoring.tech_indicators import mas_from_stock, quote_last_price
-from quant.signals.sell_policy import stop_loss_triggers_sell
+from quant.signals.sell_policy import (
+    score_weakness_triggers_sell,
+    stop_loss_triggers_sell,
+    take_profit_triggers_sell,
+)
 from quant.strategy.main_wave import detect_sell_setup
+from quant.strategy.time_stop import parse_buy_date, time_stop_triggers_sell
 from quant.strategy.trend import effective_ma20_break, trend_allows_ascent_sell
 
 
@@ -49,10 +57,17 @@ def verify_sell_signal_still_valid(
 
 
 def generate_sell_signals(ctx: ScoreContext) -> list[TradeSignal]:
-    """产生卖出原始信号（未经三确认）。仅止损或趋势明确破位。"""
+    """产生卖出原始信号（未经三确认）。"""
     mw_cfg = load_gates_config().get("main_wave") or {}
     sell_cfg = load_gates_config().get("sell") or {}
+    sell_threshold = float(load_scoring_config().get("sell_threshold", 45))
+    score_engine = ScoringEngine()
     signals: list[TradeSignal] = []
+
+    total = get_total_assets()
+    daily_pnl = sum_today_realized_pnl()
+    daily_pnl_pct = (daily_pnl / total * 100) if total > 0 else 0.0
+    force_reduce = daily_loss_force_reduce(daily_pnl_pct)
 
     for stock in get_holdings():
         code = str(stock.get("股票代码", "")).strip()
@@ -81,26 +96,59 @@ def generate_sell_signals(ctx: ScoreContext) -> list[TradeSignal]:
         kind = ""
         reason = ""
 
-        ok_stop, stop_reason = stop_loss_triggers_sell(
-            enriched,
-            code,
-            pnl_pct=pnl_pct,
-            ctx=ctx,
-            mw_cfg=mw_cfg,
-            price=price,
-        )
-        if ok_stop:
-            sell_type = "止损"
-            kind = "止损"
-            reason = stop_reason
-        elif buy_kind == BUY_KIND_PULLBACK:
+        if force_reduce:
+            sell_type = "日亏强制减仓"
+            kind = "日亏强制减仓"
+            reason = f"当日已实现亏损{daily_pnl_pct:.2f}%触发强制减仓"
+        else:
+            ok_stop, stop_reason = stop_loss_triggers_sell(
+                enriched,
+                code,
+                pnl_pct=pnl_pct,
+                ctx=ctx,
+                mw_cfg=mw_cfg,
+                price=price,
+            )
+            if ok_stop:
+                sell_type = "止损"
+                kind = "止损"
+                reason = stop_reason
+            else:
+                ok_tp, tp_reason = take_profit_triggers_sell(enriched, pnl_pct=pnl_pct)
+                if ok_tp:
+                    sell_type = "止盈"
+                    kind = "止盈"
+                    reason = tp_reason
+                else:
+                    ok_ts, ts_reason = time_stop_triggers_sell(
+                        enriched,
+                        sell_cfg,
+                        pnl_pct=pnl_pct,
+                        buy_date=parse_buy_date(enriched),
+                    )
+                    if ok_ts:
+                        sell_type = "时间止损"
+                        kind = "时间止损"
+                        reason = ts_reason
+                    else:
+                        holding_score = score_engine.score_stock(ctx, enriched)
+                        ok_sw, sw_reason = score_weakness_triggers_sell(
+                            score_total=holding_score.total,
+                            sell_threshold=sell_threshold,
+                        )
+                        if ok_sw:
+                            sell_type = SELL_KIND_SCORE_WEAK
+                            kind = SELL_KIND_SCORE_WEAK
+                            reason = sw_reason
+
+        if not reason and buy_kind == BUY_KIND_PULLBACK:
             m = mas_from_stock(enriched)
             ma20 = m.get("ma20")
             if ma20 and effective_ma20_break(price, ma20, mw_cfg):
                 sell_type = "趋势衰竭"
                 kind = SELL_KIND_TREND_ERODE
                 reason = f"回调仓有效跌破MA20({ma20:.2f})"
-        else:
+        elif not reason:
             ok_trend, _phase, _trend_note = trend_allows_ascent_sell(enriched, mw_cfg)
             if ok_trend:
                 ok, kind, reason = detect_sell_setup(enriched, ctx, mw_cfg)

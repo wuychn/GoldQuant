@@ -2,18 +2,18 @@
 
 样本定义
 --------
-每条样本 = 某日某只候选股的评分特征 + 事后 label（0/1）。
+每条样本 = 某日某只候选股的评分特征 + 选股 label（0/1）。
 
 特征来源
   daily/{date}/derived/scores_watchlist.json
   （晚间复盘对人气榜∪涨停池的评分明细）
 
-标签 label 优先级
-  1. 评分日后 6 个交易日内，该股的卖出已实现盈亏合计 > 0 → 1，否则 0
-  2. 若无成交，取下一交易日行情快照中的涨幅 > 0 → 1，否则 0
-  3. 仍无法标注则跳过该条
+选股 label（唯一口径）
+  下一交易日快照涨幅 > 0 → 1，否则 0
+  无次日收益则跳过（禁止用策略成交盈亏做因子标签）
 
-ML 用这些样本优化 quant.yml scoring 段中的阈值与维度权重（见 quant/ml/optimizers.py）。
+附属字段
+  trade_pnl_label：评分日后 6 日内卖出已实现盈亏合计是否为正（仅策略评价，不进校准）
 """
 
 from __future__ import annotations
@@ -38,8 +38,9 @@ class ScoreSample:
     name: str
     total: float                      # 当日综合评分
     dim_scores: dict[str, float]      # 各维度得分，键名与 quant.yml scoring.dimensions 一致
-    label: float                      # 1=事后表现正向，0=负向
-    forward_return_pct: float | None = None  # 次日涨幅(%)，仅作调试/扩展
+    label: float                      # 选股：次日涨跌方向
+    forward_return_pct: float | None = None  # 次日涨幅(%)
+    trade_pnl_label: float | None = None     # 策略成交结果（可选，非校准用）
 
 
 def _read_json(path: Path) -> Any:
@@ -79,7 +80,7 @@ def _stock_return_from_payload(payload: dict, code: str) -> float | None:
 
 
 def _label_from_trades(code: str, date_str: str, dates: list[str]) -> float | None:
-    """用后续卖出成交盈亏打标签（更贴近真实策略）。"""
+    """用后续卖出成交盈亏打标签（策略评价附属字段）。"""
     idx = dates.index(date_str) if date_str in dates else -1
     if idx < 0:
         return None
@@ -106,7 +107,7 @@ def _label_from_trades(code: str, date_str: str, dates: list[str]) -> float | No
 
 
 def _next_date_payload(dates: list[str], date_str: str) -> dict | None:
-    """取评分日的下一交易日任意一份 raw 快照（用于备选 label）。"""
+    """取评分日的下一交易日任意一份 raw 快照（用于选股 label）。"""
     if date_str not in dates:
         return None
     i = dates.index(date_str)
@@ -147,6 +148,8 @@ def load_score_samples(*, min_samples: int = 100) -> list[ScoreSample]:
         if not isinstance(rows, list):
             continue
         next_payload = _next_date_payload(date_dirs, date_str)
+        if next_payload is None:
+            continue
 
         for row in rows:
             if not isinstance(row, dict):
@@ -171,15 +174,11 @@ def load_score_samples(*, min_samples: int = 100) -> list[ScoreSample]:
                 except (TypeError, ValueError):
                     continue
 
-            label: float | None = _label_from_trades(code, date_str, date_dirs)
-            fwd: float | None = None
-            if next_payload is not None:
-                fwd = _stock_return_from_payload(next_payload, code)
-                if label is None and fwd is not None:
-                    label = 1.0 if fwd > 0 else 0.0
-
-            if label is None:
+            fwd = _stock_return_from_payload(next_payload, code)
+            if fwd is None:
                 continue
+            label = 1.0 if fwd > 0 else 0.0
+            trade_pnl_label = _label_from_trades(code, date_str, date_dirs)
 
             samples.append(
                 ScoreSample(
@@ -190,6 +189,7 @@ def load_score_samples(*, min_samples: int = 100) -> list[ScoreSample]:
                     dim_scores=dim_scores,
                     label=label,
                     forward_return_pct=fwd,
+                    trade_pnl_label=trade_pnl_label,
                 )
             )
 

@@ -101,6 +101,19 @@ def _patch_runtime_state(
     def _mem_save_pending(pending: dict) -> None:
         pending_box[0] = dict(pending)
 
+    def _sim_now():
+        return clock[0]
+
+    def _sim_late_session() -> bool:
+        from quant.trading_hours import is_at_or_after_hhmm, late_session_cutoff
+
+        return is_at_or_after_hhmm(late_session_cutoff(), clock[0])
+
+    def _sim_auction_window() -> bool:
+        from quant.trading_hours import is_a_share_continuous_auction_window
+
+        return is_a_share_continuous_auction_window(clock[0])
+
     with (
         patch("quant.signals.buy.get_holdings", broker.holdings_rows),
         patch("quant.signals.sell.get_holdings", broker.holdings_rows),
@@ -111,9 +124,11 @@ def _patch_runtime_state(
         patch("quant.signals.pipeline.codes_sold_today", _codes_sold_today),
         patch("quant.signals.pipeline.holding_codes_bought_today", _holding_codes_bought_today),
         patch("quant.gates.rules.codes_sold_today", _codes_sold_today),
-        patch.object(confirmation, "_now", lambda: clock[0]),
+        patch.object(confirmation, "_now", _sim_now),
         patch.object(confirmation, "load_pending", _mem_load_pending),
         patch.object(confirmation, "save_pending", _mem_save_pending),
+        patch("quant.execution.core.is_late_session_for_trend_sell", _sim_late_session),
+        patch("quant.trading_hours.is_a_share_continuous_auction_window", _sim_auction_window),
     ):
         yield
 
@@ -166,6 +181,30 @@ def run_backtest(
     from_date: str | None = None,
     to_date: str | None = None,
     broker_cfg: BrokerConfig | None = None,
+    mode: str = "full_system",
+) -> dict:
+    """回测入口。
+
+    mode:
+      - full_system: 端到端（晚间自选 + 盘中成交）
+      - intraday_replay: 仅重放 during 快照（legacy）
+    """
+    if mode == "intraday_replay":
+        return _run_intraday_replay(
+            from_date=from_date, to_date=to_date, broker_cfg=broker_cfg
+        )
+    from quant.backtest.simulator import run_full_system_backtest
+
+    return run_full_system_backtest(
+        from_date=from_date, to_date=to_date, broker_cfg=broker_cfg
+    )
+
+
+def _run_intraday_replay(
+    *,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    broker_cfg: BrokerConfig | None = None,
 ) -> dict:
     """重放 daily/raw 下 during*.json，经与实盘一致的三确认 pipeline 后成交。"""
     dates = _list_trading_dates(from_date, to_date)
@@ -209,8 +248,11 @@ def run_backtest(
 
         broker.mark_to_market(last_payload)
 
-    metrics = compute_metrics(broker)
+    from quant.research.metrics.performance import compute_extended_metrics
+
+    metrics = compute_extended_metrics(broker, trading_days=days_run)
     metrics["days_run"] = days_run
     metrics["date_from"] = dates[0] if dates else ""
     metrics["date_to"] = dates[-1] if dates else ""
+    metrics["mode"] = "intraday_replay"
     return metrics

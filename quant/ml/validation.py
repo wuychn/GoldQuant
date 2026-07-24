@@ -6,7 +6,13 @@ from typing import Any
 
 import numpy as np
 
+from quant.config import load_quant_config
 from quant.ml.dataset import ScoreSample
+from quant.ml.objective import (
+    evaluate_objective,
+    portfolio_sharpe_from_samples,
+    score_threshold_objective,
+)
 from quant.ml.optimizers import optimize_thresholds_grid
 
 
@@ -30,8 +36,14 @@ def walk_forward_validate(
     min_train: int = 80,
     test_ratio: float = 0.2,
     min_test_f1: float = 0.25,
+    min_test_sharpe: float | None = None,
 ) -> dict[str, Any]:
-    """时间序列切分：训练集优化阈值，测试集评估 F1。"""
+    """时间序列切分：训练集优化阈值，测试集按同一目标评估选中子集。"""
+    research = load_quant_config().get("research") or {}
+    objective = str(research.get("ml_objective", "sharpe"))
+    if min_test_sharpe is None:
+        min_test_sharpe = float(research.get("min_oos_sharpe", 0.5))
+
     ordered = sorted(samples, key=lambda s: s.date)
     n = len(ordered)
     if n < min_train:
@@ -55,19 +67,47 @@ def walk_forward_validate(
             "test_size": len(test),
         }
 
-    opt = optimize_thresholds_grid(train, base=base_thresholds)
+    opt = optimize_thresholds_grid(train, base=base_thresholds, objective=objective)
     wt = float(opt["watchlist_threshold"])
+    train_sel = [s for s in train if s.total >= wt]
+    test_sel = [s for s in test if s.total >= wt]
     train_f1 = _f1_at_threshold(train, wt)
     test_f1 = _f1_at_threshold(test, wt)
-    passed = test_f1 >= min_test_f1 and test_f1 >= train_f1 * 0.5
+    train_sharpe = portfolio_sharpe_from_samples(train_sel)
+    test_sharpe = portfolio_sharpe_from_samples(test_sel)
+    train_obj = score_threshold_objective(train, watchlist_threshold=wt, objective=objective)
+    test_obj = score_threshold_objective(test, watchlist_threshold=wt, objective=objective)
+
+    if objective == "f1_legacy":
+        passed = test_f1 >= min_test_f1 and test_f1 >= train_f1 * 0.5
+        reason = "" if passed else f"测试集 F1={test_f1:.3f} 未达 {min_test_f1}"
+    else:
+        passed = test_sharpe >= min_test_sharpe and (
+            train_sharpe <= 0 or test_sharpe >= train_sharpe * 0.5
+        )
+        reason = "" if passed else f"测试集 Sharpe={test_sharpe:.3f} 未达 {min_test_sharpe}"
 
     return {
         "passed": passed,
+        "objective": objective,
         "train_size": len(train),
         "test_size": len(test),
+        "train_selected": len(train_sel),
+        "test_selected": len(test_sel),
         "train_f1": round(train_f1, 4),
         "test_f1": round(test_f1, 4),
+        "train_sharpe": round(train_sharpe, 4),
+        "test_sharpe": round(test_sharpe, 4),
+        "train_objective": round(float(train_obj), 4) if train_obj > -1e8 else None,
+        "test_objective": round(float(test_obj), 4) if test_obj > -1e8 else None,
         "min_test_f1": min_test_f1,
+        "min_test_sharpe": min_test_sharpe,
         "threshold_used": wt,
-        "reason": "" if passed else f"测试集 F1={test_f1:.3f} 未达 {min_test_f1}",
+        "thresholds": {
+            "watchlist_threshold": wt,
+            "buy_threshold": float(opt["buy_threshold"]),
+            "sell_threshold": float(opt["sell_threshold"]),
+        },
+        "reason": reason,
+        "objective_metrics": evaluate_objective(test_sel, objective=objective),
     }

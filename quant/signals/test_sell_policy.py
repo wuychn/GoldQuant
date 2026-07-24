@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+from datetime import date
 from unittest.mock import MagicMock, patch
 
 from quant.signals.models import TradeSignal
@@ -10,9 +11,11 @@ from quant.signals.sell_policy import (
     approaching_limit_down,
     is_urgent_sell,
     near_limit_up,
+    score_weakness_triggers_sell,
     sell_requires_late_session,
     stop_loss_exempt,
     stop_loss_triggers_sell,
+    take_profit_triggers_sell,
 )
 
 
@@ -86,7 +89,7 @@ class SellPolicyTests(unittest.TestCase):
         ok, _ = stop_loss_triggers_sell(
             stock,
             "600176",
-            pnl_pct=-6.0,
+            pnl_pct=-8.0,
             ctx=ctx,
             mw_cfg={},
             price=9.0,
@@ -120,7 +123,7 @@ class SellPolicyTests(unittest.TestCase):
             ok, reason = stop_loss_triggers_sell(
                 stock,
                 "600176",
-                pnl_pct=-6.0,
+                pnl_pct=-8.0,
                 ctx=ctx,
                 mw_cfg={},
                 price=9.0,
@@ -137,6 +140,78 @@ class SellPolicyTests(unittest.TestCase):
     @patch("quant.signals.sell_policy.load_trade_sim_config")
     def test_approaching_limit_down(self, _cfg, _lim) -> None:
         self.assertTrue(approaching_limit_down({"盘口": {"涨幅": -9.5}}, "600176"))
+
+    @patch(
+        "quant.signals.sell_policy.load_gates_config",
+        return_value={
+            "sell": {
+                "take_profit": {
+                    "enabled": True,
+                    "min_pnl_pct": 15.0,
+                    "require_momentum_fade": True,
+                    "momentum_fade_max": 40.0,
+                    "min_hold_trading_days": 0,
+                }
+            }
+        },
+    )
+    @patch("quant.strategy.momentum.momentum_score", return_value=(30.0, {}))
+    def test_take_profit_triggers_when_pnl_and_momentum_fade(self, _ms, _cfg) -> None:
+        ok, reason = take_profit_triggers_sell({"盘口": {"最新": 12.0}}, pnl_pct=16.0)
+        self.assertTrue(ok)
+        self.assertIn("止盈", reason)
+
+    @patch(
+        "quant.signals.sell_policy.load_gates_config",
+        return_value={
+            "sell": {
+                "take_profit": {
+                    "enabled": True,
+                    "min_pnl_pct": 15.0,
+                    "require_momentum_fade": True,
+                    "momentum_fade_max": 40.0,
+                    "min_hold_trading_days": 0,
+                }
+            }
+        },
+    )
+    @patch("quant.strategy.momentum.momentum_score", return_value=(55.0, {}))
+    def test_take_profit_blocked_when_momentum_strong(self, _ms, _cfg) -> None:
+        ok, _ = take_profit_triggers_sell({"盘口": {"最新": 12.0}}, pnl_pct=16.0)
+        self.assertFalse(ok)
+
+    @patch(
+        "quant.signals.sell_policy.load_gates_config",
+        return_value={
+            "sell": {
+                "take_profit": {
+                    "enabled": True,
+                    "min_pnl_pct": 15.0,
+                    "require_momentum_fade": False,
+                    "min_hold_trading_days": 5,
+                }
+            }
+        },
+    )
+    @patch("quant.strategy.time_stop.parse_buy_date", return_value=date(2026, 1, 1))
+    @patch("quant.strategy.time_stop.trading_days_since_buy", return_value=2)
+    def test_take_profit_requires_min_hold_days(self, _held, _buy, _cfg) -> None:
+        ok, _ = take_profit_triggers_sell(
+            {"买入时间": "2026-01-01 10:00:00", "盘口": {"最新": 12.0}},
+            pnl_pct=20.0,
+        )
+        self.assertFalse(ok)
+
+    def test_score_weakness_triggers_below_threshold(self) -> None:
+        ok, reason = score_weakness_triggers_sell(score_total=40.0, sell_threshold=45.0)
+        self.assertTrue(ok)
+        self.assertIn("卖出线", reason)
+
+    def test_score_weakness_holds_at_or_above_threshold(self) -> None:
+        ok, _ = score_weakness_triggers_sell(score_total=45.0, sell_threshold=45.0)
+        self.assertFalse(ok)
+        ok2, _ = score_weakness_triggers_sell(score_total=50.0, sell_threshold=45.0)
+        self.assertFalse(ok2)
 
 
 if __name__ == "__main__":

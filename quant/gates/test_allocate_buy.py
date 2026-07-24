@@ -8,12 +8,12 @@ from quant.gates.rules import allocate_buy_quantities_by_score
 from quant.scoring.context import ScoreContext
 
 
-@patch("quant.gates.rules.get_cash", return_value=100_000.0)
-@patch("quant.gates.rules.get_total_assets", return_value=100_000.0)
-@patch("quant.gates.rules.compute_holdings_market_value", return_value=0.0)
-@patch("quant.gates.rules.active_holding_count", return_value=0)
+@patch("quant.portfolio.allocator.get_cash", return_value=100_000.0)
+@patch("quant.portfolio.allocator.get_total_assets", return_value=100_000.0)
+@patch("quant.portfolio.allocator.compute_holdings_market_value", return_value=0.0)
+@patch("quant.portfolio.allocator.active_holding_count", return_value=0)
 @patch(
-    "quant.gates.rules.position_limits",
+    "quant.portfolio.allocator.position_limits",
     return_value={"total_pct": 50.0, "max_stocks": 2, "single_pct": {}},
 )
 def test_proportional_budget_by_score(*_mocks) -> None:

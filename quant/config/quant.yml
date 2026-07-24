@@ -39,6 +39,13 @@ scoring:
     include_ths_rank_pool: true  # 同花顺形态榜（创新高/持续上涨/持续放量/量价齐升）
     watchlist_retain_days: 7       # 连续评分不达标 N 个交易日后移入观察池
     watchlist_observe_max_days: 30  # 观察池最长 N 个交易日，期满删除；期内达标恢复自选
+    # 候选宇宙硬约束（晚间 build_candidates + 买入门禁）
+    universe:
+      enabled: true
+      min_adv_yi: 1.0              # 近 N 日均成交额下限（亿元）；缺数据放行
+      adv_lookback: 20
+      max_crowding_rank: null      # 人气排名 ≤ 此值剔除；null=不按拥挤剔除
+      participation_rate: 0.1      # 单笔名义 ≤ ADV × 此比例
 
   # 评分维度：enabled 关闭则不参与；weight 为加权系数
   dimensions:
@@ -139,6 +146,62 @@ scoring:
       bearish_score: 5        # 利空 0～10 区间取中
       neutral_score: 50
       bullish_score: 95       # 利好 90～100 区间取中
+    neutral_alpha:          # 行业+市值中性化因子合成（截面预计算）
+      enabled: true
+      weight: 8
+      min_names: 5            # 截面少于此数不做中性化，维度 unavailable
+
+  # 选股与择时：dimensions 与全局 deep-merge（仅覆盖声明的键）
+  # 选股偏结构/主题；择时偏资金/技术/宏观盘面
+  selection:
+    dimensions:
+      main_wave:
+        weight: 40
+      concept_theme:
+        weight: 12
+      stock_history:
+        weight: 10
+      day_bar_shape:
+        weight: 10
+      stock_fund_flow:
+        weight: 8
+      technical:
+        weight: 3
+      popularity_rank:
+        weight: 5
+      market_index:
+        weight: 1
+      market_sentiment:
+        weight: 2
+      global_macro:
+        enabled: false
+        weight: 0
+      neutral_alpha:
+        enabled: true
+        weight: 12
+  timing:
+    dimensions:
+      main_wave:
+        weight: 28
+      stock_fund_flow:
+        weight: 14
+      technical:
+        weight: 8
+      day_bar_shape:
+        weight: 6
+      concept_theme:
+        weight: 8
+      stock_history:
+        weight: 5
+      market_index:
+        weight: 5
+      market_sentiment:
+        weight: 6
+      market_fund_flow:
+        weight: 4
+      global_macro:
+        enabled: true
+        weight: 3
 
 # -----------------------------------------------------------------------------
 # gates — 硬门禁 + 战法参数 + 三确认（不可被 LLM 修改）
@@ -147,13 +210,17 @@ gates:
 
   # 模拟成交时段校验（executor.py）
   trading:
-    time_validation_enabled: false  # true=仅连续竞价时段允许成交
+    time_validation_enabled: true   # true=仅连续竞价时段允许成交（生产默认）
     simulation:
       commission_rate: 0.0001     # 佣金万一（买卖双向）
       min_commission: 5.0         # 单笔最低佣金（元）
       stamp_tax_rate: 0.0005      # 卖出印花税 0.05%
       transfer_fee_rate: 0.00001  # 沪市过户费 0.001%（仅 6 开头）
       slippage_pct: 0.001         # 滑点 0.1%
+      slippage_model: vol_scaled  # fixed | vol_scaled | microstructure
+      slippage_max_pct: 0.005
+      partial_fill_enabled: true   # ADV×participation 封顶可成交量；资金不足时缩量
+      participation_rate: 0.1
       main_limit_pct: 9.9         # 主板涨跌停阈值（%）
       gem_limit_pct: 19.9         # 创业板/科创板涨跌停阈值（%）
 
@@ -161,7 +228,7 @@ gates:
   symbol_pool:
     prefixes: ["60", "00", "30"]    # 沪主/深主/创业板
     exclude_st: true                # 排除 ST
-    min_listing_days: 60            # 最短上市天数（预留）
+    min_listing_days: 60            # 最短上市天数；缺上市时间字段则放行
 
   # 全局熔断：指数大跌
   circuit_breaker:
@@ -191,6 +258,12 @@ gates:
       止损:
         min_span_minutes: 0
         min_day_hits: 1
+      止盈:
+        min_span_minutes: 10
+        min_day_hits: 2
+      日亏强制减仓:
+        min_span_minutes: 0
+        min_day_hits: 1
       日内走弱:
         min_span_minutes: 10
         min_day_hits: 2
@@ -209,6 +282,9 @@ gates:
         min_day_hits: 3
         max_window_minutes: 4320
         multi_day: true              # 允许多日累计，非日锁存
+      评分走弱:
+        min_span_minutes: 15
+        min_day_hits: 2
     强势:
       min_span_minutes: 10
       min_day_hits: 2
@@ -419,14 +495,20 @@ gates:
     late_session_kinds:
       - 破5日线
       - 趋势衰竭
-    time_stop:                      # 已关闭：不破趋势不卖
+    time_stop:                      # 横盘/时间离场（与 take_profit 分离）；默认关闭
       enabled: false
+      min_hold_trading_days: 5
+      min_pnl_pct: -3.0             # 深亏交给止损；本规则覆盖 [-3%, max] 横盘区
+      max_pnl_pct: 5.0              # 浮盈超过此豁免（让强趋势继续）
+      sideways_lookback_days: 5
+      max_range_pct: 5.5
+      max_net_move_pct: 3.0
+    take_profit:                    # 浮盈达标 + 动能衰减兑现
+      enabled: true
+      min_pnl_pct: 15.0
+      require_momentum_fade: true
+      momentum_fade_max: 40.0
       min_hold_trading_days: 5      # 买入后至少 N 个交易日
-      min_pnl_pct: -3.0             # 低于此由 stop_loss 处理；本规则覆盖 [-3%, +5%] 横盘区
-      max_pnl_pct: 5.0              # 浮盈超过此豁免（继续持股，非止盈卖）
-      sideways_lookback_days: 5     # 近 N 日振幅/净波动判定横盘
-      max_range_pct: 5.5            # 近 N 日 (高-低)/均价 ≤ 此值(%)
-      max_net_move_pct: 3.0         # 近 N 日 |末-始|/始 ≤ 此值(%)
 
 # -----------------------------------------------------------------------------
 # push — 推送展示过滤（不影响加自选/买卖/评分，仅在推送时过滤展示标的）
@@ -447,3 +529,46 @@ push:
   watchlist_score_filter:
     enabled: true
     min_score: 70         # null=取 scoring.watchlist_threshold
+
+# -----------------------------------------------------------------------------
+# research — 量化研究平台（实验、回测、ML 门禁）
+# -----------------------------------------------------------------------------
+research:
+  regime_v2_enabled: true
+  min_oos_sharpe: 0.5
+  bootstrap_samples: 1000
+  ml_objective: sharpe          # sharpe | calmar | f1_legacy（优化与门禁统一）
+  fdr_alpha: 0.05               # 多维 IC / 试错的 BH-FDR 水平
+  factors:
+    holding_horizon_days: 5     # 因子研究默认持有期
+    min_cross_section: 5
+  promote:
+    min_samples: 80
+    min_total_ic_mean: 0.02
+    min_total_icir: 0.3
+    min_oos_sharpe: 0.5
+
+# -----------------------------------------------------------------------------
+# portfolio — 组合构建与风控
+# -----------------------------------------------------------------------------
+portfolio:
+  allocator_v2_enabled: true
+  continuous_position:            # 总仓位按 regime 连续分映射；只数仍用离散档
+    enabled: true
+    min_pct: 20
+    max_pct: 80
+  risk_budget:
+    enabled: true
+    score_vol_blend: 0.5          # 1=纯评分，0=纯逆波动
+    vol_lookback: 14
+    vol_floor_pct: 1.0
+    participation_cap_enabled: true
+  constraints:
+    enabled: true
+    max_concept_pct: 40
+    max_industry_pct: 40          # 行业名义市值占比上限
+  risk:
+    max_drawdown_halt_enabled: true
+    max_drawdown_pct: 15
+    halt_days: 5
+    force_reduce_daily_loss_pct: -5.0

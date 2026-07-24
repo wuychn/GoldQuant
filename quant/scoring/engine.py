@@ -19,7 +19,22 @@ from quant.scoring.dimensions.stock_history import StockHistoryScorer
 from quant.scoring.dimensions.stub import StubScorer
 from quant.scoring.dimensions.technical import TechnicalScorer
 from quant.scoring.dimensions.zt_stats import ZtCountScorer, ZtHeightScorer
+from quant.factors.scorer import NeutralAlphaScorer
 from quant.scoring.models import DimensionResult, StockScore
+
+
+def merge_dimension_overrides(base: dict, override: dict) -> dict:
+    """维度配置 deep-merge：override 仅覆盖声明的子键，未声明维度继承 base。"""
+    if not override:
+        return dict(base or {})
+    out: dict = {k: (dict(v) if isinstance(v, dict) else v) for k, v in (base or {}).items()}
+    for key, val in override.items():
+        if isinstance(val, dict) and isinstance(out.get(key), dict):
+            out[key] = {**out[key], **val}
+        else:
+            out[key] = dict(val) if isinstance(val, dict) else val
+    return out
+
 
 _SCORERS = {
     "main_wave": MainWaveScorer(),
@@ -39,6 +54,7 @@ _SCORERS = {
     "us_overnight": StubScorer("us_overnight"),
     "stock_news": StubScorer("stock_news"),
     "global_macro": GlobalMacroScorer(),
+    "neutral_alpha": NeutralAlphaScorer(),
 }
 
 
@@ -90,6 +106,21 @@ class ScoringEngine:
         return mw >= floor
 
     def score_many(self, ctx: ScoreContext, stocks: list[dict]) -> list[StockScore]:
+        dim_cfg = self.dimensions_cfg.get("neutral_alpha") or {}
+        if bool(dim_cfg.get("enabled", False)) and float(dim_cfg.get("weight", 0) or 0) > 0:
+            from quant.factors.compose import alpha_scores_0_100
+            from quant.factors.panel import build_factor_panel
+            from quant.timeutil import cn_date_str
+
+            date = cn_date_str()
+            panel = build_factor_panel(
+                [s for s in stocks if str(s.get("股票代码", "")).strip()],
+                date=date,
+                payload=ctx.payload,
+                neutralize=True,
+                min_names=int(dim_cfg.get("min_names", 5)),
+            )
+            ctx.neutral_alpha_scores = alpha_scores_0_100(panel.rows, use_neutral=True)
         return [self.score_stock(ctx, s) for s in stocks if str(s.get("股票代码", "")).strip()]
 
     def apply_threshold(

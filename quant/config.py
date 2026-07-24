@@ -99,7 +99,47 @@ def load_quant_config() -> dict:
     user = config_file("quant.yml")
     if user.is_file():
         _deep_merge(cfg, _load_yaml(user))
+    _validate_config_quiet(cfg)
     return cfg
+
+
+def _validate_config_quiet(cfg: dict) -> None:
+    try:
+        from quant.research.config_schema import validate_quant_config
+
+        errors = validate_quant_config(cfg)
+        if errors:
+            import logging
+
+            logging.getLogger("quant.config").warning("quant.yml 校验: %s", "; ".join(errors))
+    except Exception:
+        pass
+
+
+def _apply_dimension_overrides(scoring: dict, overrides: dict) -> None:
+    """合并 dimension_overrides.yml：weight_factor 乘法降权 / enabled 关闭。"""
+    if overrides.get("apply") is False:
+        return
+    block = overrides.get("dimensions") or {}
+    dims = scoring.setdefault("dimensions", {})
+    for name, ov in block.items():
+        if not isinstance(ov, dict):
+            continue
+        if name not in dims or not isinstance(dims[name], dict):
+            dims[name] = {}
+        target = dims[name]
+        if "enabled" in ov:
+            target["enabled"] = bool(ov["enabled"])
+        if "weight" in ov:
+            target["weight"] = float(ov["weight"])
+        factor = ov.get("weight_factor")
+        if factor is not None:
+            try:
+                f = float(factor)
+            except (TypeError, ValueError):
+                continue
+            base_w = float(target.get("weight", 0) or 0)
+            target["weight"] = round(base_w * f, 4)
 
 
 @lru_cache(maxsize=1)
@@ -110,6 +150,9 @@ def load_scoring_config() -> dict:
     ml = config_file("ml_calibration.yml")
     if ml.is_file():
         _apply_ml_scoring(scoring, _load_yaml(ml))
+    ov = config_file("dimension_overrides.yml")
+    if ov.is_file():
+        _apply_dimension_overrides(scoring, _load_yaml(ov))
     return scoring
 
 

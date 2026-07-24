@@ -16,7 +16,8 @@ from datetime import datetime
 from quant.constants import BUY_KIND_ASCENT, BUY_KIND_PULLBACK
 from quant.timeutil import CN_TZ, cn_date_str, cn_now, ensure_cn_tz, trading_minutes_between
 from quant.config import load_gates_config
-from quant.scoring.context import ScoreContext, infer_regime
+from quant.scoring.context import ScoreContext
+from quant.scoring.regime import infer_regime_v2
 from quant.signals.models import TradeSignal
 from quant.store.paths import state_file
 from quant.store.state import resolve_payload_holdings
@@ -81,7 +82,9 @@ def _entry_from_dict(v: dict) -> PendingSignal | None:
 def confirmation_config(ctx: ScoreContext, signal_kind: str = "", *, action: str = "") -> dict:
     """按 signal_kind → 市场状态 → 全局默认 解析持续确认参数。"""
     cfg = load_gates_config().get("confirmation") or {}
-    regime = infer_regime(ctx.payload)
+    from quant.scoring.regime import get_regime_tracker
+
+    regime = infer_regime_v2(ctx.payload, get_regime_tracker())
     regime_block = cfg.get(regime) or cfg.get("震荡") or {}
     kind_block = (cfg.get("by_kind") or {}).get(signal_kind) or {}
     day_cfg = cfg.get("day_latch") or {}

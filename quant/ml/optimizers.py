@@ -2,13 +2,12 @@
 
 算法概览
 --------
-grid      穷举 (watchlist, buy, sell) 阈值组合，最大化 F1
+grid      穷举 (watchlist, buy) 阈值，按 research.ml_objective 最大化
 linear    Ridge 回归：维度得分 → label，|coef| 归一化为权重；阈值仍用 grid
 lightgbm  分类器特征重要性 → 权重；阈值仍用 grid
-bayesian  scipy 差分进化在连续空间搜索阈值，最大化 F1
+bayesian  scipy 差分进化在连续空间搜索阈值
 
-注意：sell_threshold 在 grid 中参与搜索，但当前 optimizers 的 F1 主要按
-「总分过 watchlist 线且 label 为正」评估；sell 阈值由 grid 约束 st < wt < bt 一并输出。
+sell_threshold：watchlist 样本无法评价卖出，搜索时固定为 base 值。
 """
 
 from __future__ import annotations
@@ -18,6 +17,7 @@ from typing import Any
 import numpy as np
 
 from quant.ml.dataset import ScoreSample
+from quant.ml.objective import score_threshold_objective
 
 
 def _feature_matrix(samples: list[ScoreSample], dim_keys: list[str]) -> np.ndarray:
@@ -32,45 +32,55 @@ def _labels(samples: list[ScoreSample]) -> np.ndarray:
     return np.array([s.label for s in samples], dtype=float)
 
 
+def _resolve_objective(objective: str | None) -> str:
+    if objective:
+        return objective
+    from quant.config import load_quant_config
+
+    return str((load_quant_config().get("research") or {}).get("ml_objective", "sharpe"))
+
+
 def optimize_thresholds_grid(
     samples: list[ScoreSample],
     *,
     base: dict[str, float],
+    objective: str | None = None,
 ) -> dict[str, Any]:
-    """网格搜索三阈值，目标最大化 F1。
+    """网格搜索阈值。
 
-    预测规则（简化）：total >= watchlist_threshold 且 label>=0.5 视为「选对」。
+    sharpe/calmar：最大化 total>=wt 子集的按日组合目标；sell 固定 base。
+    f1_legacy：最大化 F1（兼容旧行为）。
     """
-    y = _labels(samples)
-    totals = np.array([s.total for s in samples], dtype=float)
-    best = {
-        "score": -1.0,
+    obj = _resolve_objective(objective)
+    sell_fixed = float(base["sell_threshold"])
+    best: dict[str, Any] = {
+        "score": -1e18,
         "watchlist_threshold": base["watchlist_threshold"],
         "buy_threshold": base["buy_threshold"],
-        "sell_threshold": base["sell_threshold"],
+        "sell_threshold": sell_fixed,
+        "objective": obj,
     }
 
     for wt in range(55, 86, 5):
         for bt in range(60, 91, 5):
-            for st in range(30, 56, 5):
-                if not (st < wt < bt):
-                    continue
-                pred = ((totals >= wt) & (y >= 0.5)).astype(float)
-                if pred.sum() == 0:
-                    continue
-                precision = (pred * y).sum() / pred.sum()
-                recall = (pred * y).sum() / max(y.sum(), 1)
-                f1 = 2 * precision * recall / max(precision + recall, 1e-9)
-                if f1 > best["score"]:
-                    best = {
-                        "score": float(f1),
-                        "watchlist_threshold": float(wt),
-                        "buy_threshold": float(bt),
-                        "sell_threshold": float(st),
-                        "precision": float(precision),
-                        "recall": float(recall),
-                        "f1": float(f1),
-                    }
+            if not (sell_fixed < wt < bt):
+                continue
+            score = score_threshold_objective(
+                samples, watchlist_threshold=float(wt), objective=obj
+            )
+            if score > best["score"]:
+                best = {
+                    "score": float(score),
+                    "watchlist_threshold": float(wt),
+                    "buy_threshold": float(bt),
+                    "sell_threshold": sell_fixed,
+                    "objective": obj,
+                }
+                if obj == "f1_legacy":
+                    best["f1"] = float(score)
+                else:
+                    key = "portfolio_sharpe" if obj == "sharpe" else "portfolio_calmar"
+                    best[key] = float(score)
     return best
 
 
@@ -135,10 +145,7 @@ def optimize_confirmation_intervals(
     *,
     base_cfg: dict,
 ) -> dict[str, Any]:
-    """按市场状态搜索持续确认 persistence / 连续轮次。
-
-    强势市场允许更短持续；弱势更长。用样本 label 分布作代理优化 F1。
-    """
+    """按市场状态搜索持续确认 persistence / 连续轮次。"""
     from quant.config import load_gates_config
 
     gates = load_gates_config()
@@ -174,7 +181,11 @@ def optimize_confirmation_intervals(
         best_f1 = -1.0
         best_pair = (20.0, 3)
         for persist, runs in regime_grid.get(regime, [(20, 3)]):
-            wt = float(conf_base.get("watchlist_threshold", 65)) if isinstance(conf_base, dict) else 65
+            wt = (
+                float(conf_base.get("watchlist_threshold", 65))
+                if isinstance(conf_base, dict)
+                else 65
+            )
             pred = (totals >= wt).astype(int)
             from sklearn.metrics import f1_score
 
@@ -260,32 +271,42 @@ def optimize_bayesian(
     samples: list[ScoreSample],
     *,
     base: dict[str, float],
+    objective: str | None = None,
 ) -> dict[str, Any]:
-    """差分进化在连续空间搜索 (wt, bt, st)，最小化 -F1。"""
+    """差分进化搜索 (wt, bt)；sell 固定；目标由 ml_objective 决定。"""
     from scipy.optimize import differential_evolution
-    from sklearn.metrics import f1_score
 
+    obj = _resolve_objective(objective)
     if len(samples) < 10:
-        return optimize_thresholds_grid(samples, base=base)
+        return optimize_thresholds_grid(samples, base=base, objective=obj)
 
-    totals = np.array([s.total for s in samples], dtype=float)
-    y = _labels(samples)
+    sell_fixed = float(base["sell_threshold"])
 
-    def objective(params: np.ndarray) -> float:
-        wt, bt, st = params
-        if not (30 <= st < wt < bt <= 95):
-            return 1.0
-        pred = ((totals >= wt) & (totals >= bt * 0.98)).astype(int)
-        return -f1_score(y, pred, zero_division=0)
+    def loss(params: np.ndarray) -> float:
+        wt, bt = params
+        if not (sell_fixed < wt < bt <= 95):
+            return 1e9
+        score = score_threshold_objective(
+            samples, watchlist_threshold=float(wt), objective=obj
+        )
+        return -score
 
-    bounds = [(55, 85), (65, 92), (30, 55)]
-    res = differential_evolution(objective, bounds, seed=42, maxiter=40, polish=True)
-    wt, bt, st = res.x
-    pred = ((totals >= wt) & (totals >= bt * 0.98)).astype(int)
-    return {
+    bounds = [(55, 85), (65, 92)]
+    res = differential_evolution(loss, bounds, seed=42, maxiter=40, polish=True)
+    wt, bt = res.x
+    if not (sell_fixed < wt < bt):
+        bt = max(wt + 1.0, float(base["buy_threshold"]))
+    score = score_threshold_objective(
+        samples, watchlist_threshold=float(wt), objective=obj
+    )
+    out: dict[str, Any] = {
         "watchlist_threshold": round(float(wt), 2),
         "buy_threshold": round(float(bt), 2),
-        "sell_threshold": round(float(st), 2),
-        "f1": float(f1_score(y, pred, zero_division=0)),
+        "sell_threshold": sell_fixed,
+        "score": float(score),
+        "objective": obj,
         "method_detail": "scipy differential_evolution",
     }
+    if obj == "f1_legacy":
+        out["f1"] = float(score)
+    return out

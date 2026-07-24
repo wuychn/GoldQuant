@@ -14,7 +14,7 @@ from quant.gates.rules import (
     position_limits,
 )
 from quant.scoring.context import ScoreContext
-from quant.scoring.engine import ScoringEngine
+from quant.scoring.timing import TimingScorer
 from quant.scoring.models import StockScore
 from quant.signals.models import TradeSignal
 from quant.store.intraday_fund_track import record_watchlist_fund_snapshots
@@ -177,7 +177,7 @@ def generate_buy_signals(ctx: ScoreContext, *, mode: str) -> list[TradeSignal]:
     buy_cfg = (load_gates_config().get("buy") or {}).get(
         "during_market" if mode == "during_market" else "pre_market"
     ) or {}
-    engine = ScoringEngine()
+    engine = TimingScorer()
     base_threshold = float(engine.config.get("buy_threshold", 72))
     buy_threshold = effective_buy_threshold(base_threshold, ctx.payload, buy_cfg)
 
@@ -218,10 +218,26 @@ def generate_buy_signals(ctx: ScoreContext, *, mode: str) -> list[TradeSignal]:
         ctx,
     )
 
+    from quant.portfolio.constraints import check_concentration_constraints
+    from quant.store.state import get_holdings, get_total_assets
+
+    holdings = get_holdings()
+    total_assets = get_total_assets()
+
     signals: list[TradeSignal] = []
     for c in top:
         qty = qty_map.get(c.code, 0)
         if qty < 100:
+            continue
+        proposed_value = c.price * qty
+        ok_conc, conc_reason = check_concentration_constraints(
+            c.stock,
+            ctx,
+            holdings=holdings,
+            proposed_value=proposed_value,
+            total_assets=total_assets,
+        )
+        if not ok_conc:
             continue
         signals.append(
             TradeSignal(

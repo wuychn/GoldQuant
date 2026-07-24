@@ -22,9 +22,7 @@ from quant.execution.executor import ExecutedTrade, execute_signals
 from quant.narrative.during_market_push import build_during_market_push
 from quant.narrative.engine_brief import build_engine_brief
 from quant.narrative.stock_lines import (
-    build_watchlist_human_reason,
     build_watchlist_push_section,
-    refresh_merged_watchlist_reasons,
 )
 from quant.narrative.llm import call_llm
 from quant.narrative.prompts import (
@@ -36,7 +34,6 @@ from quant.narrative.prompts import (
 )
 from quant.pool.builder import build_candidates
 from quant.scoring.theme_tracker import update_concept_tracker_state
-from quant.pool.ths_rank_util import stock_ths_rank_tags
 from quant.narrative.push_sanitize import sanitize_feishu_body
 from quant.push.feishu import get_token, send_msg
 from quant.push.format import format_push_message
@@ -55,18 +52,8 @@ from quant.store.state import (
     save_optional,
     write_news_summary,
 )
-from quant.store.observe_pool import (
-    supplement_observe_scores,
-    update_observe_pool_evening,
-    watchlist_observe_max_days,
-)
-from quant.store.watchlist import (
-    apply_watchlist_fail_streak,
-    index_enriched_watchlist,
-    merge_watchlist_evening,
-    supplement_retained_watchlist_scores,
-    watchlist_fail_streak_limit,
-)
+from quant.store.observe_pool import watchlist_observe_max_days
+from quant.store.watchlist import index_enriched_watchlist, watchlist_fail_streak_limit
 
 _MODE_LABELS = {
     "news": "新闻聚焦",
@@ -81,14 +68,6 @@ def _prepare_payload(raw: dict, *, mode: str = "") -> dict:
     from app.utils.quant_test_trim import trim_quant_payload
 
     return trim_quant_payload(merge_payload_holdings(unwrap_payload(raw)))
-
-
-def _score_in_main_wave(score) -> bool:
-    """评分对象的 main_wave 维度是否判定为「主升波段」（硬门禁依据）。"""
-    for d in getattr(score, "dimensions", []) or []:
-        if getattr(d, "name", "") == "main_wave":
-            return bool(d.detail.get("主升波段"))
-    return False
 
 
 def _build_operation_section(
@@ -127,137 +106,40 @@ def _build_operation_section(
 
 def _update_watchlist_evening(ctx: ScoreContext) -> tuple[list[dict], list[dict], str, list]:
     """晚间复盘：达标写入自选；连续 N 日不达标移观察池；观察池 nightly 评分。"""
+    from quant.pool.evening_watchlist import update_watchlist_evening_core
+    from quant.scoring.tech_indicators import quote_last_price
+
     scope = "post_market_evening"
     fail_limit = watchlist_fail_streak_limit()
     observe_limit = watchlist_observe_max_days()
-    log_progress(scope, "合并三来源候选")
-    engine = ScoringEngine()
-    candidates = build_candidates(ctx.payload)
-    log_progress(scope, "候选池评分", detail=f"共 {len(candidates)} 只")
-    by_code = {str(c.get("股票代码", "")).strip(): c for c in candidates}
-    scores = engine.apply_threshold(
-        engine.score_many(ctx, candidates),
-        kind="watchlist",
-    )
-    passed = [s for s in scores if s.passed_threshold]
-    # B 硬门禁：加自选强制要求主升浪（主升波段=True）；开关关则仅靠软权重（A）
-    require_main_wave = bool(engine.config.get("watchlist_require_main_wave", False))
-    if require_main_wave:
-        gated = [s for s in passed if _score_in_main_wave(s)]
-        dropped_n = len(passed) - len(gated)
-        passed = gated
-        if dropped_n:
-            log_progress(scope, "硬门禁过滤非主升浪", detail=f"剔除 {dropped_n} 只")
-    passed.sort(key=lambda x: x.total, reverse=True)
-    log_progress(scope, "评分完成", detail=f"达标 {len(passed)}/{len(scores)} 只")
-
-    passed_rows: list[dict] = []
-    for s in passed:
-        cand = by_code.get(s.code, {})
-        row = {
-            "股票代码": s.code,
-            "股票名称": s.name,
-            "战法": STRATEGY_NAME,
-            "评分": round(s.total, 2),
-            "加入自选原因": build_watchlist_human_reason(s, cand),
-        }
-        ths_tags = stock_ths_rank_tags(cand)
-        if ths_tags:
-            row["榜单标签"] = ths_tags
-        passed_rows.append(row)
 
     existing = get_optional()
     pre_existing_codes = {
         extract_stock_code(r) for r in existing if extract_stock_code(r)
     }
-    merged, added, _ = merge_watchlist_evening(existing, passed_rows)
-    score_by_code = {s.code: s for s in scores}
-    enriched_by_code = index_enriched_watchlist(ctx.payload)
-
     observe_existing = get_observe()
-    observe_scored = supplement_observe_scores(
-        ctx,
-        engine,
-        observe_existing,
-        scores=scores,
-        score_by_code=score_by_code,
-        enriched_by_code=enriched_by_code,
-    )
-    if observe_scored:
-        log_progress(scope, "补算观察池评分", detail=f"{observe_scored} 只")
 
-    retained_scored = supplement_retained_watchlist_scores(
+    result = update_watchlist_evening_core(
         ctx,
-        engine,
-        merged,
-        scores=scores,
-        score_by_code=score_by_code,
-        enriched_by_code=enriched_by_code,
+        existing_watchlist=existing,
+        existing_observe=observe_existing,
     )
-    if retained_scored:
-        log_progress(
-            scope,
-            "补算保留自选评分",
-            detail=f"{retained_scored} 只（未进候选池）",
-        )
-    base_threshold = float(engine.config.get("watchlist_threshold", 70))
-    # hysteresis：清退用下沿、观察池恢复（再进）用上沿；[exit,entry) 为死区
-    exit_threshold = float(engine.config.get("watchlist_exit_threshold", base_threshold))
-    entry_threshold = float(engine.config.get("watchlist_entry_threshold", base_threshold))
-    merged, to_observe = apply_watchlist_fail_streak(
-        merged,
-        score_by_code=score_by_code,
-        threshold=exit_threshold,
-        max_streak=fail_limit,
-    )
+    merged = result.watchlist
+    added = result.added
+    to_observe = result.moved_to_observe
+    restored = result.restored
+    purged = result.purged
+    scores = result.scores
 
-    observe_input = observe_existing + to_observe
-    remaining_observe, restored, purged = update_observe_pool_evening(
-        observe_input,
-        ctx=ctx,
-        engine=engine,
-        score_by_code=score_by_code,
-        enriched_by_code=enriched_by_code,
-        threshold=entry_threshold,
-        max_days=observe_limit,
-    )
     restored_new = [
         r for r in restored if extract_stock_code(r) not in pre_existing_codes
     ]
     restored_existing = [
         r for r in restored if extract_stock_code(r) in pre_existing_codes
     ]
-    # 恢复自选若与今晚新进候选（已在 merged）同代码，则并入主列表、不重复展示
-    merged_codes = {extract_stock_code(r) for r in merged if extract_stock_code(r)}
-    restored_kept: list[dict] = []
-    for r in restored:
-        c = extract_stock_code(r)
-        if not c or c in merged_codes:
-            continue
-        merged_codes.add(c)
-        restored_kept.append(r)
-        merged.append(r)
-    restored_existing = [
-        r for r in restored_kept if extract_stock_code(r) in pre_existing_codes
-    ]
-    restored_new = [
-        r for r in restored_kept if extract_stock_code(r) not in pre_existing_codes
-    ]
-    candidate_by_code = {**enriched_by_code, **by_code}
-    refresh_merged_watchlist_reasons(
-        merged,
-        score_by_code=score_by_code,
-        candidate_by_code=candidate_by_code,
-    )
-    merged.sort(
-        key=lambda r: (
-            -float(r.get("评分") or 0),
-            -float(r.get("动能分") or 0),
-            str(r.get("股票代码", "")),
-        )
-    )
+
     save_optional(merged, delta={"added": added, "removed": to_observe + purged})
-    save_observe(remaining_observe)
+    save_observe(result.observe_pool)
     log_progress(
         scope,
         "写入自选/观察池",
@@ -277,15 +159,16 @@ def _update_watchlist_evening(ctx: ScoreContext) -> tuple[list[dict], list[dict]
             "restored_from_observe": restored,
             "purged_from_observe": purged,
             "total": len(merged),
-            "observe_total": len(remaining_observe),
+            "observe_total": len(result.observe_pool),
             "fail_streak_limit": fail_limit,
             "observe_max_days": observe_limit,
         },
     )
 
-    # 价格区间过滤用：从候选 enrich 行取现价（晚间 merged 行无盘口）
-    from quant.scoring.tech_indicators import quote_last_price
-
+    enriched_by_code = index_enriched_watchlist(ctx.payload)
+    candidates = build_candidates(ctx.payload)
+    by_code = {str(c.get("股票代码", "")).strip(): c for c in candidates}
+    candidate_by_code = {**enriched_by_code, **by_code}
     price_by_code: dict[str, float] = {}
     for code, cand in candidate_by_code.items():
         if not isinstance(cand, dict):
@@ -339,6 +222,10 @@ def process_pre_market(raw: dict) -> str:
     payload = _prepare_payload(raw, mode=scope)
     ctx = ScoreContext.from_payload(payload, mode="pre_market")
 
+    from quant.scoring.regime import refresh_regime
+
+    refresh_regime(payload)
+
     log_progress(scope, "生成买卖信号（盘前不计三确认，仅落盘）")
     raw_buy, raw_sell, executable, audit = generate_confirmed_signals(ctx, mode="pre_market")
     brief = build_engine_brief(ctx, payload, mode="pre_market")
@@ -374,6 +261,10 @@ def process_during_market(raw: dict, *, timestamp: str = "") -> str:
     log_progress(scope, "开始盘中分析")
     payload = _prepare_payload(raw, mode=scope)
     ctx = ScoreContext.from_payload(payload, mode="during_market")
+
+    from quant.scoring.regime import refresh_regime
+
+    refresh_regime(payload)
 
     log_progress(scope, "生成买卖信号")
     raw_buy, raw_sell, executable, audit = generate_confirmed_signals(ctx, mode="during_market")

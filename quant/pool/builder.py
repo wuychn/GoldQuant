@@ -77,4 +77,7 @@ def build_candidates(payload: dict) -> list[dict]:
         if tags and not row.get("榜单标签"):
             row = {**row, "榜单标签": tags}
         out.append(row)
-    return out
+
+    from quant.pool.liquidity import filter_universe
+
+    return filter_universe(out)

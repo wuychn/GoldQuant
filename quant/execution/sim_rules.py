@@ -15,20 +15,32 @@ class TradeSimConfig:
     stamp_tax_rate: float = 0.0005
     transfer_fee_rate: float = 0.00001
     slippage_pct: float = 0.001
+    slippage_model: str = "fixed"  # fixed | vol_scaled | microstructure
+    slippage_max_pct: float = 0.005
+    partial_fill_enabled: bool = False
+    participation_rate: float = 0.1
     main_limit_pct: float = 9.9
     gem_limit_pct: float = 19.9
 
 
 def load_trade_sim_config() -> TradeSimConfig:
+    import os
+
     raw = (load_gates_config().get("trading") or {}).get("simulation") or {}
     if not isinstance(raw, dict):
         raw = {}
+    slip_override = os.environ.get("GOLDQUANT_BACKTEST_SLIP")
+    slippage_pct = float(slip_override) if slip_override else float(raw.get("slippage_pct", 0.001))
     return TradeSimConfig(
         commission_rate=float(raw.get("commission_rate", 0.0001)),
         min_commission=float(raw.get("min_commission", 5.0)),
         stamp_tax_rate=float(raw.get("stamp_tax_rate", 0.0005)),
         transfer_fee_rate=float(raw.get("transfer_fee_rate", 0.00001)),
-        slippage_pct=float(raw.get("slippage_pct", 0.001)),
+        slippage_pct=slippage_pct,
+        slippage_model=str(raw.get("slippage_model", "fixed")),
+        slippage_max_pct=float(raw.get("slippage_max_pct", 0.005)),
+        partial_fill_enabled=bool(raw.get("partial_fill_enabled", False)),
+        participation_rate=float(raw.get("participation_rate", 0.1)),
         main_limit_pct=float(raw.get("main_limit_pct", 9.9)),
         gem_limit_pct=float(raw.get("gem_limit_pct", 19.9)),
     )
@@ -55,11 +67,20 @@ def at_limit_up_down(stock: dict | None, code: str, *, side: str, cfg: TradeSimC
     return False
 
 
-def slip_price(price: float, *, side: str, cfg: TradeSimConfig) -> float:
-    slip = cfg.slippage_pct
-    if side == "buy":
-        return round(price * (1 + slip), 4)
-    return round(price * (1 - slip), 4)
+def slip_price(
+    price: float,
+    *,
+    side: str,
+    cfg: TradeSimConfig,
+    stock: dict | None = None,
+    code: str = "",
+    quantity: int = 0,
+) -> float:
+    from quant.execution.slippage import slip_price_with_context
+
+    return slip_price_with_context(
+        price, side=side, cfg=cfg, stock=stock, code=code, quantity=quantity
+    )
 
 
 def calc_commission(amount: float, cfg: TradeSimConfig) -> float:
@@ -109,8 +130,11 @@ def calc_buy_cost(
     quantity: int,
     code: str,
     cfg: TradeSimConfig,
+    stock: dict | None = None,
 ) -> BuyCostBreakdown:
-    fill = slip_price(signal_price, side="buy", cfg=cfg)
+    fill = slip_price(
+        signal_price, side="buy", cfg=cfg, stock=stock, code=code, quantity=quantity
+    )
     amount = fill * quantity
     comm = calc_commission(amount, cfg)
     xfer = calc_transfer_fee(amount, code, cfg)
@@ -124,8 +148,11 @@ def calc_sell_proceeds(
     code: str,
     buy_price: float,
     cfg: TradeSimConfig,
+    stock: dict | None = None,
 ) -> SellProceedsBreakdown:
-    fill = slip_price(signal_price, side="sell", cfg=cfg)
+    fill = slip_price(
+        signal_price, side="sell", cfg=cfg, stock=stock, code=code, quantity=quantity
+    )
     amount = fill * quantity
     comm = calc_commission(amount, cfg)
     tax = calc_stamp_tax(amount, side="sell", cfg=cfg)

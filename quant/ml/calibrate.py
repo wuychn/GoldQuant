@@ -144,7 +144,10 @@ def _calibrate_weights_and_thresholds(
     if wopt.get("note"):
         notes.append(str(wopt["note"]))
 
-    gopt = optimize_thresholds_grid(samples, base=base_th)
+    from quant.config import load_quant_config
+
+    objective = str((load_quant_config().get("research") or {}).get("ml_objective", "sharpe"))
+    gopt = optimize_thresholds_grid(samples, base=base_th, objective=objective)
     thresholds = {
         "watchlist_threshold": gopt["watchlist_threshold"],
         "buy_threshold": gopt["buy_threshold"],
@@ -237,14 +240,30 @@ def calibrate(
     dim_keys = _dim_keys(cfg)
     base_w = _base_weights(cfg)
 
+    from quant.config import load_quant_config
+
+    objective = str((load_quant_config().get("research") or {}).get("ml_objective", "sharpe"))
+
     if resolved == "grid":
-        opt = optimize_thresholds_grid(samples, base=base_th)
+        opt = optimize_thresholds_grid(samples, base=base_th, objective=objective)
         result.thresholds = {
             "watchlist_threshold": opt["watchlist_threshold"],
             "buy_threshold": opt["buy_threshold"],
             "sell_threshold": opt["sell_threshold"],
         }
-        result.metrics = {k: opt[k] for k in ("f1", "precision", "recall", "score") if k in opt}
+        result.metrics = {
+            k: opt[k]
+            for k in (
+                "f1",
+                "precision",
+                "recall",
+                "score",
+                "portfolio_sharpe",
+                "portfolio_calmar",
+                "objective",
+            )
+            if k in opt
+        }
     elif resolved in ("linear", "lightgbm"):
         weights, thresholds, metrics, notes = _calibrate_weights_and_thresholds(
             samples,
@@ -258,13 +277,16 @@ def calibrate(
         result.metrics = {**result.metrics, **metrics}
         result.notes.extend(notes)
     elif resolved == "bayesian":
-        opt = optimize_bayesian(samples, base=base_th)
+        opt = optimize_bayesian(samples, base=base_th, objective=objective)
         result.thresholds = {
             "watchlist_threshold": opt["watchlist_threshold"],
             "buy_threshold": opt["buy_threshold"],
             "sell_threshold": opt["sell_threshold"],
         }
-        result.metrics = {k: opt.get(k) for k in ("f1", "method_detail")}
+        result.metrics = {
+            k: opt.get(k)
+            for k in ("f1", "method_detail", "score", "objective", "portfolio_sharpe")
+        }
     else:
         raise ValueError(
             f"未知校准方法: {method}，可选 grid|linear|lightgbm|bayesian|auto"

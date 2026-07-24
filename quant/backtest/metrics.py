@@ -36,6 +36,14 @@ def compute_metrics(broker: SimBroker) -> dict[str, Any]:
     end_eq = curve[-1]["equity"] if curve else start_eq
     total_return = (end_eq - start_eq) / start_eq if start_eq else 0.0
 
+    daily_returns: list[float] = []
+    prev_eq = start_eq
+    for pt in curve:
+        eq = float(pt["equity"])
+        if prev_eq > 0:
+            daily_returns.append((eq - prev_eq) / prev_eq)
+        prev_eq = eq
+
     rejected = sum(1 for t in broker.trades if t.rejected)
 
     return {
@@ -50,4 +58,5 @@ def compute_metrics(broker: SimBroker) -> dict[str, Any]:
         "total_return": round(total_return, 4),
         "final_equity": round(end_eq, 2),
         "rejected_orders": rejected,
+        "_daily_returns": daily_returns,
     }

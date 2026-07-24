@@ -7,6 +7,7 @@ import re
 from typing import Any
 
 from quant.config import load_gates_config
+from quant.constants import HOLD_SCORE_BUFFER
 from quant.gates.rules import check_buy_gates
 from quant.scoring.context import ScoreContext
 from quant.scoring.engine import ScoringEngine
@@ -293,7 +294,7 @@ def _holding_hold_reason(
     stop_loss = float(sell_cfg.get("stop_loss_pct", -5.0))
     if pnl_pct <= stop_loss * 0.6:
         return f"{name}：浮亏{pnl_pct:.1f}%，趋势未破暂止损"
-    if score.total >= sell_threshold + 8:
+    if score.total >= sell_threshold + HOLD_SCORE_BUFFER:
         return f"{name}：评分尚可，暂不减"
     return f"{name}：暂不减仓"
 

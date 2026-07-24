@@ -101,6 +101,8 @@ class ScoreContext:
 
     payload: dict
     mode: str = ""
+    # 截面中性化 alpha → 0–100；由 ScoringEngine.score_many 预填
+    neutral_alpha_scores: dict[str, float] | None = None
 
     @classmethod
     def from_payload(cls, payload: dict, *, mode: str = "") -> ScoreContext:

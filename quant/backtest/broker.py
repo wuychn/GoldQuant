@@ -83,7 +83,7 @@ class SimBroker:
         if qty < 100:
             return None
         buy_price = float(h.get("买入价", 0) or 0)
-        proceeds = calc_sell_proceeds(signal.price, qty, code, buy_price, sim)
+        proceeds = calc_sell_proceeds(signal.price, qty, code, buy_price, sim, stock=stock)
         self.cash += proceeds.net_proceeds
         remain = int(h.get("持仓股数", 0)) - qty
         if remain >= 100:
@@ -113,7 +113,7 @@ class SimBroker:
             rec = FillRecord(self.current_date, signal, 0, 0, 0, 0, rejected="涨停")
             self.trades.append(rec)
             return None
-        cost = calc_buy_cost(signal.price, signal.quantity, code, sim)
+        cost = calc_buy_cost(signal.price, signal.quantity, code, sim, stock=stock)
         if cost.total > self.cash + 1e-6:
             rec = FillRecord(self.current_date, signal, 0, 0, 0, 0, rejected="资金不足")
             self.trades.append(rec)
