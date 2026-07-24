@@ -6,11 +6,11 @@ import argparse
 import json
 
 from quant.backtest.broker import BrokerConfig
-from quant.r2.backtest.engine import run_r2_backtest
+from quant.backtest.engine import run_backtest
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="GoldQuant R2 历史回测")
+    parser = argparse.ArgumentParser(description="GoldQuant 历史回测")
     parser.add_argument("--from", dest="from_date", default=None)
     parser.add_argument("--to", dest="to_date", default=None)
     parser.add_argument("--cash", type=float, default=500_000.0)
@@ -19,7 +19,7 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = BrokerConfig(initial_cash=args.cash)
-    result = run_r2_backtest(
+    result = run_backtest(
         from_date=args.from_date,
         to_date=args.to_date,
         broker_cfg=cfg,
@@ -30,7 +30,7 @@ def main() -> None:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return
 
-    print("=== GoldQuant R2 回测报告 ===")
+    print("=== GoldQuant 回测报告 ===")
     for k, v in result.items():
         print(f"{k}: {v}")
 

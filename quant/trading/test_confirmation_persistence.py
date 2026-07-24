@@ -186,7 +186,7 @@ class ApplyPersistenceFlowTests(unittest.TestCase):
             patch.object(mod, "cn_date_str", return_value="2026-06-11"),
             patch.object(mod, "resolve_payload_holdings", return_value=[{"股票代码": "600498"}]),
             patch.object(mod, "confirmation_config", return_value=_day_latch_conf(verify_before_execute=True)),
-            patch("quant.r2.signals.verify.verify_sell_signal_still_valid", return_value=True),
+            patch("quant.signals.verify.verify_sell_signal_still_valid", return_value=True),
         ):
             ctx = ScoreContext.from_payload({}, mode="during_market")
             executable, _ = mod.apply_three_confirmations([sig], ctx, scope_action="卖出")

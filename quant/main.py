@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A 股短线量化机器人 CLI（R2）。"""
+"""A 股短线量化机器人 CLI。"""
 
 import os
 import sys
@@ -16,6 +16,29 @@ from quant.progress_log import configure_progress_logging
 from quant.timeutil import cn_datetime_str
 
 
+def _run_validate(argv: list[str]) -> None:
+    from quant.backtest.validate import run_validation
+
+    fr = argv[2] if len(argv) > 2 else None
+    to = argv[3] if len(argv) > 3 else None
+    print(run_validation(from_date=fr, to_date=to))
+
+
+def _run_ml_etl(argv: list[str]) -> None:
+    from quant.ml.etl import run_etl
+
+    fr = argv[2] if len(argv) > 2 else None
+    to = argv[3] if len(argv) > 3 else None
+    print(run_etl(from_date=fr, to_date=to))
+
+
+def _run_ml_train() -> None:
+    from quant.ml.train import train_sector_fade, train_stock_rank
+
+    print(train_stock_rank())
+    print(train_sector_fade())
+
+
 def main():
     configure_progress_logging()
     if len(sys.argv) < 2:
@@ -23,7 +46,7 @@ def main():
         print(
             "可用: news | pre_market | during_market | post_market_lunch | "
             "post_market_evening | prefetch_concepts | industry_aliases_draft | "
-            "r2_validate | r2_ml_etl | r2_ml_train"
+            "validate | ml_etl | ml_train"
         )
         sys.exit(1)
     mode = sys.argv[1]
@@ -42,27 +65,16 @@ def main():
         n_jbxx = prefetch_optional_holding_jbxx()
         print(f"预取完成：问财概念 {n_concepts} 只，基本信息 {n_jbxx} 只")
         return
-    if mode == "r2_validate":
-        from quant.r2.backtest.validate import run_validation
-
-        fr = sys.argv[2] if len(sys.argv) > 2 else None
-        to = sys.argv[3] if len(sys.argv) > 3 else None
-        print(run_validation(from_date=fr, to_date=to))
+    if mode in ("validate", "r2_validate"):
+        _run_validate(sys.argv)
         return
-    if mode == "r2_ml_etl":
-        from quant.r2.ml.etl import run_etl
-
-        fr = sys.argv[2] if len(sys.argv) > 2 else None
-        to = sys.argv[3] if len(sys.argv) > 3 else None
-        print(run_etl(from_date=fr, to_date=to))
+    if mode in ("ml_etl", "r2_ml_etl"):
+        _run_ml_etl(sys.argv)
         return
-    if mode == "r2_ml_train":
-        from quant.r2.ml.train import train_sector_fade, train_stock_rank
-
-        print(train_stock_rank())
-        print(train_sector_fade())
+    if mode in ("ml_train", "r2_ml_train"):
+        _run_ml_train()
         return
-    from quant.r2.orchestrator import run_mode
+    from quant.orchestrator import run_mode
 
     run_mode(mode, cn_datetime_str())
 

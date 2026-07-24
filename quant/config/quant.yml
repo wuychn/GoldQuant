@@ -30,6 +30,93 @@ scoring:
     include_ths_rank_pool: true  # 同花顺形态榜（创新高/持续上涨/持续放量/量价齐升）
 
 # -----------------------------------------------------------------------------
+# regime / sector / pool — 决策内核（环境→板块→双池）
+# -----------------------------------------------------------------------------
+regime:
+  strong_zt_min: 60
+  weak_zt_max: 29
+  strong_index_chg: 0.5
+
+sector:
+  board_top_n: 10
+  use_ak_breadth: true
+  breadth_cache:
+    allow_live_ak: true
+    max_workers: 4
+    request_delay_sec: 0.15
+  lifecycle:
+    sprout_max_days: 2
+    fade_out_of_rank_days: 2
+  factors:
+    weights:
+      rs: 0.25
+      fund: 0.25
+      breadth: 0.20
+      persistence: 0.15
+      rank: 0.15
+    eligible_min: 55
+    ban_max: 35
+  defensive_names:
+    - 银行
+    - 证券
+    - 保险
+    - 保险及其他
+    - 煤炭
+    - 公用事业
+
+pool:
+  tracking_max: 50
+  combat_max_strong: 12
+  combat_max_neutral: 10
+  combat_max_weak: 0
+  tracking_min_days_before_combat: 1
+  promote_min_structure_score: 65
+  tracking_min_alpha: 55
+  promote_min_alpha: 65
+
+stock_factors:
+  weights:
+    structure: 0.45
+    rs_index: 0.20
+    rs_sector: 0.20
+    momentum: 0.15
+
+entry:
+  enabled: true
+  confirmation: true
+
+exit:
+  stop_loss_pct: 7.0
+  trailing_profit_pct: 5.0
+  trailing_drop_pct: 4.0
+
+ml:
+  mode: gate
+  min_prob: 0.52
+  model_stock_rank: stock_rank.lgb
+  model_sector_fade: sector_fade.lgb
+
+backtest:
+  initial_cash: 500000
+
+portfolio:
+  default_assets: 500000
+  per_stock_max_pct: 0.18
+  risk_budget_pct: 0.90
+
+risk:
+  enabled: true
+  max_deploy_pct: 0.95
+  max_single_name_pct: 0.20
+  max_sector_pct: 0.35
+  max_drawdown_halt_pct: 15
+
+research:
+  enabled: true
+  pool_research_limit: 4
+  prefetch_ak_on_evening: true
+
+# -----------------------------------------------------------------------------
 # gates — 硬门禁 + 战法参数 + 三确认（不可被 LLM 修改）
 # -----------------------------------------------------------------------------
 gates:

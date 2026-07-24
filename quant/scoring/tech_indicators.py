@@ -97,10 +97,28 @@ def quote_avg_price(stock: dict) -> float | None:
 
 
 def quote_change_pct(stock: dict) -> float | None:
-    for k in ("涨幅", "涨跌幅", "change_pct"):
-        f = to_float(_pk_dict(stock).get(k))
+    """当日涨跌幅(%)：优先 涨跌幅，其次由 最新/昨收 推算（避免误读陈旧 涨幅 字段）。"""
+    pk = _pk_dict(stock)
+    last = quote_last_price(stock)
+    prev = to_float(pk.get("昨收") or pk.get("昨收价") or pk.get("前收盘"))
+    computed: float | None = None
+    if last and prev and prev > 0:
+        computed = (last - prev) / prev * 100
+
+    for k in ("涨跌幅", "change_pct"):
+        f = to_float(pk.get(k))
         if f is not None:
+            if computed is not None and abs(f - computed) > 2.0:
+                return round(computed, 2)
             return f
+
+    f = to_float(pk.get("涨幅"))
+    if f is not None:
+        if computed is not None and abs(f - computed) > 2.0:
+            return round(computed, 2)
+        return f
+    if computed is not None:
+        return round(computed, 2)
     return None
 
 
@@ -220,7 +238,7 @@ def hist_change_pct(row: dict) -> float | None:
 
 
 def stock_daily_change_pct(stock: dict) -> float | None:
-    """个股当日涨跌幅(%)：盘口优先，否则取历史行情最近一条（缺失则为 None）。"""
+    """个股当日涨跌幅(%)：盘口优先；历史 K 仅当最近一根为当日时才用。"""
     chg = quote_change_pct(stock)
     if chg is not None:
         return chg
@@ -228,7 +246,11 @@ def stock_daily_change_pct(stock: dict) -> float | None:
     if isinstance(hist, list) and hist:
         last = hist[-1]
         if isinstance(last, dict):
-            return metric_from_dict(last, "涨跌幅", "pct_chg", "涨跌")
+            ds = str(last.get("日期") or last.get("date") or "")[:10]
+            from quant.timeutil import cn_date_str
+
+            if ds == cn_date_str():
+                return metric_from_dict(last, "涨跌幅", "pct_chg", "涨跌")
     return None
 
 

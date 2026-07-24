@@ -151,8 +151,8 @@ def _job_weekly_backtest(_settings: Settings) -> None:
 
 
 def _job_weekly_ml(_settings: Settings) -> None:
-    _invoke_quant_cli("r2_ml_etl")
-    _invoke_quant_cli("r2_ml_train")
+    _invoke_quant_cli("ml_etl")
+    _invoke_quant_cli("ml_train")
 
 
 def build_quant_scheduler(settings: Settings) -> BackgroundScheduler | None:

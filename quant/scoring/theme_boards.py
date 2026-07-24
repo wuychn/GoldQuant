@@ -25,7 +25,7 @@ def normalize_industry_board_row(row: dict[str, Any]) -> dict[str, Any]:
         "净额": net,
         "题材来源": "行业",
     }
-    for k in ("序号", "领涨股", "领涨股-涨跌幅", "当前价"):
+    for k in ("序号", "领涨股", "领涨股-涨跌幅", "当前价", "上涨家数", "下跌家数", "公司家数"):
         if k in row:
             out[k] = row[k]
     return out

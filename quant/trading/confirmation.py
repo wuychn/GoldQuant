@@ -378,7 +378,7 @@ def _try_execute(
         return None, "累计确认已达标，等待14:30后执行"
 
     if sig.action == "买入" and conf.get("verify_before_execute") and ctx is not None:
-        from quant.r2.signals.verify import verify_buy_signal_still_valid
+        from quant.signals.verify import verify_buy_signal_still_valid
 
         if not verify_buy_signal_still_valid(
             sig.code,
@@ -389,7 +389,7 @@ def _try_execute(
             return None, "累计确认已达标但买点已失效，暂不成交"
 
     if sig.action == "卖出" and conf.get("verify_before_execute") and ctx is not None:
-        from quant.r2.signals.verify import verify_sell_signal_still_valid
+        from quant.signals.verify import verify_sell_signal_still_valid
 
         if not verify_sell_signal_still_valid(sig.code, ctx, signal_kind=kind):
             return None, "累计确认已达标但卖点已失效，暂不成交"

@@ -1,6 +1,6 @@
 # GoldQuant
 
-A 股短线量化辅助系统：**FastAPI 数据聚合** + **R2 决策内核（环境→板块→双池→买卖）** + **LLM 复盘** + **R2 ML**。
+A 股短线量化辅助系统：**FastAPI 数据聚合** + **决策内核（环境→板块→双池→买卖）** + **LLM 复盘** + **ML**。
 
 > 本仓库仅做数据聚合与模拟交易辅助，**不构成投资建议**。行情来自 AKShare / 东财 / 同花顺等第三方，存在延迟、字段变更或访问失败的可能。
 
@@ -16,11 +16,11 @@ A 股短线量化辅助系统：**FastAPI 数据聚合** + **R2 决策内核（�
                             │ HTTP
 ┌───────────────────────────▼─────────────────────────────────┐
 │  quant/  决策机器人（python -m quant <mode>）                 │
-│  quant/r2/  R2 内核 → 模拟成交 → LLM 叙述                   │
+│  orchestrator → 模拟成交 → LLM 叙述                          │
 └───────────────────────────┬─────────────────────────────────┘
                             │ 离线
 ┌───────────────────────────▼─────────────────────────────────┐
-│  quant/r2/ml  ETL + 训练 + gate（~/.quant/ml/）               │
+│  quant/ml  ETL + 训练 + gate（~/.quant/ml/）                 │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -45,9 +45,16 @@ GoldQuant/
 │       └── ...                 # 其他行情/热度接口
 ├── quant/
 │   ├── main.py                 # CLI 入口
-│   ├── r2/                     # R2 决策内核（regime/sector/池/信号/ML/回测）
-│   ├── candidates/             # API 候选 enrich（非 R2 作战池）
-│   ├── config/                 # quant.yml / industry_aliases.yml；R2 见 r2/config/r2.yml
+│   ├── orchestrator.py         # 编排（regime/sector/池/信号）
+│   ├── pipeline/               # 各时段 phase
+│   ├── pool/                   # 跟踪池 + 作战池
+│   ├── sector/                 # 板块引擎
+│   ├── signals/                # 买卖信号
+│   ├── ml/                     # ETL + 训练 + runtime gate
+│   ├── io/                     # payload 解析 + 策略状态
+│   ├── domain/                 # Regime / PoolMember 等领域模型
+│   ├── candidates/             # API 候选 enrich
+│   ├── config/                 # quant.yml（含 regime/sector/pool/ml 等）
 │   ├── scoring/                # payload 解析、主题/别名（无 R1 评分引擎）
 │   ├── strategy/               # 主升浪/分时战法
 │   ├── trading/                # 三确认 + sell_policy + TradeSignal

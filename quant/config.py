@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import copy
 import re
+from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
+from typing import Iterator
 
 import yaml
 
@@ -130,11 +132,49 @@ def load_push_config() -> dict:
     return copy.deepcopy(load_quant_config().get("push") or {})
 
 
+_STRATEGY_KEYS = ("regime", "sector", "pool", "entry", "exit", "ml", "backtest", "portfolio", "risk", "research")
+
+_runtime_r2_override: dict | None = None
+
+
+@lru_cache(maxsize=1)
+def _load_r2_config_base() -> dict:
+    """策略决策配置（regime/sector/双池/exit/ml/backtest），来自 quant.yml。"""
+    from quant.store.paths import config_file, ensure_layout
+
+    ensure_layout()
+    cfg = load_quant_config()
+    out = {k: copy.deepcopy(cfg.get(k) or {}) for k in _STRATEGY_KEYS}
+    legacy = config_file("r2.yml")
+    if legacy.is_file():
+        _deep_merge(out, _load_yaml(legacy))
+    return out
+
+
+def load_r2_config() -> dict:
+    if _runtime_r2_override is not None:
+        return _runtime_r2_override
+    return _load_r2_config_base()
+
+
+@contextmanager
+def override_r2_config(cfg: dict) -> Iterator[None]:
+    """回测/验证时注入临时 R2 配置（覆盖所有 `from quant.config import load_r2_config` 引用）。"""
+    global _runtime_r2_override
+    prev = _runtime_r2_override
+    _runtime_r2_override = cfg
+    try:
+        yield
+    finally:
+        _runtime_r2_override = prev
+
+
 def reload_config_cache() -> None:
     load_quant_config.cache_clear()
     load_scoring_config.cache_clear()
     load_gates_config.cache_clear()
     load_push_config.cache_clear()
+    _load_r2_config_base.cache_clear()
 
 
 def trading_time_checks_enabled() -> bool:

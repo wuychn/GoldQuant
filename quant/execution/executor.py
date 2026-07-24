@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from quant.io.quotes import build_stock_by_code
+from quant.scoring.context import ScoreContext
 from quant.execution.sim_rules import (
     at_limit_up_down,
     calc_buy_cost,
@@ -27,11 +29,13 @@ from quant.store.state import (
     compute_holdings_market_value,
     get_cash,
     get_holdings,
+    get_total_assets,
     holding_codes_bought_today,
     merge_holdings_by_code,
     save_account,
     save_holdings,
 )
+from quant.gates.rules import active_holding_count, position_limits
 from quant.timeutil import cn_date_str, cn_datetime_str, cn_time_str
 from quant.trading.sell_policy import sell_requires_late_session
 from quant.trading_hours import is_a_share_continuous_auction_window, is_late_session_for_trend_sell
@@ -84,7 +88,7 @@ def execute_signals(
         return [], {}
 
     sim = load_trade_sim_config()
-    quotes = _stock_map(payload)
+    quotes = build_stock_by_code(payload or {})
     cash = max(0.0, get_cash())
     holdings = merge_holdings_by_code(get_holdings())
     t1_locked = holding_codes_bought_today(holdings)
@@ -150,6 +154,12 @@ def execute_signals(
 
     # --- 第二阶段：买入 ---
     held_codes = {str(h.get("股票代码", "")).strip() for h in holdings}
+    ctx = ScoreContext.from_payload(payload) if payload else None
+    limits = position_limits(ctx) if ctx else {"max_stocks": 3, "total_pct": 50.0}
+    max_stocks = int(limits.get("max_stocks", 3))
+    total_assets = get_total_assets()
+    total_cap = total_assets * float(limits.get("total_pct", 50)) / 100 if total_assets > 0 else 0.0
+
     for signal in signals:
         if signal.action != "买入":
             continue
@@ -159,6 +169,16 @@ def execute_signals(
             continue
         if signal.code in held_codes:
             continue
+        if active_holding_count(holdings) >= max_stocks:
+            print(f"买入跳过 已达最大持仓：{signal.name}({signal.code})")
+            rejected[signal.code] = f"已达最大持仓{max_stocks}只"
+            continue
+        if total_cap > 0:
+            current_mv = compute_holdings_market_value(holdings)
+            if current_mv + signal.price * signal.quantity > total_cap + 1e-6:
+                print(f"买入跳过 超总仓位上限：{signal.name}({signal.code})")
+                rejected[signal.code] = "超总仓位上限"
+                continue
         stock = quotes.get(signal.code) or {}
         if at_limit_up_down(stock, signal.code, side="buy", cfg=sim):
             print(f"买入跳过 涨停：{signal.name}({signal.code})")
