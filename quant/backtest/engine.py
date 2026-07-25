@@ -73,6 +73,83 @@ def _stock_map(payload: dict) -> dict[str, dict]:
     return m
 
 
+# payload 中承载个股行情的键；用于把 mem/broker 里的 thin 行合并到快照 rich 行上
+PAYLOAD_STOCK_KEYS = (
+    "自选股",
+    "持仓股",
+    "同花顺人气榜",
+    "涨停候选",
+    "创新高",
+    "持续上涨",
+    "持续放量",
+    "量价齐升",
+    "_observe_enriched",
+)
+
+# 自选行里由晚间流程产生的元数据字段；合并时覆盖到 rich 行上，其余字段保留 rich 行
+WATCHLIST_META_KEYS = (
+    "评分",
+    "动能分",
+    "战法",
+    "加入自选原因",
+    "榜单标签",
+    "最后入选日期",
+    "未达标连续天数",
+)
+
+
+def index_payload_stocks(payload: dict) -> dict[str, dict]:
+    """按代码索引 payload 中所有承载行情的 rich 个股行。"""
+    from app.utils.common_util import extract_stock_code
+
+    out: dict[str, dict] = {}
+    for key in PAYLOAD_STOCK_KEYS:
+        for row in payload.get(key) or []:
+            if not isinstance(row, dict):
+                continue
+            code = extract_stock_code(row)
+            if code and code not in out:
+                out[code] = row
+    return out
+
+
+def enrich_holdings_with_payload(
+    holdings_rows: list[dict], payload: dict
+) -> list[dict]:
+    """把持仓 thin 行合并到 payload 同代码 rich 行上，保留持仓元数据。
+
+    broker/mem 持仓行只有 买入价/持仓股数/买入类型 等元数据，缺 历史行情/盘口/价格，
+    而 sell.py 依赖 payload['持仓股'] 提供行情来算止损/止盈/趋势破位。
+    不合并会导致回测中卖出信号拿不到价格、全部失效。
+    """
+    from app.utils.common_util import extract_stock_code
+
+    rich_by_code = index_payload_stocks(payload)
+    out: list[dict] = []
+    for h in holdings_rows:
+        code = extract_stock_code(h)
+        rich = rich_by_code.get(code) if code else None
+        if rich is None:
+            out.append(dict(h))
+            continue
+        base = dict(rich)
+        for k in (
+            "买入价",
+            "买入时间",
+            "买入类型",
+            "买入原因",
+            "买入日期",
+            "战法",
+            "持仓股数",
+            "股票代码",
+            "股票名称",
+        ):
+            if k in h:
+                base[k] = h[k]
+        out.append(base)
+    return out
+
+
 @contextmanager
 def _patch_runtime_state(
     broker: SimBroker,
@@ -159,6 +236,7 @@ def _make_close_provider(start_yyyymmdd: str | None, end_yyyymmdd: str | None):
                     period="daily",
                     start_date=start_yyyymmdd,
                     end_date=end_yyyymmdd,
+                    adjust="",  # 回测估值用不复权，与买入价同基准
                 )
             except Exception:
                 rows = None
@@ -231,7 +309,9 @@ def _run_intraday_replay(
             for snap_dt, payload in snapshots:
                 clock[0] = snap_dt
                 payload = dict(payload)
-                payload["持仓股"] = broker.holdings_rows()
+                payload["持仓股"] = enrich_holdings_with_payload(
+                    broker.holdings_rows(), payload
+                )
                 ctx = ScoreContext.from_payload(payload, mode="during_market")
                 stock_by_code = _stock_map(payload)
 

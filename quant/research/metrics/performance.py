@@ -19,8 +19,13 @@ def compute_extended_metrics(
     *,
     trading_days: int = 0,
     benchmark_return: float | None = None,
+    benchmark_symbol: str = "000300",
 ) -> dict[str, Any]:
-    """在基础指标上扩展 Sharpe/Sortino/Calmar/年化等。"""
+    """在基础指标上扩展 Sharpe/Sortino/Calmar/年化等。
+
+    ``benchmark_symbol`` 默认沪深300（000300）；传入 ``""`` 跳过基准对比。
+    ``benchmark_return`` 显式给定时刻直接用，否则按 equity 曲线日期拉取指数日线计算。
+    """
     base = _basic_metrics(broker)
     curve = broker.equity_curve
     if len(curve) < 2:
@@ -80,4 +85,16 @@ def compute_extended_metrics(
             else None,
         }
     )
+
+    # 基准对比：显式 benchmark_return 优先，否则按 equity 曲线拉取指数日线
+    if benchmark_return is not None:
+        base["benchmark_total_return"] = round(benchmark_return, 4)
+    elif benchmark_symbol:
+        from quant.research.metrics.benchmark import compute_benchmark_metrics
+
+        bm = compute_benchmark_metrics(broker, benchmark_symbol=benchmark_symbol, trading_days=trading_days)
+        # 用基准自身收益填 excess（若 benchmark 模块已算出 excess 则覆盖上面的 None）
+        base.update(bm)
+        if base.get("excess_return_vs_benchmark") is None and bm.get("benchmark_total_return") is not None:
+            base["excess_return_vs_benchmark"] = round(total_return - bm["benchmark_total_return"], 4)
     return base

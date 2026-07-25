@@ -9,7 +9,14 @@ from typing import Any
 from unittest.mock import patch
 
 from quant.backtest.broker import BrokerConfig, SimBroker
-from quant.backtest.engine import _make_close_provider, _patch_runtime_state, _snapshot_datetime
+from quant.backtest.engine import (
+    WATCHLIST_META_KEYS,
+    _make_close_provider,
+    _patch_runtime_state,
+    _snapshot_datetime,
+    enrich_holdings_with_payload,
+    index_payload_stocks,
+)
 from quant.execution.core import match_buy_order, match_sell_order
 from quant.pool.evening_watchlist import update_watchlist_evening_core
 from quant.portfolio.risk import PortfolioRiskState, check_drawdown_halt, update_peak
@@ -73,9 +80,37 @@ def _load_evening_payload(day_dir: Path) -> dict | None:
 
 
 def _inject_state(payload: dict, mem: MemoryPortfolioState) -> dict:
+    """把 mem 的自选/持仓注入 payload，同时保留快照里的 rich 行情数据。
+
+    mem.watchlist 存的是晚间流程产出的 thin 行（仅 评分/原因/战法 等元数据），
+    直接覆盖 payload['自选股'] 会让盘中买入评估拿不到 历史行情/盘口/价格，
+    导致 _evaluate_buy_candidate 全部返回 None、回测零成交。
+    这里改为：以快照中同代码的 rich 行为底，叠加自选元数据后注入。
+    持仓同理，避免 sell.py 算止损时拿不到行情。
+    """
+    from app.utils.common_util import extract_stock_code
+
+    rich_by_code = index_payload_stocks(payload)
+
+    merged_watchlist: list[dict] = []
+    for w in mem.watchlist:
+        code = extract_stock_code(w)
+        rich = rich_by_code.get(code) if code else None
+        if rich is None:
+            merged_watchlist.append(dict(w))
+            continue
+        base = dict(rich)
+        for k in WATCHLIST_META_KEYS:
+            if k in w:
+                base[k] = w[k]
+        base["股票代码"] = code
+        if w.get("股票名称"):
+            base["股票名称"] = w["股票名称"]
+        merged_watchlist.append(base)
+
     p = dict(payload)
-    p["自选股"] = list(mem.watchlist)
-    p["持仓股"] = mem.get_holdings()
+    p["自选股"] = merged_watchlist
+    p["持仓股"] = enrich_holdings_with_payload(mem.get_holdings(), payload)
     return p
 
 
@@ -197,7 +232,9 @@ def run_full_system_backtest(
                 for snap_dt, raw_payload in snapshots:
                     clock[0] = snap_dt
                     payload = _inject_state(raw_payload, mem)
-                    payload["持仓股"] = broker.holdings_rows()
+                    payload["持仓股"] = enrich_holdings_with_payload(
+                        broker.holdings_rows(), payload
+                    )
                     ctx = ScoreContext.from_payload(payload, mode="during_market")
                     refresh_regime(payload, date_str=d)
                     stock_by_code = _stock_map(payload)

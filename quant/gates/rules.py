@@ -187,6 +187,11 @@ def check_buy_gates(stock: dict, ctx: ScoreContext) -> GateReport:
     if not ok_liq:
         results.append(GateResult(False, "流动性", liq_reason))
 
+    from quant.data.suspension import is_suspended_from_row
+
+    if is_suspended_from_row(stock):
+        results.append(GateResult(False, "停牌", f"{code} 盘口无报价，疑似停牌"))
+
     global_report = check_global_gates(ctx)
     results.extend(global_report.results)
     return GateReport(results=results)

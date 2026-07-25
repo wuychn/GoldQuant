@@ -6,6 +6,7 @@ from datetime import date
 from typing import Any
 
 from quant.scoring.tech_indicators import hist_closes, hist_rows_sorted
+from quant.timeutil import cn_now
 
 
 def _hist_row_date(row: dict) -> str:
@@ -23,7 +24,25 @@ def parse_buy_date(holding: dict) -> date | None:
 
 
 def trading_days_since_buy(stock: dict, buy_date: date) -> int:
-    """买入日之后的历史行情 K 线根数（近似已持交易天数）。"""
+    """买入日之后的已持交易日数。
+
+    优先用交易日历（``tool_trade_date_hist_sina``）按 buy_date → 最后 K 线日计数，
+    避免依赖个股历史行情的完整性（停牌/数据缺失会让 K 线根数失真）。
+    「最后日」取自历史行情最后一根 K 线（回测中即快照日，实盘中即当日/最近交易日）；
+    历史行情缺失时回退到当前日历日。
+    """
+    last_date = _last_hist_date(stock)
+    today = last_date or cn_now().date()
+    try:
+        from quant.data.calendar import trading_days_since
+
+        n = trading_days_since(buy_date, today)
+        if n > 0:
+            return n
+        # 日历返回 0（buy_date >= today 或日历不可用）→ 走 K 线兜底
+    except Exception:
+        pass
+
     n = 0
     for row in hist_rows_sorted(stock.get("历史行情")):
         ds = _hist_row_date(row)
@@ -36,6 +55,19 @@ def trading_days_since_buy(stock: dict, buy_date: date) -> int:
         if d > buy_date:
             n += 1
     return n
+
+
+def _last_hist_date(stock: dict) -> date | None:
+    rows = hist_rows_sorted(stock.get("历史行情"))
+    if not rows:
+        return None
+    ds = _hist_row_date(rows[-1])
+    if len(ds) < 10:
+        return None
+    try:
+        return date.fromisoformat(ds)
+    except ValueError:
+        return None
 
 
 def _window_range_and_net(closes: list[float], window: int) -> tuple[float | None, float | None]:
