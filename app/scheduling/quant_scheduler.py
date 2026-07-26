@@ -1,7 +1,6 @@
-"""量化流水线定时任务：在服务启动后按配置触发 `python -m quant <mode>`。
+"""量化流水线定时任务：触发 r3 CLI（ops + 日决策）。
 
-交易日历与 `quant.orchestrator.pipeline_allowed_for_mode` 一致（`common_util.is_real_workday_cn`）。
-子进程调用 CLI，避免 fetch 失败时 `sys.exit` 拖垮 Web  worker。
+子进程调用 ``python -m quant <mode>``，避免拖垮 Web worker。
 """
 
 from __future__ import annotations
@@ -48,7 +47,6 @@ def _parse_hh_mm(s: str) -> tuple[int, int]:
     if ":" in t:
         a, b = t.split(":", 1)
         return int(a), int(b)
-    # 形如 0925 → 不推荐，支持纯小时 "9" → 9:00
     if len(t) <= 2:
         return int(t), 0
     if len(t) == 4 and t.isdigit():
@@ -63,8 +61,8 @@ def _parse_time_list_csv(s: str) -> list[tuple[int, int]]:
     return [_parse_hh_mm(p) for p in parts]
 
 
-def _invoke_quant_cli(mode: str) -> None:
-    cmd = [sys.executable, "-m", "quant", mode]
+def _invoke_quant_cli(mode: str, *extra: str) -> None:
+    cmd = [sys.executable, "-m", "quant", mode, *extra]
     logger.info("[quant-scheduler] 执行: cwd=%s %s", _PROJECT_ROOT, " ".join(cmd))
     env = os.environ.copy()
     env.setdefault("PYTHONIOENCODING", "utf-8")
@@ -85,9 +83,7 @@ def _invoke_quant_cli(mode: str) -> None:
         err_tail = (proc.stderr or proc.stdout or "").strip().splitlines()
         snippet = " | ".join(line.strip() for line in err_tail[-3:] if line.strip()) or "(无输出)"
         logger.error(
-            color_red(
-                f"[子进程异常退出] mode={mode} 退出码={proc.returncode} — {snippet}"
-            )
+            color_red(f"[子进程异常退出] mode={mode} 退出码={proc.returncode} — {snippet}")
         )
     else:
         logger.info("[quant-scheduler] 完成 mode=%s", mode)
@@ -121,37 +117,22 @@ def _job_post_market_evening(_settings: Settings) -> None:
     _invoke_quant_cli("post_market_evening")
 
 
+def _job_daily_decision(_settings: Settings) -> None:
+    """收盘后日决策 + 纸面撮合 + 推送。"""
+    if not is_real_workday_cn():
+        return
+    _invoke_quant_cli("daily_decision")
+
+
 def _job_prefetch_stock_concepts(_settings: Settings) -> None:
     if not _settings.QUANT_SCHED_PREFETCH_CONCEPTS_ENABLED:
         return
-    import asyncio
-
-    from app.services.stock_concept_cache import prefetch_optional_holding_concepts
-    from app.services.stock_jbxx_cache import prefetch_optional_holding_jbxx
-
-    try:
-        asyncio.run(prefetch_optional_holding_concepts())
-        prefetch_optional_holding_jbxx()
-    except Exception as e:
-        log_caught_error(logger, "[quant-scheduler] 预取个股静态数据", e)
-
-
-def _job_weekly_backtest(settings: Settings) -> None:
-    from quant.jobs.weekly_reports import run_weekly_backtest
-
-    run_weekly_backtest(settings)
-
-
-def _job_weekly_ml(settings: Settings) -> None:
-    from quant.jobs.weekly_reports import run_weekly_ml
-
-    run_weekly_ml(settings)
+    _invoke_quant_cli("prefetch_concepts")
 
 
 def build_quant_scheduler(settings: Settings) -> BackgroundScheduler | None:
-    """按 `Settings` 构建并注册任务；调用方需在 lifespan 内 `start()` / `shutdown()`。"""
     if not settings.QUANT_SCHEDULER_ENABLED:
-        logger.debug("[quant-scheduler] 已通过配置禁用 (QUANT_SCHEDULER_ENABLED=false)")
+        logger.debug("[quant-scheduler] 已禁用")
         return None
     try:
         tz = ZoneInfo(settings.QUANT_SCHED_TIMEZONE)
@@ -169,11 +150,7 @@ def build_quant_scheduler(settings: Settings) -> BackgroundScheduler | None:
     hour_spec = ",".join(str(h) for h in hours)
     sched.add_job(
         _job_news,
-        CronTrigger(
-            timezone=tz,
-            hour=hour_spec,
-            minute=settings.QUANT_SCHED_NEWS_MINUTE,
-        ),
+        CronTrigger(timezone=tz, hour=hour_spec, minute=settings.QUANT_SCHED_NEWS_MINUTE),
         args=[settings],
         id="quant_news",
         **defaults,
@@ -216,6 +193,19 @@ def build_quant_scheduler(settings: Settings) -> BackgroundScheduler | None:
         **defaults,
     )
 
+    # 收盘复盘后跑日决策（默认晚间任务后 30 分钟；可用配置覆盖则仍用 evening+0）
+    # 固定：evening 时间 + 35 分钟
+    from datetime import datetime, timedelta
+
+    base = datetime(2000, 1, 1, eh, em) + timedelta(minutes=35)
+    sched.add_job(
+        _job_daily_decision,
+        CronTrigger(timezone=tz, hour=base.hour, minute=base.minute),
+        args=[settings],
+        id="quant_daily_decision",
+        **defaults,
+    )
+
     if settings.QUANT_SCHED_PREFETCH_CONCEPTS_ENABLED:
         ch, cm = _parse_hh_mm(settings.QUANT_SCHED_PREFETCH_CONCEPTS_TIME)
         sched.add_job(
@@ -226,53 +216,10 @@ def build_quant_scheduler(settings: Settings) -> BackgroundScheduler | None:
             **defaults,
         )
 
-    if settings.QUANT_SCHED_WEEKLY_BACKTEST_ENABLED:
-        bh, bm = _parse_hh_mm(settings.QUANT_SCHED_WEEKLY_BACKTEST_TIME)
-        sched.add_job(
-            _job_weekly_backtest,
-            CronTrigger(timezone=tz, day_of_week="sat", hour=bh, minute=bm),
-            args=[settings],
-            id="quant_weekly_backtest",
-            **defaults,
-        )
-
-    if settings.QUANT_SCHED_WEEKLY_ML_ENABLED:
-        mh, mm = _parse_hh_mm(settings.QUANT_SCHED_WEEKLY_ML_TIME)
-        sched.add_job(
-            _job_weekly_ml,
-            CronTrigger(timezone=tz, day_of_week="sun", hour=mh, minute=mm),
-            args=[settings],
-            id="quant_weekly_ml",
-            **defaults,
-        )
-
-    n_during = len(during_times)
-    prefetch_note = ""
-    if settings.QUANT_SCHED_PREFETCH_CONCEPTS_ENABLED:
-        ch, cm = _parse_hh_mm(settings.QUANT_SCHED_PREFETCH_CONCEPTS_TIME)
-        prefetch_note = f", prefetch_concepts=%02d:%02d" % (ch, cm)
-    weekly_note = ""
-    if settings.QUANT_SCHED_WEEKLY_BACKTEST_ENABLED:
-        bh, bm = _parse_hh_mm(settings.QUANT_SCHED_WEEKLY_BACKTEST_TIME)
-        weekly_note += f", backtest=Sat {bh:02d}:{bm:02d}"
-    if settings.QUANT_SCHED_WEEKLY_ML_ENABLED:
-        mh, mm = _parse_hh_mm(settings.QUANT_SCHED_WEEKLY_ML_TIME)
-        weekly_note += f", ml=Sun {mh:02d}:{mm:02d}"
-    logger.debug(
-        "[quant-scheduler] 已注册: news(hours=%s @ :%02d), pre=%02d:%02d, during×%d, "
-        "lunch=%02d:%02d, evening=%02d:%02d%s%s, tz=%s",
-        hour_spec,
-        settings.QUANT_SCHED_NEWS_MINUTE,
-        ph,
-        pm,
-        n_during,
-        lh,
-        lm,
-        eh,
-        em,
-        prefetch_note,
-        weekly_note,
-        settings.QUANT_SCHED_TIMEZONE,
+    # 旧 weekly ML / 旧 backtest 已退役（改用 scripts/research + scripts/backtest）
+    logger.info(
+        "[quant-scheduler] r3 已注册: news / pre / during×%d / lunch / evening / daily_decision",
+        len(during_times),
     )
     return sched
 

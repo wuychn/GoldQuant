@@ -76,10 +76,21 @@ def execute_signals(
     signals: list[TradeSignal],
     *,
     payload: dict | None = None,
+    enforce_hours: bool = True,
+    enforce_late_session: bool = True,
+    allow_add: bool = False,
+    trade_date: str | None = None,
 ) -> tuple[list[ExecutedTrade], dict[str, str]]:
+    """撮合信号并写 state。
+
+    ``enforce_hours=False``：日终纸面批跑跳过连续竞价时段检查。
+    ``enforce_late_session=False``：跳过「非紧急卖须 14:30 后」限制（r3 日决策纸面用）。
+    ``allow_add=True``：已持仓允许加仓（均价合并）；默认 False 保持旧 orchestrator 行为。
+    ``trade_date``：覆盖成交归档日期（纸面可用决策日，默认今天）。
+    """
     if not signals:
         return [], {}
-    if not is_a_share_continuous_auction_window():
+    if enforce_hours and not is_a_share_continuous_auction_window():
         print("交易跳过：不在连续竞价时段或未启用时间豁免")
         return [], {}
 
@@ -90,7 +101,7 @@ def execute_signals(
     t1_locked = holding_codes_bought_today(holdings)
     sold_today = codes_sold_today()
     ts = cn_time_str()
-    date_str = cn_date_str()
+    date_str = trade_date or cn_date_str()
     executed: list[ExecutedTrade] = []
     rejected: dict[str, str] = {}  # code -> 未成交原因（供推送透出）
     idx_map = {str(h.get("股票代码", "")).strip(): i for i, h in enumerate(holdings)}
@@ -108,7 +119,11 @@ def execute_signals(
             rejected[signal.code] = "T+1当日买入不可卖"
             continue
         stock = quotes.get(signal.code) or holdings[i]
-        if _sell_requires_late_session(signal, stock, signal.code) and not is_late_session_for_trend_sell():
+        if (
+            enforce_late_session
+            and _sell_requires_late_session(signal, stock, signal.code)
+            and not is_late_session_for_trend_sell()
+        ):
             print(f"卖出跳过（等待14:30后执行）：{signal.name}({signal.code}) {signal.sell_type}")
             rejected[signal.code] = "等14:30后执行"
             continue
@@ -148,8 +163,9 @@ def execute_signals(
 
     holdings = [h for i, h in enumerate(holdings) if i not in to_remove]
 
-    # --- 第二阶段：买入 ---
+    # --- 第二阶段：买入 / 加仓 ---
     held_codes = {str(h.get("股票代码", "")).strip() for h in holdings}
+    idx_map = {str(h.get("股票代码", "")).strip(): i for i, h in enumerate(holdings)}
     for signal in signals:
         if signal.action != "买入":
             continue
@@ -157,7 +173,8 @@ def execute_signals(
             print(f"买入跳过 当日已卖：{signal.name}({signal.code})")
             rejected[signal.code] = "当日已卖不回补"
             continue
-        if signal.code in held_codes:
+        already = signal.code in held_codes
+        if already and not allow_add:
             continue
         stock = quotes.get(signal.code) or {}
         if at_limit_up_down(stock, signal.code, side="buy", cfg=sim):
@@ -173,19 +190,31 @@ def execute_signals(
             rejected[signal.code] = "资金不足"
             continue
         cash -= cost.total
-        holdings.append(
-            {
-                "股票代码": signal.code,
-                "股票名称": signal.name,
-                "买入价": cost.fill_price,
-                "买入时间": cn_datetime_str(),
-                "买入类型": signal.signal_kind or "",
-                "买入原因": signal.reason[:120],
-                "战法": signal.strategy,
-                "持仓股数": signal.quantity,
-            }
-        )
-        held_codes.add(signal.code)
+        if already:
+            i = idx_map[signal.code]
+            h = holdings[i]
+            old_q = int(h.get("持仓股数", 0) or 0)
+            old_p = float(h.get("买入价", 0) or 0)
+            new_q = old_q + signal.quantity
+            avg = (old_p * old_q + cost.fill_price * signal.quantity) / new_q if new_q else cost.fill_price
+            h["持仓股数"] = new_q
+            h["买入价"] = round(avg, 4)
+            h["买入原因"] = (signal.reason[:200] if signal.reason else h.get("买入原因", ""))
+            h.pop("战法", None)
+        else:
+            holdings.append(
+                {
+                    "股票代码": signal.code,
+                    "股票名称": signal.name,
+                    "买入价": cost.fill_price,
+                    "买入时间": cn_datetime_str(),
+                    "买入类型": signal.signal_kind or "",
+                    "买入原因": (signal.reason or "")[:200],
+                    "持仓股数": signal.quantity,
+                }
+            )
+            held_codes.add(signal.code)
+            idx_map[signal.code] = len(holdings) - 1
         executed.append(
             ExecutedTrade(
                 signal,

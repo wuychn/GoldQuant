@@ -43,24 +43,22 @@ GoldQuant/
 │   └── api/v1/endpoints/
 │       ├── quant_endpoint.py   # 量化五时段聚合接口（核心）
 │       └── ...                 # 其他行情/热度接口
-├── quant/                      # 量化决策机器人
-│   ├── orchestrator.py         # 五模式编排
-│   ├── config/                 # quant.yml（含 scoring + gates）/ industry_aliases.yml
-│   ├── scoring/                # 100 分制评分引擎
-│   ├── gates/                  # 硬门禁（T+1、熔断、标的池…）
-│   ├── signals/                # 买卖信号
-│   ├── execution/              # 模拟成交
-│   ├── narrative/              # LLM 叙述
+├── quant/                      # r3 量化核心
+│   ├── ops/                    # 日运维：新闻/盘前/盯盘/复盘 + 推送
+│   ├── decision/               # 日决策卡 + 纸面撮合
+│   ├── factors/ / portfolio2/ / backtest2/ / exit/
+│   ├── execution/              # 模拟成交（纸面账户）
 │   ├── push/                   # 飞书推送
-│   ├── ml/                     # ML 离线校准
-│   └── strategy.md             # 策略条文（人工维护）
-├── data/                       # 接口返回样例 JSON（离线调试）
+│   └── data/                   # 离线行情库读写
+├── scripts/decision|backtest|data|research/
+├── docs/R3_ARCHITECTURE.md     # 架构 / 指标 / 交易闭环（主文档）
+├── docs/R3_OPS.md              # 运维 CLI / 落盘 / 飞书
 ├── requirements.txt
-├── pyproject.toml
 └── README.md
 ```
 
-**运行时数据目录**（自动创建）：`~/.quant/`
+**运行时数据目录**（自动创建）：`~/.quant/`（报告在 `~/.quant/reports/`，纸面账户在 `~/.quant/paper_account/`）  
+架构与指标：[docs/R3_ARCHITECTURE.md](docs/R3_ARCHITECTURE.md) · 运维：[docs/R3_OPS.md](docs/R3_OPS.md)。
 
 可通过环境变量覆盖存储位置（解析优先级从高到低）：
 

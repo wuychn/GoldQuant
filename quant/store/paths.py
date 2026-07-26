@@ -15,10 +15,28 @@
 from __future__ import annotations
 
 import os
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
+from typing import Iterator
 
 from quant.timeutil import cn_now
+
+# 进程内临时覆盖（纸面账户 / 测试）；优先级高于 settings 与环境变量
+_quant_home_override: Path | None = None
+
+
+@contextmanager
+def override_quant_home(path: Path | str) -> Iterator[Path]:
+    """临时切换 ``quant_home()`` 根目录（用于 paper_account 隔离）。"""
+    global _quant_home_override
+    prev = _quant_home_override
+    root = Path(path).expanduser()
+    _quant_home_override = root
+    try:
+        yield root
+    finally:
+        _quant_home_override = prev
 
 
 def quant_home() -> Path:
@@ -26,13 +44,16 @@ def quant_home() -> Path:
 
     解析优先级（高 → 低）：
 
-    1. ``GOLDQUANT_QUANT_HOME_DIR`` —— 来自环境变量或 ``.env``（经 ``Settings`` 读取）；
-    2. ``QUANT_HOME`` —— 环境变量，便于 shell 临时覆盖、无需 ``GOLDQUANT_`` 前缀；
-    3. 用户主目录下 ``~/.quant``（默认）。
+    1. ``override_quant_home`` 上下文（纸面账户 / 测试）；
+    2. ``GOLDQUANT_QUANT_HOME_DIR`` —— 来自环境变量或 ``.env``（经 ``Settings`` 读取）；
+    3. ``QUANT_HOME`` —— 环境变量，便于 shell 临时覆盖、无需 ``GOLDQUANT_`` 前缀；
+    4. 用户主目录下 ``~/.quant``（默认）。
 
     返回路径仅做 ``expanduser``，不做 ``resolve``，避免目录尚不存在时报错。
     运行期改环境变量后再次调用本函数即可生效；模块级 ``QUANT_HOME`` 常量仅在导入时刻解析一次。
     """
+    if _quant_home_override is not None:
+        return _quant_home_override
     raw = ""
     try:
         from app.core.config import get_settings
@@ -62,8 +83,19 @@ def ensure_layout() -> None:
         "archive",
         "memory",
         "cache",
+        "reports",
     ):
         (quant_home() / sub).mkdir(parents=True, exist_ok=True)
+
+
+def reports_dir(*parts: str) -> Path:
+    """报告根目录 ``$QUANT_HOME/reports[/parts...]``（不落在代码仓库根目录）。"""
+    ensure_layout()
+    p = quant_home() / "reports"
+    for part in parts:
+        p = p / part
+    p.mkdir(parents=True, exist_ok=True)
+    return p
 
 
 def today_str(now: datetime | None = None) -> str:

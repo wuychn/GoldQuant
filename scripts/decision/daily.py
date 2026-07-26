@@ -1,7 +1,10 @@
-"""日频决策入口：universe → panel → alpha → TargetPortfolio → 决策卡。
+"""日频决策：选股 → 决策卡 → 纸面模拟买卖 → 飞书推送。
 
 用法：
-    python -m scripts.decision.daily [--date 2024-06-28] [--out reports/decision]
+    python -m scripts.decision.daily
+    python -m scripts.decision.daily --dry-run
+    python -m scripts.decision.daily --no-push
+    python -m scripts.decision.daily --no-paper
 """
 
 from __future__ import annotations
@@ -15,7 +18,8 @@ from quant.data.calendar import is_trading_day, to_iso, trading_day_list
 from quant.data.industry import read_industry_snapshot
 from quant.data.store import read_daily_raw
 from quant.data.universe import universe_codes
-from quant.decision.daily_output import build_decision_card, card_to_text
+from quant.decision.daily_output import DecisionCard, build_decision_card, card_to_text
+from quant.decision.paper_execute import execute_decision_card, paper_home_context, paper_summary_text
 from quant.exit.atr import atr
 from quant.exit.rules import evaluate_exits
 from quant.exit.state import ExitTracker
@@ -23,7 +27,10 @@ from quant.factors.compose import compose_alpha
 from quant.factors.panel_builder import build_panel
 from quant.journal.deviation import DeviationJournal
 from quant.journal.funnel import FunnelTracker
+from quant.ops.modes import build_decision_push_body
+from quant.ops.push import push_text
 from quant.portfolio2.target import TargetPortfolio
+from quant.store.paths import reports_dir
 from quant.store.state import get_holdings, update_holding_exit_meta
 from quant.timeutil import cn_now
 
@@ -37,24 +44,25 @@ def _prev_trading_day(d: date) -> date | None:
     return None
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--date", default=None, help="决策日 YYYY-MM-DD，默认最近交易日")
-    ap.add_argument("--out", default="reports/decision")
-    ap.add_argument("--n-enter", type=int, default=8)
-    ap.add_argument("--n-exit", type=int, default=15)
-    ap.add_argument("--max-positions", type=int, default=10)
-    args = ap.parse_args()
-
-    today = date.fromisoformat(args.date) if args.date else cn_now().date()
+def _resolve_as_of(date_arg: str | None) -> str:
+    today = date.fromisoformat(date_arg) if date_arg else cn_now().date()
     if not is_trading_day(today):
         prev = _prev_trading_day(today)
         if prev is None:
-            print("找不到交易日")
-            return
+            raise SystemExit("找不到交易日")
         today = prev
-    as_of = today.isoformat()
+    return today.isoformat()
 
+
+def build_today_card(
+    as_of: str,
+    *,
+    n_enter: int = 8,
+    n_exit: int = 15,
+    max_positions: int = 10,
+    use_paper_holdings: bool = True,
+) -> tuple[DecisionCard, object, dict[str, float], dict[str, str], list, dict[str, float]]:
+    today = date.fromisoformat(as_of)
     start = today - timedelta(days=400)
     hist_dates = [to_iso(d) for d in trading_day_list(start, today)]
     daily = read_daily_raw(end=as_of)
@@ -70,24 +78,31 @@ def main() -> None:
             rows_today = [r for r in panel if r.date == last]
             print(f"[WARN] {as_of} 无面板，回退到 {last}")
         else:
-            print("面板为空，检查离线库")
-            return
+            raise SystemExit("面板为空，检查离线库")
 
     alpha = compose_alpha(rows_today)
     sectors = read_industry_snapshot(as_of)
     policy = TargetPortfolio(
-        n_enter=args.n_enter,
-        n_exit=args.n_exit,
-        max_stocks=args.max_positions,
+        n_enter=n_enter,
+        n_exit=n_exit,
+        max_stocks=max_positions,
         daily=daily,
         sectors=sectors,
     )
 
-    holdings = get_holdings()
+    if use_paper_holdings:
+        with paper_home_context():
+            holdings = get_holdings()
+    else:
+        holdings = get_holdings()
+
     prices: dict[str, float] = {}
-    day = daily[daily["date"] == as_of]
+    names: dict[str, str] = {}
+    day = daily[daily["date"].astype(str).str.slice(0, 10) == as_of]
     for _, r in day.iterrows():
-        prices[str(r["code"])] = float(r["close"])
+        code = str(r["code"])
+        prices[code] = float(r["close"])
+        names[code] = str(r.get("name") or code)
 
     total = 0.0
     cur_val: dict[str, float] = {}
@@ -102,7 +117,6 @@ def main() -> None:
             cur_val[code] = qty * px
             total += qty * px
     current = {c: v / total for c, v in cur_val.items()} if total > 0 else {}
-
     target = policy.target_weights(alpha, prices, current, as_of)
 
     exit_signals: list[dict] = []
@@ -139,51 +153,71 @@ def main() -> None:
                 dist = (prices[code] - stop) / prices[code]
                 if dist < 0.03 and sig is None:
                     exit_signals.append(
-                        {
-                            "code": code,
-                            "reason": "near_atr_trailing",
-                            "price": prices[code],
-                            "stop": stop,
-                        }
+                        {"code": code, "reason": "near_atr_trailing", "price": prices[code], "stop": stop}
                     )
         if sig is not None:
             exit_signals.append({"code": code, "reason": sig.reason, "price": sig.price})
-
-        try:
-            ranked = sorted(alpha, key=lambda c: -alpha[c])
-            rank = ranked.index(code) + 1 if code in alpha else 0
-            a14 = float(atr(hist, 14).iloc[-1]) if len(hist) >= 15 else 0.0
-            update_holding_exit_meta(
-                code,
-                highest_close=max(highest, prices[code]),
-                buy_atr=a14 if a14 == a14 else None,
-                buy_rank=rank or None,
-            )
-        except Exception:
-            pass
+        if not use_paper_holdings:
+            try:
+                ranked = sorted(alpha, key=lambda c: -alpha[c])
+                rank = ranked.index(code) + 1 if code in alpha else 0
+                a14 = float(atr(hist, 14).iloc[-1]) if len(hist) >= 15 else 0.0
+                update_holding_exit_meta(
+                    code,
+                    highest_close=max(highest, prices[code]),
+                    buy_atr=a14 if a14 == a14 else None,
+                    buy_rank=rank or None,
+                )
+            except Exception:
+                pass
 
     card = build_decision_card(as_of, alpha, target, current, exit_signals)
+    # 扩展 alpha_top 为全量排序前 50，供买入原因写 rank/α
+    card.alpha_top = sorted(alpha.items(), key=lambda kv: -kv[1])[:50]
+    return card, daily, prices, names, uni, alpha
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--date", default=None)
+    ap.add_argument("--out", default=None, help="默认 $QUANT_HOME/reports/decision")
+    ap.add_argument("--n-enter", type=int, default=8)
+    ap.add_argument("--n-exit", type=int, default=15)
+    ap.add_argument("--max-positions", type=int, default=10)
+    ap.add_argument("--no-paper", action="store_true", help="仅决策卡，不撮合")
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--no-push", action="store_true", help="不推飞书")
+    args = ap.parse_args()
+
+    do_paper = not args.no_paper
+    as_of = _resolve_as_of(args.date)
+    card, daily, prices, names, uni, _alpha = build_today_card(
+        as_of,
+        n_enter=args.n_enter,
+        n_exit=args.n_exit,
+        max_positions=args.max_positions,
+        use_paper_holdings=do_paper,
+    )
+
     text = card_to_text(card)
     print(text)
 
     funnel = FunnelTracker()
     funnel.observe_universe(as_of, uni)
-    funnel.observe_target(as_of, list(target.keys()))
+    funnel.observe_target(as_of, list(card.target_weights.keys()))
     for a in card.actions:
         if a.side == "buy":
             funnel.observe_buy(as_of, a.code)
     fsum = funnel.summary()
     print("\n漏斗:", fsum)
-    if fsum.get("n_target", 0) == 0 and fsum.get("n_universe", 0) > 0:
-        print("[ALERT] 目标组合为空：约束/因子覆盖异常")
 
-    out_dir = Path(args.out)
+    out_dir = Path(args.out) if args.out else reports_dir("decision")
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / f"decision_{as_of}.txt").write_text(text, encoding="utf-8")
-    payload = {
+
+    payload: dict = {
         "date": as_of,
-        "target": target,
-        "current": current,
+        "target": card.target_weights,
         "actions": [
             {
                 "code": a.code,
@@ -196,17 +230,35 @@ def main() -> None:
             for a in card.actions
             if a.side != "hold"
         ],
-        "exit_signals": exit_signals,
+        "exit_signals": card.exit_signals,
         "funnel": fsum,
-        "alpha_top": card.alpha_top,
+        "alpha_top": card.alpha_top[:10],
     }
+
+    if do_paper:
+        result = execute_decision_card(
+            card, daily=daily, as_of=as_of, prices=prices, names=names, dry_run=args.dry_run
+        )
+        print()
+        print(paper_summary_text(result))
+        payload["paper"] = {
+            "home": result.get("home"),
+            "n_executed": result.get("n_executed", 0),
+            "account": result.get("account"),
+            "executed": result.get("executed"),
+            "rejected": result.get("rejected"),
+            "holdings": result.get("holdings"),
+        }
+        (out_dir / f"paper_{as_of}.json").write_text(
+            json.dumps(payload["paper"], ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        if not args.no_push and not args.dry_run:
+            body = build_decision_push_body(payload)
+            push_text("日决策·纸面成交", body, mode="daily_decision", push=True)
+
     (out_dir / f"decision_{as_of}.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-
-    journal = DeviationJournal(path=out_dir / "deviation.jsonl")
-    journal.record_from_card(card, {a.code: (a.side, a.current_weight) for a in card.actions})
-    journal.save()
     print(f"已写入 {out_dir}")
 
 

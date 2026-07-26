@@ -82,7 +82,7 @@ def _factor_autocorr(rows, names: list[str], lag: int = 1) -> dict[str, float]:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--panel", required=True)
-    ap.add_argument("--out", default="reports/ic.json")
+    ap.add_argument("--out", default=None, help="默认 $QUANT_HOME/reports/ic/ic.json")
     args = ap.parse_args()
 
     try:
@@ -115,6 +115,11 @@ def main() -> None:
         )
 
     names = REGISTRY.names()
+    if not args.out:
+        from quant.store.paths import reports_dir
+
+        args.out = str(reports_dir("ic") / "ic.json")
+
     report = {
         "factors": factor_ic_report(rows, names),
         "ic_decay": {f: ic_decay(rows, f) for f in names},
