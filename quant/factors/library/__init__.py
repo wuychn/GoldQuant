@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from quant.factors.library.base import BarSeries, FactorDef
 from quant.factors.library.flow import FLOW_FACTORS
+from quant.factors.library.hot import HOT_FACTORS
 from quant.factors.library.momentum import MOMENTUM_FACTORS
 from quant.factors.library.position import POSITION_FACTORS
 from quant.factors.library.quality import QUALITY_FACTORS
@@ -17,6 +18,7 @@ ALL_FACTORS: list[FactorDef] = (
     + VOLUME_FACTORS
     + FLOW_FACTORS
     + THEME_FACTORS
+    + HOT_FACTORS
 )
 
 __all__ = [
@@ -29,4 +31,5 @@ __all__ = [
     "VOLUME_FACTORS",
     "FLOW_FACTORS",
     "THEME_FACTORS",
+    "HOT_FACTORS",
 ]

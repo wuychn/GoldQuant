@@ -139,5 +139,11 @@ def factor_ic_report(rows: list[FactorRow], factor_names: list[str]) -> list[dic
     for f in factor_names:
         ic = daily_rank_ic(rows, f)
         qs = quintile_spread(rows, f)
-        out.append({**ic, "ls_spread_bps": qs["ls_spread_bps"], "hit_rate": qs["hit_rate"]})
+        decay = ic_decay(rows, f)
+        out.append({
+            **ic,
+            "ls_spread_bps": qs["ls_spread_bps"],
+            "hit_rate": qs["hit_rate"],
+            "ic_decay": decay,
+        })
     return out

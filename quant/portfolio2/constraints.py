@@ -1,4 +1,4 @@
-"""约束：单票上限 + 行业上限 + 持仓数上限。"""
+"""约束：单票上限 + 行业上限 + 多概念上限 + 持仓数上限。"""
 
 from __future__ import annotations
 
@@ -40,6 +40,46 @@ def apply_sector_cap(weights: dict[str, float], sectors: dict[str, str], cap: fl
         for c, w in out.items():
             if sectors.get(c, "其他") == s:
                 out[c] = w * k
+    return out
+
+
+def apply_concept_cap(
+    weights: dict[str, float],
+    concepts: dict[str, list[str]],
+    cap: float,
+) -> dict[str, float]:
+    """多概念暴露封顶：每只票的全部概念分别累加，任一概念超限则缩放该概念下的票。
+
+    ``concepts``: {code: [概念1, 概念2, ...]}。取首概念会低估集中度，故必须用全量列表。
+    """
+    if cap <= 0 or not concepts:
+        return dict(weights)
+    # 概念 → 暴露
+    by_c: dict[str, float] = {}
+    for code, w in weights.items():
+        for name in concepts.get(code) or []:
+            if not name:
+                continue
+            by_c[name] = by_c.get(name, 0.0) + w
+    over = {n: e for n, e in by_c.items() if e > cap}
+    if not over:
+        return dict(weights)
+    out = dict(weights)
+    # 迭代缩放直到全部概念不超过 cap（最多 5 轮）
+    for _ in range(5):
+        by_c = {}
+        for code, w in out.items():
+            for name in concepts.get(code) or []:
+                if name:
+                    by_c[name] = by_c.get(name, 0.0) + w
+        over = {n: e for n, e in by_c.items() if e > cap + 1e-9}
+        if not over:
+            break
+        for name, exp in over.items():
+            k = cap / exp
+            for code in list(out):
+                if name in (concepts.get(code) or []):
+                    out[code] = out[code] * k
     return out
 
 

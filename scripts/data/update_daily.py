@@ -95,6 +95,29 @@ def main() -> None:
     except Exception:
         pass
 
+    # 5. 行业 PIT 快照（供中性化 / 组合约束）
+    try:
+        from quant.data.industry import fetch_current_industry_map, write_industry_snapshot
+
+        ind_map = fetch_current_industry_map()
+        if ind_map:
+            write_industry_snapshot(today, ind_map)
+            print(f"行业快照: {len(ind_map)} 只 @ {today}")
+        else:
+            print("[WARN] 行业映射为空，跳过落库", file=sys.stderr)
+    except Exception as e:
+        print(f"[WARN] 行业快照失败: {e}", file=sys.stderr)
+
+    # 6. Universe PIT 快照
+    try:
+        from quant.data.universe import universe_snapshot
+
+        snap = universe_snapshot(today, rebuild=True, daily=daily)
+        n_inc = int(snap["included"].sum()) if not snap.empty and "included" in snap.columns else 0
+        print(f"universe 快照: {n_inc} 只纳入 / {len(snap)} 行 @ {today}")
+    except Exception as e:
+        print(f"[WARN] universe 快照失败: {e}", file=sys.stderr)
+
 
 if __name__ == "__main__":
     main()

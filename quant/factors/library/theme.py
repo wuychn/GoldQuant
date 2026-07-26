@@ -1,6 +1,7 @@
-"""主题族：所属概念/行业板块动量的横截面分位。
+"""主题族：所属行业板块动量的横截面分位。
 
-板块动量需板块日线；离线库暂未落板块行情，回测置空，实盘可由 payload 注入。
+优先用 ``bars.extras['theme_mom']``；否则用同日同行业截面动量代理
+（由 panel_builder 在批量构建时写入 extras）。
 """
 
 from __future__ import annotations
@@ -9,14 +10,17 @@ from quant.factors.library.base import BarSeries, FactorDef
 
 
 def theme_mom(bars: BarSeries, as_of: str) -> float | None:
-    """所属概念板块 20 日动量的横截面分位。
-
-    需板块日线与个股→板块映射；离线库暂无，回测返回 None。
-    实盘链路可由 payload 的板块行情注入后覆盖。
-    """
-    return None
+    extras = getattr(bars, "extras", None) or {}
+    v = extras.get("theme_mom")
+    if v is None:
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if abs(f) < 1e8 else None
 
 
 THEME_FACTORS: list[FactorDef] = [
-    FactorDef("theme_mom", "主题板块动量分位", theme_mom, direction=1.0, default_weight=0.6),
+    FactorDef("theme_mom", "主题/行业动量分位", theme_mom, direction=1.0, default_weight=0.6),
 ]

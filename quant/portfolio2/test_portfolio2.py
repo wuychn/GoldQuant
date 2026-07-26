@@ -5,8 +5,13 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from quant.portfolio2.buffer import apply_buffer
-from quant.portfolio2.constraints import apply_sector_cap, apply_single_cap, truncate_to_n
+from quant.portfolio2.buffer import apply_buffer, apply_rank_buffer
+from quant.portfolio2.constraints import (
+    apply_concept_cap,
+    apply_sector_cap,
+    apply_single_cap,
+    truncate_to_n,
+)
 from quant.portfolio2.target import TargetPortfolio
 from quant.portfolio2.voltarget import inv_vol_weights, realized_vol, scale_to_target_vol
 
@@ -49,6 +54,18 @@ def test_constraints():
     assert set(t) == {"a", "b"}
 
 
+def test_rank_buffer_and_concept_cap():
+    alpha = {"a": 1.0, "b": 0.9, "c": 0.8, "d": 0.7, "e": 0.1}
+    # 已持仓 d：虽不在 top enter，但 rank<=n_exit 应保留
+    kept = apply_rank_buffer(alpha, {"d": 0.2}, n_enter=2, n_exit=4)
+    assert "a" in kept and "b" in kept and "d" in kept
+    assert "e" not in kept
+    w = {"a": 0.4, "b": 0.4, "c": 0.2}
+    concepts = {"a": ["AI", "芯片"], "b": ["AI"], "c": ["银行"]}
+    capped = apply_concept_cap(w, concepts, 0.5)
+    assert capped["a"] + capped["b"] <= 0.5 + 1e-6
+
+
 def test_target_portfolio_end_to_end():
     rng = np.random.default_rng(3)
     rows = []
@@ -59,7 +76,9 @@ def test_target_portfolio_end_to_end():
             p = max(p * (1 + rng.normal(0, 0.03)), 1.0)
             rows.append({"code": code, "date": d, "open": p, "high": p, "low": p, "close": p, "volume": 1e6})
     daily = pd.DataFrame(rows)
-    tp = TargetPortfolio(n=3, target_vol=0.15, max_weight=0.4, sector_cap=0.9, daily=daily)
+    tp = TargetPortfolio(
+        max_stocks=3, n_enter=3, n_exit=5, target_vol=0.15, max_weight=0.4, sector_cap=0.9, daily=daily
+    )
     alpha = {"000001": 1.0, "000002": 0.8, "000003": 0.5, "000004": 0.3, "000005": 0.1}
     prices = {c: 10.0 for c in alpha}
     w = tp.target_weights(alpha, prices, {}, dates[-1])

@@ -22,8 +22,23 @@ def parse_buy_date(holding: dict) -> date | None:
         return None
 
 
-def trading_days_since_buy(stock: dict, buy_date: date) -> int:
-    """买入日之后的历史行情 K 线根数（近似已持交易天数）。"""
+def trading_days_since_buy(stock: dict, buy_date: date, *, as_of: date | None = None) -> int:
+    """买入日至 as_of（默认今天）的交易日天数；优先交易日历，回退 K 线根数。"""
+    end = as_of
+    if end is None:
+        try:
+            from quant.timeutil import cn_today
+
+            end = cn_today()
+        except Exception:
+            end = date.today()
+    try:
+        from quant.data.calendar import trading_days_between
+
+        # (buy_date, end] 交易日数 = 已持有交易天数
+        return trading_days_between(buy_date, end)
+    except Exception:
+        pass
     n = 0
     for row in hist_rows_sorted(stock.get("历史行情")):
         ds = _hist_row_date(row)
@@ -33,7 +48,7 @@ def trading_days_since_buy(stock: dict, buy_date: date) -> int:
             d = date.fromisoformat(ds)
         except ValueError:
             continue
-        if d > buy_date:
+        if buy_date < d <= end:
             n += 1
     return n
 

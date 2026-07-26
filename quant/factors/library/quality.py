@@ -39,8 +39,8 @@ def downside_vol_60(bars: BarSeries, as_of: str) -> float | None:
     rets = c.pct_change().iloc[-60:].dropna()
     down = rets[rets < 0]
     if len(down) < 2:
-        return 0.0
-    return float(np.sqrt((down ** 2).mean()) * 252)
+        return None  # 样本不足不给 0（direction=-1 时 0 会排到最优）
+    return float(np.sqrt((down ** 2).mean()) * np.sqrt(252))
 
 
 QUALITY_FACTORS: list[FactorDef] = [

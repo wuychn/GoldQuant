@@ -158,6 +158,11 @@ _HOLDING_META_KEYS = (
     "战法",
     "持仓股数",
     "股数",
+    # r3 出场层扩展
+    "持仓最高价",
+    "买入ATR",
+    "买入排名",
+    "买入交易日序号",
 )
 
 
@@ -270,6 +275,41 @@ def save_holdings(rows: list[dict]) -> None:
     ensure_layout()
     write_jsonl(state_file("holding.jsonl"), rows)
     _write_text_atomic(view_file("holding.md"), render_holding_md(rows))
+
+
+def update_holding_exit_meta(
+    code: str,
+    *,
+    highest_close: float | None = None,
+    buy_atr: float | None = None,
+    buy_rank: int | None = None,
+    buy_trading_day_index: int | None = None,
+) -> None:
+    """更新持仓出场相关元数据（持仓最高价 / 买入ATR / 买入排名 / 买入交易日序号）。"""
+    code = str(code or "").strip()
+    if not code:
+        return
+    rows = get_holdings()
+    changed = False
+    for row in rows:
+        if str(row.get("股票代码") or "").strip() != code:
+            continue
+        if highest_close is not None and highest_close > 0:
+            prev = float(row.get("持仓最高价") or 0) or 0.0
+            row["持仓最高价"] = max(prev, float(highest_close))
+            changed = True
+        if buy_atr is not None and buy_atr > 0 and not row.get("买入ATR"):
+            row["买入ATR"] = round(float(buy_atr), 4)
+            changed = True
+        if buy_rank is not None and buy_rank > 0 and not row.get("买入排名"):
+            row["买入排名"] = int(buy_rank)
+            changed = True
+        if buy_trading_day_index is not None and not row.get("买入交易日序号"):
+            row["买入交易日序号"] = int(buy_trading_day_index)
+            changed = True
+        break
+    if changed:
+        save_holdings(rows)
 
 
 def read_stoploss() -> list[dict]:

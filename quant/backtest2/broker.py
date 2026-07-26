@@ -13,6 +13,7 @@ from quant.backtest2.costs import CostModel, DEFAULT_COSTS
 from quant.backtest2.tradability import (
     can_buy,
     can_sell,
+    cap_shares_by_adv,
     is_suspended,
     limit_state,
     round_lot,
@@ -37,6 +38,7 @@ class Trade:
     price: float
     cost: float
     pnl: float = 0.0  # 卖出时记录已实现盈亏
+    reason: str = ""  # 出场/调仓原因（如 atr_trailing / rebalance）
 
 
 @dataclass
@@ -68,14 +70,32 @@ class SimBroker:
 
     # ---------- 下单 ----------
 
-    def buy(self, code: str, row: dict, prev_close: float | None, target_amount: float) -> None:
-        """按目标金额买入（金额不含成本）。受可买性、现金约束。"""
+    def buy(
+        self,
+        code: str,
+        row: dict,
+        prev_close: float | None,
+        target_amount: float,
+        *,
+        ref_price: float | None = None,
+        reason: str = "",
+    ) -> None:
+        """按目标金额买入（金额不含成本）。受可买性、现金约束。
+
+        ``ref_price`` 指定成交参考价（滑点前）；缺省用当日收盘。严格回测传开盘价，
+        使成交价与调用方计算股数所用的价格同基准。
+        """
         if not can_buy(row, prev_close, code=code, name=row.get("name")):
             return
-        price = float(row["close"])
+        price = float(ref_price) if ref_price and ref_price > 0 else float(row["close"])
         fill = self.costs.fill_price(price, is_buy=True)
-        # 目标股数（整手），再被现金约束
+        # 目标股数（整手），再被现金 / 成交额 5% 约束
         shares = shares_for_amount(fill, target_amount)
+        try:
+            day_amt = float(row.get("amount") or 0)
+        except (TypeError, ValueError):
+            day_amt = 0.0
+        shares = cap_shares_by_adv(shares, price=fill, day_amount=day_amt, max_pct=0.05)
         if shares <= 0:
             return
         cost = self.costs.buy_cost(fill, shares)
@@ -95,16 +115,38 @@ class SimBroker:
         else:
             self.holdings[code] = Holding(code=code, shares=shares, cost_price=fill, buy_date=row.get("date", ""))
         self.t1_locked.add(code)
-        self.trades.append(Trade(date=row.get("date", ""), code=code, side="buy", shares=shares, price=fill, cost=cost))
+        self.trades.append(
+            Trade(
+                date=row.get("date", ""),
+                code=code,
+                side="buy",
+                shares=shares,
+                price=fill,
+                cost=cost,
+                reason=reason or "rebalance",
+            )
+        )
 
-    def sell(self, code: str, row: dict, prev_close: float | None, target_shares: int | None = None) -> None:
-        """卖出。target_shares=None 全平。受 T+1、可卖性约束。"""
+    def sell(
+        self,
+        code: str,
+        row: dict,
+        prev_close: float | None,
+        target_shares: int | None = None,
+        *,
+        ref_price: float | None = None,
+        reason: str = "",
+    ) -> None:
+        """卖出。target_shares=None 全平。受 T+1、可卖性约束。
+
+        ``ref_price`` 同 ``buy``：指定成交参考价（滑点前），缺省用当日收盘。
+        """
         h = self.holdings.get(code)
         if not h or h.shares <= 0:
             return
         if not can_sell(code, row, prev_close, self.t1_locked, name=row.get("name")):
             return
-        price = float(row["close"])
+        price = float(ref_price) if ref_price and ref_price > 0 else float(row["close"])
         fill = self.costs.fill_price(price, is_buy=False)
         qty = h.shares if target_shares is None else min(target_shares, h.shares)
         qty = round_lot(qty)
@@ -117,7 +159,18 @@ class SimBroker:
         h.shares -= qty
         if h.shares <= 0:
             del self.holdings[code]
-        self.trades.append(Trade(date=row.get("date", ""), code=code, side="sell", shares=qty, price=fill, cost=cost, pnl=realized))
+        self.trades.append(
+            Trade(
+                date=row.get("date", ""),
+                code=code,
+                side="sell",
+                shares=qty,
+                price=fill,
+                cost=cost,
+                pnl=realized,
+                reason=reason or "rebalance",
+            )
+        )
 
     def end_of_day(self) -> None:
         """日终：T+1 锁定清空（次日开盘后这些仓位可卖）。"""

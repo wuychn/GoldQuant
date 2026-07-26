@@ -20,14 +20,26 @@ def _zscore(vals: np.ndarray) -> np.ndarray:
     return (vals - mu) / sd
 
 
+def winsorize(vals: np.ndarray, lo: float = 0.01, hi: float = 0.99) -> np.ndarray:
+    """按分位数缩尾；NaN 保持 NaN。"""
+    out = vals.copy()
+    mask = np.isfinite(out)
+    if int(mask.sum()) < 5:
+        return out
+    ql, qh = np.nanquantile(out[mask], [lo, hi])
+    out[mask] = np.clip(out[mask], ql, qh)
+    return out
+
+
 def neutralize_cross_section(
     raw_values: list[float | None],
     *,
     industries: list[str],
     log_mcaps: list[float | None],
     min_names: int = 5,
+    winsor: bool = True,
 ) -> list[float | None]:
-    """单因子截面：对 industry + log_mcap 回归，返回残差 z-score。
+    """单因子截面：winsorize → industry + log_mcap 回归 → 残差 z-score。
 
     缺行业时仍做市值中性；缺市值时仅行业；两者都缺则只做截面 z-score。
     """
@@ -36,6 +48,8 @@ def neutralize_cross_section(
         return [None] * n
 
     y = np.array([np.nan if v is None else float(v) for v in raw_values], dtype=float)
+    if winsor:
+        y = winsorize(y)
     valid = np.isfinite(y)
     if int(valid.sum()) < min_names:
         return [None] * n

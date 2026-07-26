@@ -1,7 +1,4 @@
-"""出场规则：ATR 跟踪 + 硬止损 + 趋势止损 + 时间止损。
-
-每条规则返回 ExitSignal(reason, suggested_price)。引擎择最严者执行。
-"""
+"""出场规则：ATR 跟踪 + 硬止损（ATR 与固定%取较紧）+ 趋势止损（连续2日破MA）+ 时间止损。"""
 
 from __future__ import annotations
 
@@ -16,11 +13,17 @@ from quant.exit.atr import atr
 @dataclass
 class ExitSignal:
     reason: str
-    price: float  # 触发价（止损线）
+    price: float
 
 
-def atr_trailing_stop(df: pd.DataFrame, *, entry_price: float, highest_close: float, atr_mult: float = 3.0, period: int = 20) -> ExitSignal | None:
-    """ATR 跟踪止损：止盈线 = max(入场价, 持仓期最高收盘) - atr_mult * ATR。"""
+def atr_trailing_stop(
+    df: pd.DataFrame,
+    *,
+    entry_price: float,
+    highest_close: float,
+    atr_mult: float = 3.0,
+    period: int = 14,
+) -> ExitSignal | None:
     if len(df) < period + 1:
         return None
     a = atr(df, period).iloc[-1]
@@ -33,48 +36,69 @@ def atr_trailing_stop(df: pd.DataFrame, *, entry_price: float, highest_close: fl
     return None
 
 
-def hard_stop(df: pd.DataFrame, *, entry_price: float, stop_pct: float = 0.08) -> ExitSignal | None:
-    """硬止损：跌破入场价 * (1 - stop_pct)。"""
-    stop = entry_price * (1 - stop_pct)
+def hard_stop(
+    df: pd.DataFrame,
+    *,
+    entry_price: float,
+    stop_pct: float = 0.08,
+    atr_mult_stop: float | None = 2.0,
+    atr_period: int = 14,
+) -> ExitSignal | None:
+    """硬止损：``买入价 - atr_mult_stop×ATR`` 与 ``-stop_pct`` 取较紧者。"""
+    stops = [entry_price * (1 - stop_pct)]
+    if atr_mult_stop is not None and len(df) >= atr_period + 1:
+        a = atr(df, atr_period).iloc[-1]
+        if np.isfinite(a) and a > 0:
+            stops.append(entry_price - atr_mult_stop * float(a))
+    stop = max(stops)  # 取较紧 = 更高的止损线
     last = float(df["close"].iloc[-1])
     if last <= stop:
         return ExitSignal("hard_stop", float(stop))
     return None
 
 
-def trend_stop(df: pd.DataFrame, *, ma_period: int = 20) -> ExitSignal | None:
-    """趋势止损：收盘跌破 MA20。"""
-    if len(df) < ma_period:
+def trend_stop(
+    df: pd.DataFrame, *, ma_period: int = 20, consecutive: int = 2
+) -> ExitSignal | None:
+    """趋势止损：收盘价连续 ``consecutive`` 日低于 MA。"""
+    if len(df) < ma_period + consecutive - 1:
         return None
     close = pd.to_numeric(df["close"], errors="coerce")
-    ma = close.rolling(ma_period).mean().iloc[-1]
-    last = float(close.iloc[-1])
-    if not np.isfinite(ma):
+    ma = close.rolling(ma_period).mean()
+    below = (close < ma).iloc[-consecutive:]
+    if len(below) < consecutive or not bool(below.all()):
         return None
-    if last <= ma:
-        return ExitSignal("trend_stop_ma20", float(ma))
-    return None
+    last_ma = float(ma.iloc[-1])
+    if not np.isfinite(last_ma):
+        return None
+    return ExitSignal("trend_stop_ma20", last_ma)
 
 
-def time_stop(buy_date: str, as_of: str, *, max_hold_days: int = 20, calendar_fn=None) -> ExitSignal | None:
-    """时间止损：持有超过 max_hold_days 个交易日且未达主升。
-
-    优先用 calendar_fn（交易日计数）；缺省回退到自然日差（粗估，约偏小）。
-    日期格式兼容 ISO 与 YYYYMMDD。
-    """
+def time_stop(
+    buy_date: str,
+    as_of: str,
+    *,
+    max_hold_days: int = 20,
+    calendar_fn=None,
+    entry_price: float | None = None,
+    last_price: float | None = None,
+    require_unprofitable: bool = True,
+) -> ExitSignal | None:
+    """时间止损：持有超过 max_hold_days 交易日；默认要求浮盈 < 0 才触发。"""
     if calendar_fn is not None:
         days = calendar_fn(buy_date, as_of)
     else:
-        from datetime import date as _date
-
         a = _coerce_date(buy_date)
         b = _coerce_date(as_of)
         if a is None or b is None:
             return None
         days = (b - a).days
-    if days >= max_hold_days:
-        return ExitSignal("time_stop", 0.0)
-    return None
+    if days < max_hold_days:
+        return None
+    if require_unprofitable and entry_price and last_price is not None:
+        if last_price >= entry_price:
+            return None
+    return ExitSignal("time_stop", 0.0)
 
 
 def _coerce_date(s):
@@ -97,18 +121,36 @@ def evaluate_exits(
     buy_date: str,
     as_of: str,
     atr_mult: float = 3.0,
+    atr_mult_stop: float = 2.0,
     hard_pct: float = 0.08,
     max_hold_days: int = 20,
     calendar_fn=None,
 ) -> ExitSignal | None:
-    """综合出场：返回最先触发的止损（按严重度排序：硬止损 > ATR跟踪 > 趋势 > 时间）。"""
+    last = float(pd.to_numeric(df["close"], errors="coerce").iloc[-1]) if len(df) else 0.0
     candidates = [
-        hard_stop(df, entry_price=entry_price, stop_pct=hard_pct),
-        atr_trailing_stop(df, entry_price=entry_price, highest_close=highest_close, atr_mult=atr_mult),
-        trend_stop(df, ma_period=20),
-        time_stop(buy_date, as_of, max_hold_days=max_hold_days, calendar_fn=calendar_fn),
+        hard_stop(
+            df,
+            entry_price=entry_price,
+            stop_pct=hard_pct,
+            atr_mult_stop=atr_mult_stop,
+        ),
+        atr_trailing_stop(
+            df,
+            entry_price=entry_price,
+            highest_close=highest_close,
+            atr_mult=atr_mult,
+        ),
+        trend_stop(df, ma_period=20, consecutive=2),
+        time_stop(
+            buy_date,
+            as_of,
+            max_hold_days=max_hold_days,
+            calendar_fn=calendar_fn,
+            entry_price=entry_price,
+            last_price=last,
+            require_unprofitable=True,
+        ),
     ]
-    # 优先级：hard > atr > trend > time
     priority = {"hard_stop": 0, "atr_trailing": 1, "trend_stop_ma20": 2, "time_stop": 3}
     triggered = [c for c in candidates if c is not None]
     if not triggered:

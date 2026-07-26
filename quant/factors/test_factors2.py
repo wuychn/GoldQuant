@@ -38,11 +38,12 @@ def test_factor_registry_covers_families():
 def test_factors_compute_on_synthetic():
     bars = _synth_bars("000001")
     as_of = bars.df.index[-1]
+    # 回测置空：资金/主题/热度依赖 extras 或面板代理；其余应有值
+    allow_none = {"flow_ratio_5", "theme_mom", "hot_rank_z"}
     for f in ALL_FACTORS:
         v = f.compute(bars, as_of)
-        # 资金/主题族允许 None；其余应有值
-        if f.name in ("flow_ratio_5", "theme_mom"):
-            assert v is None
+        if f.name in allow_none:
+            assert v is None or np.isfinite(v), f"{f.name} 返回 {v}"
             continue
         assert v is not None and np.isfinite(v), f"{f.name} 返回 {v}"
 

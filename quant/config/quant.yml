@@ -473,8 +473,9 @@ gates:
   sell:
     stop_loss_pct: -7.0             # 须同时趋势破位(快口径)；单独浮亏不触发；防闷杀硬止损
     stop_loss_require_trend_break: true
-    stop_loss_eval_after_late_session: true  # 14:30 前不判止损（防早盘深跌午后拉回误卖）
-    stop_loss_exempt_min_day_chg_pct: 3.0   # 当日涨幅≥此值不止损（涨停/强阳）
+    # r3：删除「尾盘才评估止损 / 当日大涨豁免」——情绪补丁，改由 exit/rules 硬止损与 ATR 处理
+    # stop_loss_eval_after_late_session: true
+    # stop_loss_exempt_min_day_chg_pct: 3.0
     stop_loss_exempt_near_limit_up: true
     limit_up_exempt_margin_pct: 0.5         # 距涨停价≤0.5% 视为近涨停
     urgent_sell_kinds: []                  # 仅趋近跌停可早于 14:30（见 sell_policy）

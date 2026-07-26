@@ -87,8 +87,6 @@ def build_universe_snapshot(
     today_rows = daily[daily["date"] == as_of]
     if today_rows.empty:
         # as_of 非交易日或无数据：回退到最近的前一交易日（PIT，绝不跳到未来）
-        from datetime import date as _date
-
         d_obj = _coerce_iso(as_of)
         prev = prev_trading_day(d_obj) if d_obj is not None else None
         if prev is not None:

@@ -84,6 +84,11 @@ def _fetch_and_cache() -> set[date]:
 
 
 def _coerce_date(v) -> date | None:
+    from datetime import datetime
+
+    # datetime / Timestamp 是 date 的子类，必须先截成 date，否则 isoformat 带时分秒
+    if isinstance(v, datetime):
+        return v.date()
     if isinstance(v, date):
         return v
     s = str(v).strip()[:10]

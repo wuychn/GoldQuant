@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable
 
 import numpy as np
@@ -19,6 +19,7 @@ class BarSeries:
 
     code: str
     df: pd.DataFrame  # index=date(str), columns: open/high/low/close/volume/amount/turnover
+    extras: dict = field(default_factory=dict)  # flow/theme/hot 等可注入字段
 
     def close_up_to(self, as_of: str) -> pd.Series:
         return self.df.loc[self.df.index <= as_of, "close"]

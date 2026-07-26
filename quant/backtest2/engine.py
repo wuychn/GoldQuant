@@ -24,7 +24,7 @@ import pandas as pd
 from quant.backtest2.broker import SimBroker
 from quant.backtest2.policy import PortfolioPolicy
 from quant.backtest2.tradability import shares_for_amount
-from quant.data.calendar import to_iso, trading_days_between
+from quant.data.calendar import to_iso
 from quant.exit.rules import evaluate_exits
 from quant.exit.state import ExitTracker
 
@@ -37,9 +37,24 @@ class ExitConfig:
     """出场参数；为 None 时禁用对应规则。"""
 
     atr_mult: float = 3.0
+    atr_mult_stop: float = 2.0
     hard_pct: float = 0.08
     max_hold_days: int = 20
     calendar_fn: Callable[[str, str], int] | None = None
+
+    def __post_init__(self) -> None:
+        if self.calendar_fn is None:
+            # 默认用交易日计数
+            from datetime import date as _date
+
+            from quant.data.calendar import trading_days_between, to_iso
+
+            def _cal(a: str, b: str) -> int:
+                da = _date.fromisoformat(to_iso(a))
+                db = _date.fromisoformat(to_iso(b))
+                return trading_days_between(da, db)
+
+            self.calendar_fn = _cal
 
 
 def _normalize_daily(daily: pd.DataFrame) -> pd.DataFrame:
@@ -95,11 +110,11 @@ def run_backtest(
     initial_cash: float = 1_000_000.0,
     max_positions: int = 10,
     exit_config: ExitConfig | None = None,
-    strict_signals: bool = False,
+    strict_signals: bool = True,
 ) -> SimBroker:
     """日频回测。
 
-    ``strict_signals=True`` 时启用 T-1 信号 / T 开盘成交口径，消除收盘价乐观偏差。
+    默认 ``strict_signals=True``：T-1 信号 / T 开盘成交。传 False 可得收盘理想上界。
     """
     daily = _normalize_daily(daily)
     iso_dates = [to_iso(d) for d in dates]
@@ -143,12 +158,18 @@ def run_backtest(
                     buy_date=h.buy_date,
                     as_of=d,
                     atr_mult=exit_config.atr_mult,
+                    atr_mult_stop=exit_config.atr_mult_stop,
                     hard_pct=exit_config.hard_pct,
                     max_hold_days=exit_config.max_hold_days,
                     calendar_fn=exit_config.calendar_fn,
                 )
                 if sig is not None:
-                    broker.sell(code, rows_by_code[code], prev_closes.get(code))
+                    broker.sell(
+                        code,
+                        rows_by_code[code],
+                        prev_closes.get(code),
+                        reason=sig.reason,
+                    )
                     if code not in broker.holdings or broker.holdings[code].shares <= 0:
                         tracker.close(code)
                     forced.add(code)
@@ -176,7 +197,8 @@ def run_backtest(
         if max_positions and len(target) > max_positions:
             target = dict(sorted(target.items(), key=lambda kv: -kv[1])[:max_positions])
 
-        # 成交价：strict 模式用 T 开盘，否则用 T 收盘
+        # 成交价：strict 模式用 T 开盘，否则用 T 收盘。
+        # 同一个价格既用于算股数、也传给 broker 成交，避免股数与成交价基准错配。
         fill_price_for = open_prices if strict_signals else prices
 
         # 先卖后买
@@ -188,9 +210,14 @@ def run_backtest(
                 cur_value = prices.get(code, 0.0) * broker.holdings[code].shares
                 excess = cur_value - target_value
                 if excess > 0:
-                    sell_shares = shares_for_amount(fill_price_for.get(code, prices.get(code, 0.0)), excess)
+                    ref = fill_price_for.get(code) or prices.get(code, 0.0)
+                    sell_shares = shares_for_amount(ref, excess)
                     if sell_shares > 0:
-                        broker.sell(code, rows_by_code[code], prev_closes.get(code), target_shares=sell_shares)
+                        broker.sell(
+                            code, rows_by_code[code], prev_closes.get(code),
+                            target_shares=sell_shares,
+                            ref_price=ref if strict_signals else None,
+                        )
                         if code not in broker.holdings or broker.holdings[code].shares <= 0:
                             if tracker is not None:
                                 tracker.close(code)
@@ -206,11 +233,16 @@ def run_backtest(
             target_value = tw * eq
             excess = target_value - cur_value
             if excess > 0:
-                broker.buy(code, row, prev_closes.get(code), excess)
-                if tracker is not None:
-                    # 新建仓或加仓都更新 entry_price/highest_close（按当前持仓重新跟踪）
-                    if code in broker.holdings:
-                        tracker.open(code, broker.holdings[code].cost_price, broker.holdings[code].buy_date)
+                ref = fill_price_for.get(code) or prices.get(code, 0.0)
+                broker.buy(
+                    code, row, prev_closes.get(code), excess,
+                    ref_price=ref if strict_signals else None,
+                )
+                # buy 可能因涨停/停牌/现金不足而未成交，只在真正持仓时同步 tracker；
+                # upsert 保证加仓不重置 highest_close（否则跟踪止损失效）
+                if tracker is not None and code in broker.holdings:
+                    h = broker.holdings[code]
+                    tracker.upsert(code, h.cost_price, h.buy_date)
 
         broker.record_equity(d, prices)
         broker.end_of_day()
