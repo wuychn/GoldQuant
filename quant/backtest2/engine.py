@@ -7,6 +7,10 @@
 4. 差分 → 买卖单 → broker 撮合（T 日收盘成交）
 5. broker.record_equity(T, prices)
 6. broker.end_of_day()（释放 T+1 锁）
+
+注意：T 日收盘决策 + T 日收盘成交构成乐观偏差（实盘收盘前无法得知收盘价）。
+本实现保留该口径作为「理想上界」基准；严格回测应改 T-1 信号 / T 开盘成交（见
+``strict_signals`` 参数，启用后 alpha_fn 用 T-1 数据、成交用 T 开盘）。
 """
 
 from __future__ import annotations
@@ -20,12 +24,12 @@ import pandas as pd
 from quant.backtest2.broker import SimBroker
 from quant.backtest2.policy import PortfolioPolicy
 from quant.backtest2.tradability import shares_for_amount
+from quant.data.calendar import to_iso, trading_days_between
 from quant.exit.rules import evaluate_exits
 from quant.exit.state import ExitTracker
 
 
 AlphaFn = Callable[[str, dict[str, dict]], dict[str, float]]
-ExitFn = Callable[[str, str, float, float, str, str], object | None]  # see ExitConfig
 
 
 @dataclass
@@ -38,16 +42,48 @@ class ExitConfig:
     calendar_fn: Callable[[str, str], int] | None = None
 
 
-def _code_history(daily: pd.DataFrame, code: str, as_of: str) -> pd.DataFrame:
-    sub = daily[(daily["code"] == code) & (daily["date"] <= as_of)].sort_values("date")
-    return sub
+def _normalize_daily(daily: pd.DataFrame) -> pd.DataFrame:
+    """确保 daily['date'] 为 ISO 字符串。"""
+    if daily.empty:
+        return daily
+    if not pd.api.types.is_string_dtype(daily["date"]):
+        daily = daily.copy()
+        daily["date"] = pd.to_datetime(daily["date"]).dt.strftime("%Y-%m-%d")
+    else:
+        sample = str(daily["date"].iloc[0]) if len(daily) else ""
+        if len(sample) == 8 and sample.isdigit():
+            daily = daily.copy()
+            daily["date"] = pd.to_datetime(daily["date"], format="%Y%m%d").dt.strftime("%Y-%m-%d")
+    return daily
 
 
-def _prev_close_map(daily: pd.DataFrame, code: str, as_of: str) -> float | None:
-    sub = daily[(daily["code"] == code) & (daily["date"] < as_of)].sort_values("date")
-    if sub.empty:
-        return None
-    return float(pd.to_numeric(sub["close"], errors="coerce").iloc[-1])
+def _build_prev_close_index(daily: pd.DataFrame) -> dict[str, dict[str, float]]:
+    """预计算 {code: {date_iso: prev_close}}，避免每日全表扫描。
+
+    prev_close = 该 code 在 as_of 之前最近一日的收盘。
+    """
+    out: dict[str, dict[str, float]] = {}
+    if daily.empty:
+        return out
+    for code, g in daily.groupby("code"):
+        g = g.sort_values("date").reset_index(drop=True)
+        closes = pd.to_numeric(g["close"], errors="coerce")
+        dates = g["date"].astype(str).tolist()
+        m: dict[str, float] = {}
+        prev = None
+        for i, d in enumerate(dates):
+            if prev is not None and np.isfinite(prev):
+                m[d] = float(prev)
+            prev = float(closes.iloc[i]) if np.isfinite(closes.iloc[i]) else prev
+        out[code] = m
+    return out
+
+
+def _code_history(daily_by_code: dict[str, pd.DataFrame], code: str, as_of: str) -> pd.DataFrame:
+    sub = daily_by_code.get(code)
+    if sub is None or sub.empty:
+        return sub if sub is not None else pd.DataFrame()
+    return sub[sub["date"] <= as_of]
 
 
 def run_backtest(
@@ -59,22 +95,36 @@ def run_backtest(
     initial_cash: float = 1_000_000.0,
     max_positions: int = 10,
     exit_config: ExitConfig | None = None,
+    strict_signals: bool = False,
 ) -> SimBroker:
+    """日频回测。
+
+    ``strict_signals=True`` 时启用 T-1 信号 / T 开盘成交口径，消除收盘价乐观偏差。
+    """
+    daily = _normalize_daily(daily)
+    iso_dates = [to_iso(d) for d in dates]
+    prev_close_index = _build_prev_close_index(daily)
+    daily_by_code: dict[str, pd.DataFrame] = {
+        c: g.sort_values("date") for c, g in daily.groupby("code")
+    }
+
     broker = SimBroker(cash=initial_cash)
     tracker = ExitTracker() if exit_config is not None else None
 
-    for d in dates:
+    for i, d in enumerate(iso_dates):
         day_rows = daily[daily["date"] == d]
         if day_rows.empty:
             continue
         rows_by_code: dict[str, dict] = {}
         prices: dict[str, float] = {}
+        open_prices: dict[str, float] = {}
         prev_closes: dict[str, float | None] = {}
         for _, r in day_rows.iterrows():
             code = str(r["code"])
             rows_by_code[code] = r.to_dict()
             prices[code] = float(r["close"])
-            prev_closes[code] = _prev_close_map(daily, code, d)
+            open_prices[code] = float(r.get("open") or r["close"])
+            prev_closes[code] = prev_close_index.get(code, {}).get(d)
 
         # 出场检查（先于再平衡）：触发则强制清仓
         forced: set[str] = set()
@@ -85,7 +135,7 @@ def run_backtest(
                 st = tracker.get(code)
                 if st is None or code not in rows_by_code:
                     continue
-                hist = _code_history(daily, code, d)
+                hist = _code_history(daily_by_code, code, d)
                 sig = evaluate_exits(
                     hist,
                     entry_price=h.cost_price,
@@ -99,10 +149,13 @@ def run_backtest(
                 )
                 if sig is not None:
                     broker.sell(code, rows_by_code[code], prev_closes.get(code))
-                    tracker.close(code)
+                    if code not in broker.holdings or broker.holdings[code].shares <= 0:
+                        tracker.close(code)
                     forced.add(code)
 
-        alpha = alpha_fn(d, rows_by_code)
+        # 信号日：strict 模式用 T-1，否则用 T
+        signal_date = iso_dates[i - 1] if (strict_signals and i > 0) else d
+        alpha = alpha_fn(signal_date, rows_by_code)
         if not alpha:
             broker.record_equity(d, prices)
             broker.end_of_day()
@@ -119,24 +172,28 @@ def run_backtest(
         # 强制清仓的票不计入目标
         for c in forced:
             target.pop(c, None)
-        # 限制持仓数
+        # 限制持仓数（与 policy.n 协调；二者应一致以避免二次截断破坏 buffer）
         if max_positions and len(target) > max_positions:
             target = dict(sorted(target.items(), key=lambda kv: -kv[1])[:max_positions])
 
+        # 成交价：strict 模式用 T 开盘，否则用 T 收盘
+        fill_price_for = open_prices if strict_signals else prices
+
         # 先卖后买
-        target_codes = set(target.keys())
         for code in list(broker.holdings.keys()):
             tw = target.get(code, 0.0)
             cur_w = current.get(code, 0.0)
             if tw < cur_w - 1e-6 and code in rows_by_code:
-                # 减仓或清仓
                 target_value = tw * eq
                 cur_value = prices.get(code, 0.0) * broker.holdings[code].shares
                 excess = cur_value - target_value
                 if excess > 0:
-                    sell_shares = shares_for_amount(prices.get(code, 0.0), excess)
+                    sell_shares = shares_for_amount(fill_price_for.get(code, prices.get(code, 0.0)), excess)
                     if sell_shares > 0:
                         broker.sell(code, rows_by_code[code], prev_closes.get(code), target_shares=sell_shares)
+                        if code not in broker.holdings or broker.holdings[code].shares <= 0:
+                            if tracker is not None:
+                                tracker.close(code)
 
         # 买入
         eq = broker.total_equity(prices) or 1.0
@@ -150,8 +207,10 @@ def run_backtest(
             excess = target_value - cur_value
             if excess > 0:
                 broker.buy(code, row, prev_closes.get(code), excess)
-                if tracker is not None and code not in tracker.all():
-                    tracker.open(code, broker.holdings[code].cost_price, broker.holdings[code].buy_date)
+                if tracker is not None:
+                    # 新建仓或加仓都更新 entry_price/highest_close（按当前持仓重新跟踪）
+                    if code in broker.holdings:
+                        tracker.open(code, broker.holdings[code].cost_price, broker.holdings[code].buy_date)
 
         broker.record_equity(d, prices)
         broker.end_of_day()

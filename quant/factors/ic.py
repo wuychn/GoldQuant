@@ -106,10 +106,17 @@ def quintile_spread(rows: list[FactorRow], factor_name: str) -> dict[str, Any]:
 
     ls_rets: list[float] = []
     for d in sorted(by_date):
-        grp = [r for r in by_date[d] if r.forward_return_pct is not None]
+        # 排除因子值缺失的样本，避免 -inf 兜底污染空头组
+        def _val(r):
+            v = r.neutral.get(factor_name) if r.neutral else None
+            if v is None:
+                v = r.raw.get(factor_name)
+            return float(v) if v is not None and np.isfinite(v) else None
+
+        grp = [r for r in by_date[d] if r.forward_return_pct is not None and _val(r) is not None]
         if len(grp) < 10:
             continue
-        grp.sort(key=lambda r: (r.neutral.get(factor_name) if r.neutral and r.neutral.get(factor_name) is not None else r.raw.get(factor_name, -np.inf)))
+        grp.sort(key=lambda r: _val(r))
         n = len(grp)
         q = max(1, n // 5)
         top = grp[-q:]

@@ -1,16 +1,36 @@
-"""可交易性判定：停牌 + 涨跌停 + T+1。
+"""可交易性判定：停牌 + 涨跌停分档 + 封板 + T+1。
 
-回测中用当日 OHLC 推断：
-- 停牌：当日 high==low==close==0 或 volume==0
-- 一字涨停：open==high==low==close 且 close >= prev_close*1.097
-- 一字跌停：同上且 close <= prev_close*0.907
-- 涨停封死：买不进；跌停封死：卖不出
-- T+1：当日买入次日才可卖
+A股涨跌停分档：
+- 主板/沪深 10%
+- ST 5%
+- 创业板(300)/科创板(688) 20%
+- 北交(8/4) 30%
+
+封板判定（不再要求一字板）：
+- 涨停封死：close >= prev_close*(1+limit) 且 high==close（全天未能跌破涨停价）→ 买不进
+- 跌停封死：close <= prev_close*(1-limit) 且 low==close → 卖不出
+- 一字板是封死的特例，自动覆盖
 """
 
 from __future__ import annotations
 
 import numpy as np
+
+
+def _limit_pct(code: str, name: str | None = None) -> float:
+    """返回涨跌停比例（0.10/0.05/0.20/0.30）。"""
+    c = str(code).strip()
+    # 北交 8/4 开头 30%
+    if c.startswith(("8", "4")):
+        return 0.30
+    # 创业板 300 / 科创板 688 20%
+    if c.startswith(("300", "688")):
+        return 0.20
+    # ST 5%
+    if name and any(m in str(name).upper() for m in ("ST", "*ST", "退")):
+        return 0.05
+    # 主板 10%
+    return 0.10
 
 
 def is_suspended(row: dict) -> bool:
@@ -26,11 +46,12 @@ def is_suspended(row: dict) -> bool:
     return False
 
 
-def limit_state(row: dict, prev_close: float | None) -> str:
+def limit_state(row: dict, prev_close: float | None, *, code: str | None = None, name: str | None = None) -> str:
     """返回 'up' / 'down' / 'none'。
 
     up=涨停封死（不可买），down=跌停封死（不可卖）。
-    用一字板判定封死：全天 O==H==L==C 且触及涨跌停。
+    封板判定：收盘价等于涨停价（且 high==close）视为封死买不进；
+    收盘价等于跌停价（且 low==close）视为封死卖不出。
     """
     if prev_close is None or prev_close <= 0:
         return "none"
@@ -40,29 +61,30 @@ def limit_state(row: dict, prev_close: float | None) -> str:
     c = float(row.get("close") or 0)
     if o <= 0 or h <= 0:
         return "none"
-    # 一字板：四价相等
-    is_one_price = abs(h - l) < 1e-6 and abs(o - c) < 1e-6
-    if not is_one_price:
-        return "none"
-    if c >= prev_close * 1.097:
+    limit = _limit_pct(code or str(row.get("code", "")), name or row.get("name"))
+    up_price = prev_close * (1 + limit)
+    down_price = prev_close * (1 - limit)
+    # 涨停封死：收盘在涨停价附近且 high==close（全天未跌破涨停价）
+    if abs(c - up_price) < 1e-3 and abs(h - c) < 1e-3:
         return "up"
-    if c <= prev_close * 0.907:
+    # 跌停封死：收盘在跌停价附近且 low==close
+    if abs(c - down_price) < 1e-3 and abs(l - c) < 1e-3:
         return "down"
     return "none"
 
 
-def can_buy(row: dict, prev_close: float | None) -> bool:
+def can_buy(row: dict, prev_close: float | None, *, code: str | None = None, name: str | None = None) -> bool:
     if is_suspended(row):
         return False
-    return limit_state(row, prev_close) != "up"
+    return limit_state(row, prev_close, code=code, name=name) != "up"
 
 
-def can_sell(code: str, row: dict, prev_close: float | None, t1_locked: set[str]) -> bool:
+def can_sell(code: str, row: dict, prev_close: float | None, t1_locked: set[str], *, name: str | None = None) -> bool:
     if code in t1_locked:
         return False  # T+1：今买明卖
     if is_suspended(row):
         return False
-    return limit_state(row, prev_close) != "down"
+    return limit_state(row, prev_close, code=code, name=name) != "down"
 
 
 def round_lot(shares: int, lot: int = 100) -> int:

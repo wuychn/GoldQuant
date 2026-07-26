@@ -70,7 +70,7 @@ class SimBroker:
 
     def buy(self, code: str, row: dict, prev_close: float | None, target_amount: float) -> None:
         """按目标金额买入（金额不含成本）。受可买性、现金约束。"""
-        if not can_buy(row, prev_close):
+        if not can_buy(row, prev_close, code=code, name=row.get("name")):
             return
         price = float(row["close"])
         fill = self.costs.fill_price(price, is_buy=True)
@@ -102,7 +102,7 @@ class SimBroker:
         h = self.holdings.get(code)
         if not h or h.shares <= 0:
             return
-        if not can_sell(code, row, prev_close, self.t1_locked):
+        if not can_sell(code, row, prev_close, self.t1_locked, name=row.get("name")):
             return
         price = float(row["close"])
         fill = self.costs.fill_price(price, is_buy=False)
@@ -123,9 +123,11 @@ class SimBroker:
         """日终：T+1 锁定清空（次日开盘后这些仓位可卖）。"""
         self.t1_locked.clear()
 
-    def force_liquidate_suspended(self, date: str, prices: dict[str, float], rows: dict[str, dict]) -> None:
-        """停牌股按 0 流动性处理：无法卖出，仅在权益中按昨收计价。"""
+    def mark_suspended(self, rows: dict[str, dict]) -> list[str]:
+        """返回当前持仓中停牌的代码（无法卖出，仅按昨收计价）。供引擎日终标记。"""
+        out: list[str] = []
         for code in list(self.holdings.keys()):
             row = rows.get(code)
             if row is not None and is_suspended(row):
-                continue  # 停牌无法卖，保留
+                out.append(code)
+        return out

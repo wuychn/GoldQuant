@@ -57,19 +57,36 @@ def trend_stop(df: pd.DataFrame, *, ma_period: int = 20) -> ExitSignal | None:
 
 
 def time_stop(buy_date: str, as_of: str, *, max_hold_days: int = 20, calendar_fn=None) -> ExitSignal | None:
-    """时间止损：持有超过 max_hold_days 个交易日且未达主升。"""
+    """时间止损：持有超过 max_hold_days 个交易日且未达主升。
+
+    优先用 calendar_fn（交易日计数）；缺省回退到自然日差（粗估，约偏小）。
+    日期格式兼容 ISO 与 YYYYMMDD。
+    """
     if calendar_fn is not None:
         days = calendar_fn(buy_date, as_of)
     else:
-        # 回退：按日期差粗估
-        from datetime import datetime
+        from datetime import date as _date
 
-        a = datetime.strptime(buy_date, "%Y%m%d")
-        b = datetime.strptime(as_of, "%Y%m%d")
-        days = int((b - a).days)
+        a = _coerce_date(buy_date)
+        b = _coerce_date(as_of)
+        if a is None or b is None:
+            return None
+        days = (b - a).days
     if days >= max_hold_days:
         return ExitSignal("time_stop", 0.0)
     return None
+
+
+def _coerce_date(s):
+    from datetime import date as _date
+
+    s = str(s).strip()[:10]
+    try:
+        if len(s) == 8 and s.isdigit():
+            return _date(int(s[:4]), int(s[4:6]), int(s[6:]))
+        return _date.fromisoformat(s)
+    except Exception:
+        return None
 
 
 def evaluate_exits(

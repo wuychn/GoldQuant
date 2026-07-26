@@ -89,7 +89,20 @@ def _coerce_date(v) -> date | None:
     s = str(v).strip()[:10]
     if not s:
         return None
+    # 兼容 "20240115" 与 "2024-01-15" 两种写法
+    if len(s) == 8 and s.isdigit():
+        s = f"{s[:4]}-{s[4:6]}-{s[6:]}"
     return date.fromisoformat(s)
+
+
+def to_iso(d) -> str:
+    """把 date / datetime / "YYYYMMDD" / "YYYY-MM-DD" 统一成 ISO 字符串。
+
+    全链路（离线库、universe、因子面板、回测引擎、脚本）的日期比较都应先过此函数，
+    避免字符串比较时 '-'(0x2D) < 数字导致 ISO 与紧凑格式混用产生未来函数。
+    """
+    dt = _coerce_date(d)
+    return dt.isoformat() if dt is not None else str(d)
 
 
 def _is_workday_fallback(d: date) -> bool:

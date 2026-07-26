@@ -8,25 +8,27 @@ from __future__ import annotations
 
 import argparse
 import json
+from datetime import date
 from pathlib import Path
 
-from quant.data.calendar import trading_days_between
+from quant.data.calendar import to_iso, trading_day_list
 from quant.factors.panel_builder import build_panel
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--start", required=True)
-    ap.add_argument("--end", required=True)
+    ap.add_argument("--start", required=True, help="YYYY-MM-DD")
+    ap.add_argument("--end", required=True, help="YYYY-MM-DD")
     ap.add_argument("--out", default="data/panel.parquet")
     args = ap.parse_args()
 
-    dates = trading_days_between(args.start, args.end)
+    start = date.fromisoformat(args.start)
+    end = date.fromisoformat(args.end)
+    dates = [to_iso(d) for d in trading_day_list(start, end)]
     if not dates:
         print("无交易日")
         return
-    date_strs = [d.strftime("%Y%m%d") for d in dates]
-    rows = build_panel(date_strs)
+    rows = build_panel(dates)
     print(f"构建 {len(rows)} 行")
 
     # 序列化为 records

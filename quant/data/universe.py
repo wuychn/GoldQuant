@@ -22,6 +22,7 @@ from quant.data.schema import (
     ST_NAME_MARKERS,
 )
 from quant.data.store import read_daily_raw, read_universe_snapshot, write_universe_snapshot
+from quant.data.calendar import prev_trading_day, to_iso
 
 
 def _is_st_name(name: str) -> bool:
@@ -29,6 +30,17 @@ def _is_st_name(name: str) -> bool:
         return False
     n = str(name).upper().strip()
     return any(m.upper() in n for m in ST_NAME_MARKERS)
+
+
+def _coerce_iso(s: str):
+    from datetime import date as _date
+
+    try:
+        if len(s) == 8 and s.isdigit():
+            return _date(int(s[:4]), int(s[4:6]), int(s[6:]))
+        return _date.fromisoformat(s[:10])
+    except Exception:
+        return None
 
 
 def _listing_days_map(daily: pd.DataFrame, as_of: str) -> dict[str, int]:
@@ -70,13 +82,21 @@ def build_universe_snapshot(
     if daily.empty:
         return pd.DataFrame(columns=["date", "code", "name", "included"])
 
+    as_of = to_iso(as_of)
     # 当日有行情的票（在市且当日有数据）
     today_rows = daily[daily["date"] == as_of]
     if today_rows.empty:
-        # as_of 非交易日或无数据：取最近一日
-        latest = daily["date"].max()
-        today_rows = daily[daily["date"] == latest]
-        as_of = latest
+        # as_of 非交易日或无数据：回退到最近的前一交易日（PIT，绝不跳到未来）
+        from datetime import date as _date
+
+        d_obj = _coerce_iso(as_of)
+        prev = prev_trading_day(d_obj) if d_obj is not None else None
+        if prev is not None:
+            prev_iso = prev.isoformat()
+            today_rows = daily[daily["date"] == prev_iso]
+            as_of = prev_iso
+        if today_rows.empty:
+            return pd.DataFrame(columns=["date", "code", "name", "included"])
 
     list_days = _listing_days_map(daily, as_of)
     adv_map = _adv_yi_map(daily, as_of, adv_lookback)

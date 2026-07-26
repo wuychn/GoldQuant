@@ -50,5 +50,5 @@ def scan_param(
 
 
 def parameter_budget(n_params: int, n_values_per_param: int) -> int:
-    """参数预算：总试验数 = Π 取值数。用于 DSR 的 n_trials。"""
-    return int(n_params ** 0 + n_values_per_param ** n_params) if False else n_values_per_param ** n_params
+    """参数预算：总试验数 = 取值数^参数数。用于 DSR 的 n_trials。"""
+    return n_values_per_param ** n_params
