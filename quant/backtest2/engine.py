@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Callable
 
 import numpy as np
@@ -19,9 +20,27 @@ import pandas as pd
 from quant.backtest2.broker import SimBroker
 from quant.backtest2.policy import PortfolioPolicy
 from quant.backtest2.tradability import shares_for_amount
+from quant.exit.rules import evaluate_exits
+from quant.exit.state import ExitTracker
 
 
 AlphaFn = Callable[[str, dict[str, dict]], dict[str, float]]
+ExitFn = Callable[[str, str, float, float, str, str], object | None]  # see ExitConfig
+
+
+@dataclass
+class ExitConfig:
+    """出场参数；为 None 时禁用对应规则。"""
+
+    atr_mult: float = 3.0
+    hard_pct: float = 0.08
+    max_hold_days: int = 20
+    calendar_fn: Callable[[str, str], int] | None = None
+
+
+def _code_history(daily: pd.DataFrame, code: str, as_of: str) -> pd.DataFrame:
+    sub = daily[(daily["code"] == code) & (daily["date"] <= as_of)].sort_values("date")
+    return sub
 
 
 def _prev_close_map(daily: pd.DataFrame, code: str, as_of: str) -> float | None:
@@ -39,8 +58,10 @@ def run_backtest(
     policy: PortfolioPolicy,
     initial_cash: float = 1_000_000.0,
     max_positions: int = 10,
+    exit_config: ExitConfig | None = None,
 ) -> SimBroker:
     broker = SimBroker(cash=initial_cash)
+    tracker = ExitTracker() if exit_config is not None else None
 
     for d in dates:
         day_rows = daily[daily["date"] == d]
@@ -54,6 +75,32 @@ def run_backtest(
             rows_by_code[code] = r.to_dict()
             prices[code] = float(r["close"])
             prev_closes[code] = _prev_close_map(daily, code, d)
+
+        # 出场检查（先于再平衡）：触发则强制清仓
+        forced: set[str] = set()
+        if tracker is not None and exit_config is not None:
+            for code in list(broker.holdings.keys()):
+                h = broker.holdings[code]
+                tracker.update(code, prices.get(code, 0.0))
+                st = tracker.get(code)
+                if st is None or code not in rows_by_code:
+                    continue
+                hist = _code_history(daily, code, d)
+                sig = evaluate_exits(
+                    hist,
+                    entry_price=h.cost_price,
+                    highest_close=st.highest_close,
+                    buy_date=h.buy_date,
+                    as_of=d,
+                    atr_mult=exit_config.atr_mult,
+                    hard_pct=exit_config.hard_pct,
+                    max_hold_days=exit_config.max_hold_days,
+                    calendar_fn=exit_config.calendar_fn,
+                )
+                if sig is not None:
+                    broker.sell(code, rows_by_code[code], prev_closes.get(code))
+                    tracker.close(code)
+                    forced.add(code)
 
         alpha = alpha_fn(d, rows_by_code)
         if not alpha:
@@ -69,6 +116,9 @@ def run_backtest(
             current[code] = p * h.shares / eq
 
         target = policy.target_weights(alpha, prices, current, d)
+        # 强制清仓的票不计入目标
+        for c in forced:
+            target.pop(c, None)
         # 限制持仓数
         if max_positions and len(target) > max_positions:
             target = dict(sorted(target.items(), key=lambda kv: -kv[1])[:max_positions])
@@ -100,6 +150,8 @@ def run_backtest(
             excess = target_value - cur_value
             if excess > 0:
                 broker.buy(code, row, prev_closes.get(code), excess)
+                if tracker is not None and code not in tracker.all():
+                    tracker.open(code, broker.holdings[code].cost_price, broker.holdings[code].buy_date)
 
         broker.record_equity(d, prices)
         broker.end_of_day()
