@@ -236,7 +236,7 @@ def _make_close_provider(start_yyyymmdd: str | None, end_yyyymmdd: str | None):
                     period="daily",
                     start_date=start_yyyymmdd,
                     end_date=end_yyyymmdd,
-                    adjust="",  # 回测估值用不复权，与买入价同基准
+                    adjust="qfq",  # 与买入价（enrich 用 qfq）同基准，跨除权日盈亏一致
                 )
             except Exception:
                 rows = None

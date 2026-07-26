@@ -40,6 +40,23 @@ def _load_calendar() -> set[date]:
     return days
 
 
+_calendar_mtime: float | None = None
+
+
+def _load_calendar_fresh() -> set[date]:
+    """带文件 mtime 失效的加载：跨日长跑或外部 refresh 后自动重读。"""
+    global _calendar_mtime
+    path = _calendar_path()
+    try:
+        mtime = path.stat().st_mtime if path.is_file() else None
+    except OSError:
+        mtime = None
+    if mtime != _calendar_mtime:
+        _load_calendar.cache_clear()
+        _calendar_mtime = mtime
+    return _load_calendar()
+
+
 def _fetch_and_cache() -> set[date]:
     """从 AKShare 拉取交易日历并落盘；失败返回空集（调用方走兜底）。"""
     try:
@@ -68,9 +85,9 @@ def _fetch_and_cache() -> set[date]:
             days.add(d)
             out.append(d.isoformat())
 
-    if days and _calendar_path().parent.exists() or True:
-        _calendar_path().parent.mkdir(parents=True, exist_ok=True)
+    if days:
         try:
+            _calendar_path().parent.mkdir(parents=True, exist_ok=True)
             _calendar_path().write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
         except OSError:
             pass
@@ -102,7 +119,7 @@ def is_trading_day(d: date) -> bool:
     命中已缓存日历直接返回；未命中（含当日/未来日）走工作日兜底，
     避免日历未更新到今天时误判为非交易日。
     """
-    cal = _load_calendar()
+    cal = _load_calendar_fresh()
     if d in cal:
         return True
     if d > max(cal, default=date.min):
@@ -133,7 +150,7 @@ def trading_days_since(buy_date: date, today: date | None = None) -> int:
 
 
 def next_trading_day(d: date) -> date | None:
-    cal = _load_calendar()
+    cal = _load_calendar_fresh()
     if not cal:
         cur = d + timedelta(days=1)
         for _ in range(15):
@@ -153,7 +170,7 @@ def next_trading_day(d: date) -> date | None:
 
 
 def prev_trading_day(d: date) -> date | None:
-    cal = _load_calendar()
+    cal = _load_calendar_fresh()
     if not cal:
         cur = d - timedelta(days=1)
         for _ in range(15):

@@ -129,9 +129,11 @@ def compute_benchmark_metrics(
     beta = None
     if len(strat_rets) == len(bench_rets) and strat_rets:
         ex = [s - b for s, b in zip(strat_rets, bench_rets)]
-        excess = sum(ex)
+        # 超额收益 = 策略总收益 - 基准总收益（几何口径，非日超额算术累加）
+        strat_total = equities[-1] / equities[0] - 1.0 if equities[0] > 0 else 0.0
+        excess = strat_total - bench_total
         ex_mean = sum(ex) / len(ex)
-        ex_var = sum(x - ex_mean for x in ex) ** 2 / max(len(ex) - 1, 1)
+        ex_var = sum((x - ex_mean) ** 2 for x in ex) / max(len(ex) - 1, 1)
         tracking_error = math.sqrt(max(0.0, ex_var)) * math.sqrt(252)
         # beta = cov(strat, bench) / var(bench)
         sm = sum(strat_rets) / len(strat_rets)

@@ -153,12 +153,12 @@ def hist(symbol, period='daily', *, start_date=None, end_date=None, adjust='qfq'
 
     ``start_date`` / ``end_date`` 为 ``YYYYMMDD``（或不带前导零的东财口径）；不传时按周期使用默认回溯窗口。
     ``adjust`` 默认 ``qfq``（前复权）：历史价与当日盘口最新价在同一基准上，
-    MA/动量/新高等因子与实时价比较才正确。回测离线库应改用 ``hfq``（后复权）
-    以保证累积存储的序列稳定（除权不改变历史价）。
+    MA/动量/新高等因子与实时价比较才正确。回测估值也用 ``qfq``，与买入价
+    （来自 enrich 的 qfq 快照）同基准，跨除权日盈亏一致。
 
     注意：开启归档（QUANT_ARCHIVE_ENABLED）累积 qfq 行时，新除权会让历史 qfq
     价整体下移、归档中的旧行会变陈旧；该问题由 r3 重构的「不复权 + 复权因子
-    分表」彻底解决，本修补阶段先以 qfq 保证实时决策正确。
+    分表」彻底解决，本修补阶段先以 qfq 保证实时决策与回测口径一致。
     """
     end = end_date or today()
     if start_date is not None:

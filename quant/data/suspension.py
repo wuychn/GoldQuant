@@ -20,13 +20,27 @@ def is_suspended_from_row(stock: dict) -> bool:
 
     买入门禁用此判定，避免对停牌股发买入信号（撮合本就无法成交，
     显式拦截可给出清晰原因，并在漏斗统计中暴露）。
-    """
-    from quant.scoring.tech_indicators import quote_last_price, quote_open_price
 
+    注意：只看 ``盘口`` 字段，不回退 ``技术指标.last_close``——后者是归档数据，
+    会把「盘口为空但有历史指标」的真停牌股误判为在市。
+    """
     if not isinstance(stock, dict):
         return False
-    last = quote_last_price(stock)
-    open_ = quote_open_price(stock)
+    pk = stock.get("盘口")
+    if not isinstance(pk, dict):
+        return True  # 无盘口字段视为无报价
+    last = None
+    for k in ("最新", "最新价"):
+        v = pk.get(k)
+        if isinstance(v, (int, float)) and v > 0:
+            last = float(v)
+            break
+    open_ = None
+    for k in ("今开", "开盘", "开盘价", "open"):
+        v = pk.get(k)
+        if isinstance(v, (int, float)) and v > 0:
+            open_ = float(v)
+            break
     return last is None and open_ is None
 
 
