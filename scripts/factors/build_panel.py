@@ -1,0 +1,61 @@
+"""构建因子面板脚本。
+
+用法：
+    python -m scripts.factors.build_panel --start 2022-01-01 --end 2024-12-31 --out data/panel.parquet
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+
+from quant.data.calendar import trading_days_between
+from quant.factors.panel_builder import build_panel
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--start", required=True)
+    ap.add_argument("--end", required=True)
+    ap.add_argument("--out", default="data/panel.parquet")
+    args = ap.parse_args()
+
+    dates = trading_days_between(args.start, args.end)
+    if not dates:
+        print("无交易日")
+        return
+    date_strs = [d.strftime("%Y%m%d") for d in dates]
+    rows = build_panel(date_strs)
+    print(f"构建 {len(rows)} 行")
+
+    # 序列化为 records
+    records = []
+    for r in rows:
+        rec = {
+            "date": r.date,
+            "code": r.code,
+            "name": r.name,
+            "industry": r.industry,
+            "log_mcap": r.log_mcap,
+            "forward_return_pct": r.forward_return_pct,
+            "raw": json.dumps(r.raw, ensure_ascii=False),
+            "neutral": json.dumps(r.neutral, ensure_ascii=False),
+        }
+        records.append(rec)
+
+    try:
+        import pandas as pd
+
+        df = pd.DataFrame(records)
+        Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+        df.to_parquet(args.out, index=False)
+        print(f"已写入 {args.out}")
+    except ImportError:
+        print("pyarrow 未安装，仅打印前 5 行")
+        for r in records[:5]:
+            print(r)
+
+
+if __name__ == "__main__":
+    main()
