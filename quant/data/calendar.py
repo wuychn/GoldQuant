@@ -1,7 +1,7 @@
 """A股交易日历：基于 AKShare ``tool_trade_date_hist_sina`` 的本地缓存。
 
 提供：
-- ``is_trading_day(d)`` / ``trading_days_between(a, b)`` / ``next_trading_day(d)``
+- ``is_trading_day(d)`` / ``trading_days_between(a, b)`` / ``trading_day_list(a, b)``
 - ``trading_days_since(buy_date, today)``：用于时间止损的持仓交易日计数
 
 数据源仅返回历史交易日；当日与未来日由 ``is_real_workday_cn`` 兜底判定
@@ -11,50 +11,76 @@
 from __future__ import annotations
 
 import json
-from datetime import date, timedelta
-from functools import lru_cache
+import os
+import time
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from quant.store.paths import quant_home
 from quant.timeutil import cn_now
+
+_MTIME_THROTTLE_SEC = 1.0  # 同一秒内不重复 stat，避免回测逐日循环被 FS 拖死
 
 
 def _calendar_path() -> Path:
     return quant_home() / "cache" / "trade_calendar.json"
 
 
-@lru_cache(maxsize=1)
-def _load_calendar() -> set[date]:
-    """加载交易日集合；缓存文件不存在或拉取失败时回退到工作日近似。"""
-    path = _calendar_path()
-    days: set[date] = set()
-    if path.is_file():
-        try:
-            arr = json.loads(path.read_text(encoding="utf-8"))
-            for s in arr:
-                days.add(date.fromisoformat(str(s)[:10]))
-        except (json.JSONDecodeError, ValueError, OSError):
-            days = set()
-    if not days:
-        days = _fetch_and_cache()
-    return days
-
-
-_calendar_mtime: float | None = None
+_cached_days: set[date] | None = None
+_cached_mtime: float | None = None
+_last_check_mono: float = 0.0
+_sorted_days: list[date] | None = None
 
 
 def _load_calendar_fresh() -> set[date]:
-    """带文件 mtime 失效的加载：跨日长跑或外部 refresh 后自动重读。"""
-    global _calendar_mtime
+    """带 mtime 失效 + 时间节流的日历加载。
+
+    - 空集不永久卡死：节流窗口过后会重试拉取
+    - 合并为单次 ``os.stat``，避免 ``is_file`` + ``stat`` 双 syscall
+    """
+    global _cached_days, _cached_mtime, _last_check_mono, _sorted_days
+
+    now = time.monotonic()
+    if _cached_days is not None and (now - _last_check_mono) < _MTIME_THROTTLE_SEC:
+        return _cached_days
+    _last_check_mono = now
+
     path = _calendar_path()
     try:
-        mtime = path.stat().st_mtime if path.is_file() else None
+        mtime = os.stat(path).st_mtime
     except OSError:
         mtime = None
-    if mtime != _calendar_mtime:
-        _load_calendar.cache_clear()
-        _calendar_mtime = mtime
-    return _load_calendar()
+
+    if _cached_days is not None and mtime == _cached_mtime and _cached_days:
+        return _cached_days
+
+    days: set[date] = set()
+    if mtime is not None:
+        try:
+            arr = json.loads(path.read_text(encoding="utf-8"))
+            for s in arr:
+                d = _coerce_date(s)
+                if d is not None:
+                    days.add(d)
+        except (json.JSONDecodeError, ValueError, OSError):
+            days = set()
+
+    if not days:
+        days = _fetch_and_cache()
+        try:
+            mtime = os.stat(path).st_mtime
+        except OSError:
+            mtime = None
+
+    _cached_days = days
+    _cached_mtime = mtime
+    _sorted_days = sorted(days) if days else []
+    return days
+
+
+def _sorted_calendar() -> list[date]:
+    _load_calendar_fresh()
+    return _sorted_days or []
 
 
 def _fetch_and_cache() -> set[date]:
@@ -95,11 +121,15 @@ def _fetch_and_cache() -> set[date]:
 
 
 def _coerce_date(v) -> date | None:
+    if isinstance(v, datetime):
+        return v.date()
     if isinstance(v, date):
         return v
     s = str(v).strip()[:10]
     if not s:
         return None
+    if len(s) == 8 and s.isdigit():
+        return date(int(s[:4]), int(s[4:6]), int(s[6:]))
     return date.fromisoformat(s)
 
 
@@ -120,27 +150,51 @@ def is_trading_day(d: date) -> bool:
     避免日历未更新到今天时误判为非交易日。
     """
     cal = _load_calendar_fresh()
+    if not cal:
+        return _is_workday_fallback(d)
     if d in cal:
         return True
-    if d > max(cal, default=date.min):
+    if d > max(cal):
         return _is_workday_fallback(d)
-    # 历史日不在日历中 → 确定不是交易日
-    if d < min(cal, default=date.max):
+    if d < min(cal):
         return False
-    return d in cal
+    return False
 
 
 def trading_days_between(start: date, end: date) -> int:
-    """(start, end] 区间内的交易日数（不含 start，含 end）。"""
+    """(start, end] 区间内的交易日数（不含 start，含 end）。
+
+    单次取日历集合后计数，避免逐日 ``is_trading_day`` 触发重复 stat。
+    """
     if end <= start:
         return 0
+    cal = _load_calendar_fresh()
+    if cal:
+        return sum(1 for d in cal if start < d <= end)
+    # 空日历：走工作日兜底（慢路径，仅失败时触发）
     n = 0
     cur = start + timedelta(days=1)
     while cur <= end:
-        if is_trading_day(cur):
+        if _is_workday_fallback(cur):
             n += 1
         cur += timedelta(days=1)
     return n
+
+
+def trading_day_list(start: date, end: date) -> list[date]:
+    """[start, end] 区间内所有交易日（含两端），升序。"""
+    if end < start:
+        return []
+    cal = _load_calendar_fresh()
+    if cal:
+        return sorted(d for d in cal if start <= d <= end)
+    out: list[date] = []
+    cur = start
+    while cur <= end:
+        if _is_workday_fallback(cur):
+            out.append(cur)
+        cur += timedelta(days=1)
+    return out
 
 
 def trading_days_since(buy_date: date, today: date | None = None) -> int:
@@ -150,17 +204,19 @@ def trading_days_since(buy_date: date, today: date | None = None) -> int:
 
 
 def next_trading_day(d: date) -> date | None:
-    cal = _load_calendar_fresh()
-    if not cal:
+    import bisect
+
+    days = _sorted_calendar()
+    if not days:
         cur = d + timedelta(days=1)
         for _ in range(15):
             if _is_workday_fallback(cur):
                 return cur
             cur += timedelta(days=1)
         return None
-    future = sorted(x for x in cal if x > d)
-    if future:
-        return future[0]
+    i = bisect.bisect_right(days, d)
+    if i < len(days):
+        return days[i]
     cur = d + timedelta(days=1)
     for _ in range(15):
         if _is_workday_fallback(cur):
@@ -170,21 +226,28 @@ def next_trading_day(d: date) -> date | None:
 
 
 def prev_trading_day(d: date) -> date | None:
-    cal = _load_calendar_fresh()
-    if not cal:
+    import bisect
+
+    days = _sorted_calendar()
+    if not days:
         cur = d - timedelta(days=1)
         for _ in range(15):
             if _is_workday_fallback(cur):
                 return cur
             cur -= timedelta(days=1)
         return None
-    past = sorted((x for x in cal if x < d), reverse=True)
-    return past[0] if past else None
+    i = bisect.bisect_left(days, d) - 1
+    return days[i] if i >= 0 else None
 
 
 def refresh_calendar() -> int:
     """强制重新拉取交易日历并刷新缓存；返回交易日条数。供运维/脚本调用。"""
-    _load_calendar.cache_clear()
+    global _cached_days, _cached_mtime, _last_check_mono, _sorted_days
+    _cached_days = None
+    _cached_mtime = None
+    _last_check_mono = 0.0
+    _sorted_days = None
     days = _fetch_and_cache()
-    _load_calendar.cache_clear()
-    return len(days)
+    _cached_days = None  # 强制下次重读文件
+    _cached_mtime = None
+    return len(_load_calendar_fresh())

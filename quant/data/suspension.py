@@ -23,25 +23,23 @@ def is_suspended_from_row(stock: dict) -> bool:
 
     注意：只看 ``盘口`` 字段，不回退 ``技术指标.last_close``——后者是归档数据，
     会把「盘口为空但有历史指标」的真停牌股误判为在市。
+
+    价格解析走 ``to_float``：盘口值可能是字符串（``"10.5"``）、带千分位或 numpy
+    标量，用 ``isinstance(v, (int, float))`` 判断会把在市股误判为停牌，进而在买入
+    门禁处全量拦截。
     """
+    from quant.scoring.tech_indicators import to_float
+
     if not isinstance(stock, dict):
         return False
     pk = stock.get("盘口")
     if not isinstance(pk, dict):
         return True  # 无盘口字段视为无报价
-    last = None
-    for k in ("最新", "最新价"):
-        v = pk.get(k)
-        if isinstance(v, (int, float)) and v > 0:
-            last = float(v)
-            break
-    open_ = None
-    for k in ("今开", "开盘", "开盘价", "open"):
-        v = pk.get(k)
-        if isinstance(v, (int, float)) and v > 0:
-            open_ = float(v)
-            break
-    return last is None and open_ is None
+    for k in ("最新", "最新价", "今开", "开盘", "开盘价", "open"):
+        f = to_float(pk.get(k))
+        if f is not None and f > 0:
+            return False
+    return True
 
 
 def _tfp_cache_path(date_str: str) -> Path:

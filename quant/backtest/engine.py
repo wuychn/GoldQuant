@@ -236,7 +236,7 @@ def _make_close_provider(start_yyyymmdd: str | None, end_yyyymmdd: str | None):
                     period="daily",
                     start_date=start_yyyymmdd,
                     end_date=end_yyyymmdd,
-                    adjust="qfq",  # 与买入价（enrich 用 qfq）同基准，跨除权日盈亏一致
+                    adjust="",  # 买入价来自盘口.最新（实时原始价，不复权）；估值必须同口径
                 )
             except Exception:
                 rows = None

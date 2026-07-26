@@ -77,33 +77,37 @@ def compute_benchmark_metrics(
     if len(closes) < 2:
         return {"benchmark_symbol": benchmark_symbol}
 
-    # 对齐：取每个权益日对应的基准收盘（缺失则用最近一次前值填充）
+    # 对齐：为每个权益日取对应基准收盘（缺失用最近一次前值填充）。
+    # 关键：策略与基准必须共用同一批日期，否则超额收益/beta 的时点会错位。
+    # 基准无前值可填的起始日（早于基准首个数据点）整段丢弃，策略侧同步丢弃。
     sorted_bdates = sorted(closes)
-    bench_by_date: dict[str, float] = {}
-    last = None
-    for bd in sorted_bdates:
-        last = closes[bd]
-        bench_by_date[bd] = last
     aligned: list[float] = []
+    aligned_equities: list[float] = []
+    bi = 0  # sorted_bdates 上的游标，随权益日单调前进，避免每日 O(n) 回扫
     prev = None
-    for d in dates:
-        px = closes.get(d)
-        if px is None:
-            # 用最近的基准收盘前值
-            cand = [bd for bd in sorted_bdates if bd <= d]
-            px = closes[cand[-1]] if cand else prev
-        if px is None:
-            continue
-        aligned.append(px)
-        prev = px
+    for d, pt in zip(dates, curve):
+        while bi < len(sorted_bdates) and sorted_bdates[bi] <= d:
+            prev = closes[sorted_bdates[bi]]
+            bi += 1
+        if prev is None:
+            continue  # 基准尚无数据，策略侧同步跳过
+        aligned.append(prev)
+        aligned_equities.append(float(pt["equity"]))
 
     if len(aligned) < 2:
         return {"benchmark_symbol": benchmark_symbol}
 
+    # 策略与基准日收益逐日成对构造：任一侧无效则两侧同时跳过，保证严格同期，
+    # 否则 tracking_error / beta 会拿错位的两条序列做协方差。
     bench_rets: list[float] = []
+    strat_rets: list[float] = []
     for i in range(1, len(aligned)):
-        if aligned[i - 1] > 0:
-            bench_rets.append(aligned[i] / aligned[i - 1] - 1.0)
+        b_prev, b_cur = aligned[i - 1], aligned[i]
+        s_prev, s_cur = aligned_equities[i - 1], aligned_equities[i]
+        if b_prev <= 0 or s_prev <= 0:
+            continue
+        bench_rets.append(b_cur / b_prev - 1.0)
+        strat_rets.append(s_cur / s_prev - 1.0)
 
     if not bench_rets:
         return {"benchmark_symbol": benchmark_symbol}
@@ -117,20 +121,18 @@ def compute_benchmark_metrics(
     bench_vol = math.sqrt(var) * math.sqrt(252)
     bench_sharpe = (bench_ann / bench_vol) if bench_vol > 1e-9 else 0.0
 
-    # 超额收益与策略日收益对齐
-    equities = [pt["equity"] for pt in curve]
-    strat_rets: list[float] = []
-    for i in range(1, len(equities)):
-        if equities[i - 1] > 0:
-            strat_rets.append(equities[i] / equities[i - 1] - 1.0)
-
+    # 超额收益 = 策略总收益 - 基准总收益（几何口径，非日超额算术累加）；
+    # 两者都取 aligned 区间的首尾，保证同起止时点。
     excess = None
     tracking_error = None
     beta = None
-    if len(strat_rets) == len(bench_rets) and strat_rets:
+    if strat_rets:
         ex = [s - b for s, b in zip(strat_rets, bench_rets)]
-        # 超额收益 = 策略总收益 - 基准总收益（几何口径，非日超额算术累加）
-        strat_total = equities[-1] / equities[0] - 1.0 if equities[0] > 0 else 0.0
+        strat_total = (
+            aligned_equities[-1] / aligned_equities[0] - 1.0
+            if aligned_equities[0] > 0
+            else 0.0
+        )
         excess = strat_total - bench_total
         ex_mean = sum(ex) / len(ex)
         ex_var = sum((x - ex_mean) ** 2 for x in ex) / max(len(ex) - 1, 1)
