@@ -56,9 +56,6 @@ def main() -> None:
         no_push = "--no-push" in sys.argv
         run_daily_decision(push=not no_push, dry_run=dry)
         return
-    if mode == "industry_aliases_draft":
-        print("已退役：行业别名草稿属于旧评分链路")
-        sys.exit(2)
 
     from quant.ops.runner import run_mode
 

@@ -17,9 +17,8 @@ from typing import Iterable
 import numpy as np
 import pandas as pd
 
-from quant.data.adjust import apply_hfq, read_adj_factor
+from quant.data.adjust import load_adjusted_daily
 from quant.data.calendar import to_iso
-from quant.data.store import read_daily_raw
 from quant.data.universe import universe_codes
 from quant.factors.base import FactorRow
 from quant.factors.library import BarSeries
@@ -52,16 +51,15 @@ def _normalize_daily(daily: pd.DataFrame) -> pd.DataFrame:
     return daily
 
 
-def _build_bar_series(code_df: pd.DataFrame, adj: pd.DataFrame, code: str) -> BarSeries | None:
-    """从单只票的 DataFrame 构后复权 BarSeries。code_df 已含该票全部历史。"""
+def _build_bar_series(code_df: pd.DataFrame, code: str) -> BarSeries | None:
+    """从单只票的后复权 DataFrame 构 BarSeries。
+
+    code_df 已含该票全部历史，且**已在上游合并复权因子**（见 build_panel KEYSTONE）；
+    本函数不再二次复权。
+    """
     if code_df.empty:
         return None
-    sub = code_df
-    if not adj.empty:
-        a = adj[adj["code"] == code]
-        if not a.empty:
-            sub = apply_hfq(sub, a)
-    df = sub.sort_values("date").set_index("date")
+    df = code_df.sort_values("date").set_index("date")
     cols = [c for c in ("open", "high", "low", "close", "volume", "amount", "turnover_rate") if c in df.columns]
     return BarSeries(code=code, df=df[cols])
 
@@ -78,14 +76,16 @@ def build_panel(
 ) -> list[FactorRow]:
     """构建全历史因子面板。返回 FactorRow 列表（含 raw/neutral/forward_return_pct/meta['fwd']）。
 
+    【KEYSTONE】``daily`` 必须为**后复权**帧：默认经 ``load_adjusted_daily`` 读取
+    （不复权 raw + adj_factor 合并）；调用方自行传入时须已复权。因子值与前瞻收益/IC
+    因此在同一复权基准上，消除除权日假跳空（修此前 IC 标签被原始价污染的 bug）。
+    ``adj`` 参数已废弃：调整在加载边界完成，面板内不再二次复权。
     ``dates`` 为要构建的交易日列表（ISO 或 YYYYMMDD 均可，内部归一化为 ISO）。
     ``universe_by_date`` 可直接注入每日 universe，跳过离线库查询（测试/复用场景）。
     """
     if daily is None:
-        daily = read_daily_raw()
+        daily = load_adjusted_daily()
     daily = _normalize_daily(daily)
-    if adj is None:
-        adj = read_adj_factor()
 
     factors = registry.all()
     iso_dates = [to_iso(d) for d in dates]
@@ -108,7 +108,7 @@ def build_panel(
     for code, code_df in daily.groupby("code", sort=False):
         if code_df.empty:
             continue
-        bars = _build_bar_series(code_df, adj, code)
+        bars = _build_bar_series(code_df, code)
         if bars is None:
             continue
         # 该 code 在哪些评估日有数据

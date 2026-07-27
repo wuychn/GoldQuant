@@ -164,14 +164,24 @@ def execute_signals(
     holdings = [h for i, h in enumerate(holdings) if i not in to_remove]
 
     # --- 第二阶段：买入 / 加仓 ---
+    # Phase 3 风控门禁：卖出不受限（便于减仓降风险），仅约束新开仓
+    from quant.execution.risk_gate import build_risk_context
+
+    gate = build_risk_context(total_assets=cash + compute_holdings_market_value(holdings))
+    if not gate.allow_new_buy:
+        print(f"买入全部跳过（风控）：{'; '.join(gate.reasons) or '触发'}")
     held_codes = {str(h.get("股票代码", "")).strip() for h in holdings}
     idx_map = {str(h.get("股票代码", "")).strip(): i for i, h in enumerate(holdings)}
     for signal in signals:
         if signal.action != "买入":
             continue
-        if signal.code in sold_today:
-            print(f"买入跳过 当日已卖：{signal.name}({signal.code})")
-            rejected[signal.code] = "当日已卖不回补"
+        if not gate.allow_new_buy:
+            rejected.setdefault(
+                signal.code, "风控禁开仓: " + ('; '.join(gate.reasons) or '触发')
+            )
+            continue
+        if signal.code in gate.blocked_codes:
+            rejected.setdefault(signal.code, "风控黑名单（止损冷却/当日已卖）")
             continue
         already = signal.code in held_codes
         if already and not allow_add:
@@ -256,6 +266,7 @@ def _trade_record(
         "战法": signal.strategy,
         "理由": signal.reason,
         "卖出类型": signal.sell_type or "",
+        "信号价": round(float(signal.price), 4),  # 供滑点经验校准（Phase 7）
     }
     if isinstance(breakdown, SellProceedsBreakdown):
         rec.update(

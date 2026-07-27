@@ -43,6 +43,8 @@ def main() -> None:
             "forward_return_pct": r.forward_return_pct,
             "raw": json.dumps(r.raw, ensure_ascii=False),
             "neutral": json.dumps(r.neutral, ensure_ascii=False),
+            # 保留多档前瞻收益，供存盘 parquet 的 IC decay 使用（此前丢弃致 decay 全 0）
+            "fwd": json.dumps(r.meta.get("fwd", {}), ensure_ascii=False),
         }
         records.append(rec)
 

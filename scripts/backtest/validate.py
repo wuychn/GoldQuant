@@ -14,7 +14,7 @@ import numpy as np
 from quant.backtest2.engine import ExitConfig, run_backtest
 from quant.backtest2.metrics import compute_metrics
 from quant.data.calendar import to_iso, trading_day_list
-from quant.data.store import read_daily_raw
+from quant.data.adjust import load_adjusted_daily
 from quant.factors.compose import compose_alpha
 from quant.factors.panel_builder import build_panel
 from quant.portfolio2.target import TargetPortfolio
@@ -36,7 +36,7 @@ def main() -> None:
         print("交易日过少")
         return
 
-    daily = read_daily_raw()
+    daily = load_adjusted_daily()
     panel = build_panel(dates, daily=daily)
     alpha_by_date: dict[str, dict[str, float]] = {}
     rows_by: dict[str, list] = {}

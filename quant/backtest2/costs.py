@@ -1,43 +1,73 @@
-"""成交成本模型：佣金 + 印花税 + 过户费 + 滑点。
+"""统一成交成本模型：backtest 与 live 共用同一来源。
 
-A股现行（2024）：
-- 佣金：万分之 2.5（双边，最低 5 元）
-- 印花税：千分之 0.5（仅卖出）
-- 过户费：万分之 0.1（双边，沪市）
-- 滑点：按成交价比例，默认万分之 5
+单一配置来源 = ``execution.sim_rules.TradeSimConfig``（读 ``quant.yml gates.trading.simulation``），
+佣金万一/最低 5、卖出印花税千 0.5、沪市过户费万 0.1、滑点 vol_scaled。
+
+关键修复：
+- 滑点仅在 ``fill_price`` 应用**一次**（旧 ``CostModel`` 在 fill_price 抬价后又于 buy_cost/sell_cost
+  重复计滑点，回测系统性高估成本）。
+- 佣金/滑点/过户费口径与实盘 ``calc_buy_cost``/``calc_sell_proceeds`` 完全一致（消除
+  回测万2.5佣金 vs 实盘万1 的分歧）。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+from quant.execution.sim_rules import (
+    TradeSimConfig,
+    calc_commission,
+    calc_stamp_tax,
+    calc_transfer_fee,
+    load_trade_sim_config,
+)
+from quant.execution.slippage import slip_price_with_context
 
-@dataclass(frozen=True)
+
+@dataclass
 class CostModel:
-    commission_bps: float = 0.00025  # 万 2.5
-    min_commission: float = 5.0
-    stamp_bps: float = 0.0005  # 千 0.5（卖出）
-    transfer_fee_bps: float = 0.00001  # 万 0.1
-    slippage_bps: float = 0.0005  # 万 5
+    """成本模型：委托 sim_rules 的同一套计算，保证回测=实盘。
 
-    def buy_cost(self, price: float, shares: int) -> float:
-        amount = price * shares
-        comm = max(amount * self.commission_bps, self.min_commission)
-        transfer = amount * self.transfer_fee_bps
-        slip = amount * self.slippage_bps
-        return comm + transfer + slip
+    ``sim=None`` 时惰性加载配置（避免模块导入期读 yaml）。
+    """
 
-    def sell_cost(self, price: float, shares: int) -> float:
-        amount = price * shares
-        comm = max(amount * self.commission_bps, self.min_commission)
-        stamp = amount * self.stamp_bps
-        transfer = amount * self.transfer_fee_bps
-        slip = amount * self.slippage_bps
-        return comm + stamp + transfer + slip
+    sim: TradeSimConfig | None = None
 
-    def fill_price(self, price: float, is_buy: bool) -> float:
-        """滑点后成交价：买高卖低。"""
-        return price * (1 + self.slippage_bps) if is_buy else price * (1 - self.slippage_bps)
+    def _sim(self) -> TradeSimConfig:
+        return self.sim or load_trade_sim_config()
+
+    def fill_price(
+        self,
+        price: float,
+        is_buy: bool,
+        *,
+        code: str = "",
+        stock: dict | None = None,
+        quantity: int = 0,
+    ) -> float:
+        """滑点后成交价（买高卖低），滑点仅在此应用一次。"""
+        return slip_price_with_context(
+            price,
+            side="buy" if is_buy else "sell",
+            cfg=self._sim(),
+            stock=stock,
+            code=code,
+            quantity=quantity,
+        )
+
+    def buy_cost(self, fill_price: float, shares: int, *, code: str = "") -> float:
+        """买入成本（佣金 + 过户费；不含滑点，滑点已计入 fill_price）。"""
+        amount = fill_price * shares
+        return calc_commission(amount, self._sim()) + calc_transfer_fee(amount, code, self._sim())
+
+    def sell_cost(self, fill_price: float, shares: int, *, code: str = "") -> float:
+        """卖出成本（佣金 + 印花税 + 过户费；不含滑点）。"""
+        amount = fill_price * shares
+        return (
+            calc_commission(amount, self._sim())
+            + calc_stamp_tax(amount, side="sell", cfg=self._sim())
+            + calc_transfer_fee(amount, code, self._sim())
+        )
 
 
 DEFAULT_COSTS = CostModel()

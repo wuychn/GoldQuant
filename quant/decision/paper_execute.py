@@ -566,7 +566,13 @@ def execute_decision_card(
     names: dict[str, str] | None = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    """在 paper_account 下撮合决策卡，返回成交摘要。"""
+    """在 paper_account 下撮合决策卡，返回成交摘要。
+
+    ⚠️ 时点口径：本函数用 ``as_of`` 当日收盘信号 + 当日收盘价成交，属**同日收盘理想化**
+    上界（含前视），仅用于 dry-run/测试，**不得用于绩效声明**。生产晚间流程已改为
+    「T 晚只定计划（write_battle_pool/write_sell_watch）→ T+1 盘中 execute_intraday_*
+    执行」，与回测 ``strict_signals``（T-1 信号/T 开盘成交）同属无前视口径。
+    """
     with paper_home_context() as home:
         holdings = get_holdings()
         if prices is None or names is None:

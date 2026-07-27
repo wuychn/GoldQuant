@@ -19,6 +19,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
 
+from quant.data.delist import fetch_delisted_codes, fetch_delisted_daily
 from quant.data.fetch import fetch_hist, fetch_index, fetch_trade_calendar
 from quant.data.store import (
     read_daily_raw,
@@ -46,9 +47,15 @@ def _existing_codes() -> set[str]:
 
 
 def _build_one(code: str, start: str, end: str) -> tuple[str, int]:
-    """拉单只并落库。重试/退避由 ``fetch_hist`` 内部 ``_retry`` 兜底，失败返回 0 行。"""
+    """拉单只并落库。重试/退避由 ``fetch_hist`` 内部 ``_retry`` 兜底，失败返回 0 行。
+
+    东财 ``stock_zh_a_hist`` 对退市/早期停牌股常返回空；此时回退 Sina
+    ``stock_zh_a_daily`` 拉历史（退市股修复幸存者偏差的关键路径）。
+    """
     try:
         df = fetch_hist(code, start=start, end=end, adjust="")
+        if df.empty:
+            df = fetch_delisted_daily(code, start=start, end=end)
         if not df.empty:
             write_daily_raw(df)
         return code, len(df)
@@ -68,6 +75,11 @@ def main() -> None:
         "--ignore-existing",
         action="store_true",
         help="跳过代码去重，对所有代码拉（补日期缺口用；write 按 code+date 去重不重复）",
+    )
+    ap.add_argument(
+        "--no-delisted",
+        action="store_true",
+        help="不并入退市股（默认并入，修复幸存者偏差）",
     )
     args = ap.parse_args()
 
@@ -99,6 +111,14 @@ def main() -> None:
         except Exception as e:
             print(f"[FATAL] 无法获取代码表（spot_em 失败）: {e}", file=sys.stderr)
             sys.exit(1)
+        if not args.no_delisted:
+            # 退市股并入（修复幸存者偏差）；失败则跳过，不阻断
+            try:
+                del_codes = fetch_delisted_codes()["code"].astype(str).str.strip().tolist()
+                codes = list(dict.fromkeys(codes + del_codes))  # 去重保序
+                print(f"退市股并入: +{len(del_codes)} → 代码总数 {len(codes)}")
+            except Exception as e:
+                print(f"[WARN] 退市清单拉取失败（跳过）: {e}", file=sys.stderr)
     if args.limit:
         codes = codes[: args.limit]
     print(f"全A 代码数: {len(codes)}")

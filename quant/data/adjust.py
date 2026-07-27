@@ -122,3 +122,27 @@ def hfq_close_series(code: str, *, start: str | None = None, end: str | None = N
     merged = apply_hfq(raw, adj)
     s = merged.set_index("date")["close"].sort_index()
     return s
+
+
+def load_adjusted_daily(
+    *,
+    start: str | None = None,
+    end: str | None = None,
+    codes: list[str] | None = None,
+) -> pd.DataFrame:
+    """【KEYSTONE】读取后复权日线帧。
+
+    所有价格类计算（因子、前瞻收益/IC、回测成交、出场 ATR/MA20、波动率）
+    统一通过本函数取数，确保入场与出场、因子与标签在同一复权基准上。
+    ``daily_raw`` 落盘仍为不复权 OHLCV（不变量不变），此处读时合并 ``adj_factor``。
+
+    无复权因子（未拉取）的 (code,date) ``hfq_factor`` 缺失 → 视为 1.0（即不调整），
+    与历史 ``apply_hfq`` 行为一致；Phase 4 退市股回填会同步补齐因子。
+    """
+    daily = read_daily_raw(start=start, end=end, codes=codes)
+    if daily.empty:
+        return daily
+    adj = read_adj_factor(codes=codes)
+    if adj.empty:
+        return daily
+    return apply_hfq(daily, adj)

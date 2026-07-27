@@ -46,11 +46,16 @@ def load_trade_sim_config() -> TradeSimConfig:
     )
 
 
-def limit_pct(code: str, cfg: TradeSimConfig) -> float:
-    c = str(code).strip()
-    if c.startswith(("30", "68")):
-        return cfg.gem_limit_pct
-    return cfg.main_limit_pct
+def limit_pct(code: str, cfg: TradeSimConfig, name: str | None = None) -> float:
+    """涨跌停比例（百分点）。
+
+    单一来源 = ``backtest2.tradability._limit_pct``（board + ST 感知）：
+    主板 10 / 创业板·科创 20 / 北交 30 / ST 5。旧实现仅 9.9/19.9，漏判 ST 5% 与北交 30%，
+    致实盘对 ST 与北交股的涨跌停判定偏松；现与回测 ``tradability`` 完全一致。
+    """
+    from quant.backtest2.tradability import _limit_pct as _tier
+
+    return _tier(code, name) * 100.0
 
 
 def at_limit_up_down(stock: dict | None, code: str, *, side: str, cfg: TradeSimConfig) -> bool:
@@ -59,7 +64,8 @@ def at_limit_up_down(stock: dict | None, code: str, *, side: str, cfg: TradeSimC
     chg = quote_change_pct(stock)
     if chg is None:
         return False
-    lim = limit_pct(code, cfg)
+    name = stock.get("股票名称") or stock.get("name")
+    lim = limit_pct(code, cfg, name)
     if side == "buy" and chg >= lim - 0.05:
         return True
     if side == "sell" and chg <= -lim + 0.05:

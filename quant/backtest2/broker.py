@@ -88,22 +88,24 @@ class SimBroker:
         if not can_buy(row, prev_close, code=code, name=row.get("name")):
             return
         price = float(ref_price) if ref_price and ref_price > 0 else float(row["close"])
-        fill = self.costs.fill_price(price, is_buy=True)
-        # 目标股数（整手），再被现金 / 成交额 5% 约束
-        shares = shares_for_amount(fill, target_amount)
         try:
             day_amt = float(row.get("amount") or 0)
         except (TypeError, ValueError):
             day_amt = 0.0
-        shares = cap_shares_by_adv(shares, price=fill, day_amount=day_amt, max_pct=0.05)
+        # 先按未滑点价估股数（与 live 用 signal_price 算股数一致），再 ADV 封顶
+        shares = shares_for_amount(price, target_amount)
+        shares = cap_shares_by_adv(shares, price=price, day_amount=day_amt, max_pct=0.05)
         if shares <= 0:
             return
-        cost = self.costs.buy_cost(fill, shares)
+        # 滑点依赖股数（notional 项），故先定股数再算 fill/cost（与 calc_buy_cost 同口径）
+        fill = self.costs.fill_price(price, is_buy=True, code=code, quantity=shares)
+        cost = self.costs.buy_cost(fill, shares, code=code)
         while shares > 0 and self.cash < fill * shares + cost:
             shares -= 100
             if shares <= 0:
                 return
-            cost = self.costs.buy_cost(fill, shares)
+            fill = self.costs.fill_price(price, is_buy=True, code=code, quantity=shares)
+            cost = self.costs.buy_cost(fill, shares, code=code)
         if shares <= 0:
             return
         self.cash -= fill * shares + cost
@@ -147,12 +149,13 @@ class SimBroker:
         if not can_sell(code, row, prev_close, self.t1_locked, name=row.get("name")):
             return
         price = float(ref_price) if ref_price and ref_price > 0 else float(row["close"])
-        fill = self.costs.fill_price(price, is_buy=False)
         qty = h.shares if target_shares is None else min(target_shares, h.shares)
         qty = round_lot(qty)
         if qty <= 0:
             return
-        cost = self.costs.sell_cost(fill, qty)
+        # 滑点依赖股数；先用未滑点价定 qty，再算 fill/cost（与 calc_sell_proceeds 同口径）
+        fill = self.costs.fill_price(price, is_buy=False, code=code, quantity=qty)
+        cost = self.costs.sell_cost(fill, qty, code=code)
         proceeds = fill * qty - cost
         self.cash += proceeds
         realized = (fill - h.cost_price) * qty - cost

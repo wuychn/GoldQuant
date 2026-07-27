@@ -14,8 +14,8 @@ from pathlib import Path
 
 from quant.backtest2.engine import ExitConfig, run_backtest
 from quant.backtest2.metrics import compute_metrics
+from quant.data.adjust import load_adjusted_daily
 from quant.data.calendar import to_iso, trading_day_list
-from quant.data.store import read_daily_raw
 from quant.factors.compose import compose_alpha
 from quant.factors.panel_builder import build_panel
 from quant.portfolio2.target import TargetPortfolio
@@ -58,7 +58,7 @@ def main() -> None:
 
         args.out = str(reports_dir("wf"))
 
-    daily = read_daily_raw()
+    daily = load_adjusted_daily()
     print("构建全区间因子面板…")
     alpha_all = _build_alpha(dates, daily)
 

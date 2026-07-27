@@ -100,6 +100,11 @@ def main() -> None:
         meta = {}
         if "meta" in r and r["meta"] is not None:
             meta = json.loads(r["meta"]) if isinstance(r["meta"], str) else dict(r["meta"])
+        # 读取序列化的多档前瞻收益（build_panel.py 写为独立 fwd 列），供 ic_decay 使用
+        if "fwd" in r and r["fwd"] is not None:
+            fwd = json.loads(r["fwd"]) if isinstance(r["fwd"], str) else dict(r["fwd"])
+            if fwd:
+                meta["fwd"] = {int(k): float(v) for k, v in fwd.items()}
         rows.append(
             FactorRow(
                 date=str(r["date"]),

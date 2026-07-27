@@ -14,9 +14,10 @@ import json
 from datetime import date, timedelta
 from pathlib import Path
 
+from quant.config import load_factor_weights
+from quant.data.adjust import load_adjusted_daily
 from quant.data.calendar import is_trading_day, next_trading_day, to_iso, trading_day_list
 from quant.data.industry import read_industry_snapshot
-from quant.data.store import read_daily_raw
 from quant.data.universe import universe_codes
 from quant.decision.daily_output import DecisionCard, build_decision_card, card_to_text
 from quant.decision.paper_execute import (
@@ -71,7 +72,8 @@ def build_today_card(
     today = date.fromisoformat(as_of)
     start = today - timedelta(days=400)
     hist_dates = [to_iso(d) for d in trading_day_list(start, today)]
-    daily = read_daily_raw(end=as_of)
+    # KEYSTONE：出场 ATR/MA20、目标组合 realized_vol 与因子 alpha 同在后复权基准
+    daily = load_adjusted_daily(end=as_of)
     uni = universe_codes(as_of)
     print(f"决策日 {as_of} | universe={len(uni)}")
 
@@ -86,7 +88,8 @@ def build_today_card(
         else:
             raise SystemExit("面板为空，检查离线库")
 
-    alpha = compose_alpha(rows_today)
+    # IC 驱动权重（过去拟合、今日应用 = 干净 OOS）；无 factor_weights.yml 时回退 registry 默认
+    alpha = compose_alpha(rows_today, weights=load_factor_weights())
     sectors = read_industry_snapshot(as_of)
     policy = TargetPortfolio(
         n_enter=n_enter,

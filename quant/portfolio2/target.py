@@ -16,7 +16,12 @@ from quant.portfolio2.constraints import (
     apply_single_cap,
     truncate_to_n,
 )
-from quant.portfolio2.voltarget import inv_vol_weights, realized_vol, scale_to_target_vol
+from quant.portfolio2.voltarget import (
+    estimate_covariance,
+    inv_vol_weights,
+    realized_vol,
+    scale_to_target_vol,
+)
 
 
 @dataclass
@@ -35,7 +40,7 @@ class TargetPortfolio:
     buffer_rel: float = 0.20
     drop_tol: float = 0.015
     min_trade: float = 0.01  # |Δw| < min_trade 不交易（并入权重缓冲）
-    vol_lookback: int = 20
+    vol_lookback: int = 60  # 波动率/协方差回看窗口（20→60，降噪；可配）
     equal_weight: bool = True  # 默认等权；False 时逆波动率
     daily: pd.DataFrame = field(default_factory=pd.DataFrame)
     sectors: dict[str, str] = field(default_factory=dict)
@@ -54,6 +59,21 @@ class TargetPortfolio:
             out[c] = v
         return out
 
+    def _cov(
+        self, codes: list[str], as_of: str
+    ) -> tuple[dict[str, float], dict[str, dict[str, float]] | None]:
+        """真实协方差矩阵（含收缩）；数据不足回退到单资产波动率 + None（旧 ρ 口径）。"""
+        est = estimate_covariance(self.daily, codes, as_of, lookback=self.vol_lookback)
+        if est is None:
+            return self._vols(codes, as_of), None
+        sigmas, covdict = est
+        # 补全 estimate 落选的代码（用单资产波动回退）
+        fallback = self._vols(codes, as_of)
+        for c in codes:
+            if c not in sigmas:
+                sigmas[c] = fallback.get(c, 0.30)
+        return sigmas, covdict
+
     def target_weights(self, alpha, prices, current, date):
         # 1. 排名 buffer
         codes = apply_rank_buffer(
@@ -67,24 +87,21 @@ class TargetPortfolio:
             # 按 alpha 保留最强
             codes = sorted(codes, key=lambda c: -alpha.get(c, -1e18))[: self.max_stocks]
 
-        # 2. 权重：等权或逆波动
+        # 2/3. 权重 + 波动率目标：用真实协方差矩阵估组合波动（替代单一 ρ=0.3）
+        sigmas, covdict = self._cov(codes, date)
         if self.equal_weight:
             base = self.full_invest / len(codes)
             w = {c: base for c in codes}
+            if self.target_vol > 0:
+                w = scale_to_target_vol(w, sigmas, self.target_vol, cov=covdict)
+                s = sum(w.values())
+                if s > self.full_invest > 0:
+                    w = {c: v * (self.full_invest / s) for c, v in w.items()}
         else:
-            vols = self._vols(codes, date)
-            w = inv_vol_weights(vols, max_weight=self.max_weight)
-            w = scale_to_target_vol(w, vols, self.target_vol)
+            w = inv_vol_weights(sigmas, max_weight=self.max_weight)
+            w = scale_to_target_vol(w, sigmas, self.target_vol, cov=covdict)
             s = sum(w.values())
             if s > 0:
-                w = {c: v * (self.full_invest / s) for c, v in w.items()}
-
-        # 3. 波动率目标缩放总仓（等权路径也做）
-        if self.equal_weight and self.target_vol > 0:
-            vols = self._vols(list(w.keys()), date)
-            w = scale_to_target_vol(w, vols, self.target_vol)
-            s = sum(w.values())
-            if s > self.full_invest > 0:
                 w = {c: v * (self.full_invest / s) for c, v in w.items()}
 
         # 4. 约束

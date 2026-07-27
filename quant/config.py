@@ -173,11 +173,33 @@ def load_push_config() -> dict:
     return copy.deepcopy(load_quant_config().get("push") or {})
 
 
+@lru_cache(maxsize=1)
+def load_factor_weights() -> dict[str, float] | None:
+    """IC 驱动的因子权重（``~/.quant/config/factor_weights.yml``）。
+
+    无文件或 ``apply=False`` 时返回 None → 调用方回退到 ``registry.weights()``（手工默认），
+    保持向后兼容。有文件时返回**完整**权重表（registry 全因子，未入选因子权重 0），
+    使 ``compose_alpha`` 跳过 IC 阴性/噪声因子。
+    """
+    from quant.factors.registry import REGISTRY
+    from quant.store.paths import config_file
+
+    path = config_file("factor_weights.yml")
+    if not path.is_file():
+        return None
+    data = _load_yaml(path)
+    if data.get("apply") is False:
+        return None
+    raw = data.get("weights") or {}
+    return {n: float(raw.get(n, 0.0)) for n in REGISTRY.names()}
+
+
 def reload_config_cache() -> None:
     load_quant_config.cache_clear()
     load_scoring_config.cache_clear()
     load_gates_config.cache_clear()
     load_push_config.cache_clear()
+    load_factor_weights.cache_clear()
 
 
 def trading_time_checks_enabled() -> bool:
