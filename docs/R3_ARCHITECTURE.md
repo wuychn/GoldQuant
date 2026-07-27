@@ -10,7 +10,7 @@
 | 项 | 说明 |
 |---|---|
 | 风格 | A 股日频 **波段 / 主升跟随**，人在环路 + 纸面模拟 |
-| 决策频率 | 日频（默认 T-1 信号 / T 开盘成交） |
+| 决策频率 | **日频选股 + 盘中择时**（T 晚选作战池，T+1 盘中因子触发买入） |
 | 核心持仓期 | **约 5–20 个交易日**（1–4 周） |
 | 偏短 | 几天：硬止损 / 破 MA20 / ATR 回撤 / 排名掉出 `N_exit` |
 | 偏长 | 偶发 3–6 周：趋势与排名持续在 buffer 内 |
@@ -20,7 +20,7 @@
 
 1. **可回溯优先**：主链路数据必须能对历史日 T 只用 ≤T 信息重建。  
 2. **相对优于绝对**：选股用横截面排名，不用绝对分数阈值。  
-3. **目标组合优于逐笔信号**：每日算目标权重，交易差额。  
+3. **选股-择时分离**：日频因子选作战池（买什么），盘中因子择时触发（何时买），两层都是多因子 z-score。  
 4. **横截面入场 + 时序出场**：排名处理「相对变弱」；崩塌用 ATR/破位等个股规则。
 
 ---
@@ -62,42 +62,58 @@ flowchart TB
 | L1 | `quant/factors/` | 因子计算、中性化、面板、合成 alpha |
 | L2 | `quant/portfolio2/` | `TargetPortfolio`：buffer / 约束 / vol target |
 | L3 | `quant/execution/` + `quant/decision/paper_execute.py` | 纸面撮合；回测用 `quant/backtest2/` |
+| 盘中择时 | `quant/factors/library/intraday.py` + `ops/modes.py:_intraday_buy_block` | 盘中因子（5）择时触发买入 |
 | L4 | `quant/exit/` | 时序出场规则 |
 | 运维 | `quant/ops/` | 新闻/盘前/盯盘/复盘 + 飞书 |
 | 决策入口 | `scripts/decision/daily.py` / `python -m quant daily_decision` | 日决策闭环 |
 
 ---
 
-## 3. 交易闭环（日频）
+## 3. 交易闭环（选股 + 盘中择时双层）
 
 ```mermaid
 flowchart TD
-  A[加载 PIT 数据] --> B[因子面板 ≤T]
-  B --> C[合成 alpha 并排序]
-  C --> D[持仓时序出场 L4]
-  D -->|触发| E[强制卖出]
-  D -->|未触发| F[TargetPortfolio 目标权重 w*]
-  E --> F
-  F --> G[w* - w 差额]
-  G --> H[先卖后买 + 涨跌停/T+1/ADV5%]
-  H --> I[纸面账户 state]
-  I --> J[equity.jsonl + 报告 + 飞书]
+  subgraph T晚[T 晚 选股层 daily_decision]
+    A[加载 PIT 数据 ≤T] --> B[因子面板 + compose_alpha]
+    B --> C[选 alpha top N 作战池]
+    C --> BP[write_battle_pool T+1]
+    A --> D[持仓 evaluate_exits L4]
+    D -->|触发| SELL[撮合卖出]
+  end
+  subgraph T1盘中[T+1 盘中 择时层 during_market]
+    BP --> R[read_battle_pool]
+    R --> SP[fetch_spot_em 实时快照]
+    SP --> IA[compose_intraday_alpha 5 盘中因子]
+    IA -->|α_z ≥ 1.0| BUY[execute_intraday_buys 最新价+分档仓位]
+    BUY --> MARK[bought_today 标记]
+  end
+  SELL --> ACC[paper_account + equity.jsonl]
+  BUY --> ACC
+  ACC --> PUSH[飞书推送]
 ```
 
 ### 3.1 时间口径
 
 | 模式 | 信号日 | 成交价 | 用途 |
 |---|---|---|---|
-| **默认 strict** | T-1 收盘因子 | T 开盘 | 实盘/纸面/默认回测 |
+| **默认 strict** | T-1 收盘因子 | T 开盘 | 回测/选股因子口径 |
 | loose | T 收盘因子 | T 收盘 | 乐观上界对照 |
 
-### 3.2 差额交易
+> 实盘买入不依赖上述口径：T 晚选作战池，T+1 盘中按 `intraday_alpha` 触发，价格=触发时最新价。
 
-\[
-\Delta V_i = (w^*_i - w_i) \times \text{总资产}
-\]
+### 3.2 买入（作战池 + 盘中择时）
 
-换算整手股数后下单；\(|\Delta w|\) 小于缓冲则不动。
+T 晚选 alpha top N（默认 30）作战池（**不定仓位**）；T+1 盘中对作战池算 `intraday_alpha`（5 盘中因子截面 z-score，见 §5b），`α_z ≥ 1.0` 触发买入：
+
+- **价格** = 触发时 `fetch_spot_em` 最新价
+- **仓位** = 单票上限 10% × 分档（α_z 越强仓位越大，5%–10%）；总仓 ≤ gates 上限
+- **幂等** = `bought_today_{date}.txt` 标记，当日不重复买
+
+> 旧"目标组合差额交易"（`ΔV=(w*−w)×总资产`）已退役为实盘买入方式，保留在回测 strict 口径（`backtest2`）。
+
+### 3.3 卖出（日频出场）
+
+T 晚 `evaluate_exits`（ATR 跟踪 / 硬止损 / 趋势破 MA20 / 时间止损）撮合，详见 §7。盘中不卖（P2 加盘中止损）。
 
 ---
 
@@ -184,6 +200,28 @@ raw × direction → winsorize(1%,99%) → 行业+log市值中性 → z-score �
 **合成**：\(\alpha=\sum_i w_i\,z_i\)（\(w_i\) 为上表默认权重）。
 
 代码：`quant/factors/library/*`、`neutralize.py`、`compose.py`、`panel_builder.py`。
+
+---
+
+## 5b. 盘中因子层（择时）
+
+数据源：`fetch_spot_em()`（全市场实时快照，含最新价/今开/昨收/涨跌幅/量比/换手率/涨速，已带 `_retry` 退避）。
+
+对作战池（T 晚选定）算 5 个**盘中因子**，截面 z-score 加权合成 `intraday_alpha`（`compose_intraday_alpha`，不做行业/市值中性化——择时只看池内相对强弱）：
+
+| 因子 | 计算 | 方向 | 默认权重 |
+|---|---|---|---|
+| `intraday_strength` | (最新−今开)/今开（开盘后走强） | + | 1.0 |
+| `volume_ratio` | 量比（放量） | + | 1.0 |
+| `speed` | 涨速（盘中加速） | + | 0.8 |
+| `day_change` | 涨跌幅 | + | 0.6 |
+| `turnover` | 换手率 | + | 0.5 |
+
+**触发**：作战池内 `α_z ≥ 1.0`（强于池内均值 1 个标准差）。
+**仓位**：单票上限 10% × 分档（α_z 越强仓位越大，5%–10%）。
+参数为经验初值，待 IC/ML 校准（P2）。
+
+代码：`quant/factors/library/intraday.py`（`SpotRow` + 因子）、`compose.py:compose_intraday_alpha`。
 
 ---
 

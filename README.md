@@ -167,22 +167,29 @@ chmod +x run.sh
 
 ## 三、业务逻辑
 
-系统分两类任务：**日决策闭环**（核心，T-1 信号 / T 开盘纸面成交）与 **五时段运维推送**（盯盘与复盘叙述）。原则：**买卖、仓位均由因子+目标组合+撮合决定**；LLM 只负责新闻解读与复盘叙述，盘中推送正文由模板直接生成。
+系统采用**机构量化的"选股-择时分离"双层架构**：**T 晚选股**（日频因子 `compose_alpha` 选作战池）+ **T+1 盘中择时买入**（盘中因子 `compose_intraday_alpha` 触发）；**卖出仍日频**（ATR/趋势/时间出场）。原则：**选股与择时都用多因子 z-score 加权**（非技术分析）；LLM 只负责新闻解读与复盘叙述，推送正文由模板生成。
 
-### 3.1 日决策闭环（`scripts/decision/daily.py` / `python -m quant daily_decision`）
+### 3.1 选股 + 盘中择时双层（`scripts/decision/daily.py` + `quant/ops/modes.py`）
 
 ```text
-加载 PIT 数据（universe/行业/复权） → 因子面板 ≤T
-   → compose_alpha 加权 z-score → 截面排序
-   → 持仓时序出场（L4，优先于再平衡）
-   → TargetPortfolio 目标权重 w* → w* - w 差额
-   → 先卖后买 + 涨跌停/T+1/整手/ADV5% → 纸面账户 state
-   → equity.jsonl + 决策报告 + 飞书
+T 晚 daily_decision（选股层，不撮买入）
+  加载 PIT 数据 → 因子面板 ≤T → compose_alpha → 选 alpha top N(默认 30) 作战池
+  → write_battle_pool(T+1)（候选池，不定仓位）
+  → 持仓 evaluate_exits（L4 时序出场）→ 只撮卖出
+  → 推送「明日作战池 + 卖出成交」
+
+T+1 盘中 during_market（择时层，每 7 分钟）
+  read_battle_pool(T+1) → fetch_spot_em 全市场实时快照
+  → compose_intraday_alpha（5 盘中因子截面 z-score，见 §3.3b）
+  → α_z ≥ 1.0 触发 → execute_intraday_buys（最新价 + 分档仓位 5–10%）
+  → 标记 bought_today（当日不重复）→ 推送「盘中择时买入」
 ```
 
-- **时间口径**：默认 `strict`（T-1 收盘因子 → T 开盘成交，实盘/纸面/默认回测一致）；`loose`（T 收盘因子 → T 收盘，乐观上界对照）。
-- **差额交易**：`ΔV_i = (w*_i − w_i) × 总资产`，换算整手股数；`|Δw|` 小于缓冲则不动。
-- **决策卡**：产出"今日该做什么"的卡（buy/sell/reduce/add/hold + 出场信号），人根据卡片执行并把实际操作回填到偏离日志；同时默认在 `paper_account/` 下纸面撮合。
+- **双层分工**：日频因子 `compose_alpha` 解决"**买什么**"（选作战池）；盘中因子 `compose_intraday_alpha` 解决"**何时买**"（择时触发）。两层都是多因子 z-score 加权，非技术分析画线。
+- **卖出仍日频**：T 晚 `evaluate_exits`（ATR 跟踪 / 硬止损 / 趋势破 MA20 / 时间止损）撮合；盘中不卖（P2 加盘中止损）。
+- **作战池**：`paper_account/battle_pool/{T+1}.json`，T 晚选 T+1 盘中择时；错过则次日重生。
+- **回测口径**：`backtest2` 仍用日频 strict 口径（独立），盘中择时是实盘纸面增强，不影响回测一致性。
+- **决策卡**：T 晚产出"明日作战池 + 卖出指令"，人可参考；纸面账户自动撮合卖出，次日盘中自动择时买入。
 
 ### 3.2 五时段运维推送（`quant/ops/`）
 
@@ -190,13 +197,13 @@ chmod +x run.sh
 |------|------|-----------|----------|
 | 新闻 | `news` | 8–22 每个整点 | LLM |
 | 盘前 | `pre_market` | 09:25 | 模板（指数+纸面账户+关注） |
-| 盘中 | `during_market` | 09:37 起每 7 分钟（至 15:00） | 模板（指数+纸面持仓+异动） |
+| 盘中 | `during_market` | 09:37 起每 7 分钟（至 15:00） | 模板（指数+纸面持仓+异动）+ **盘中择时买入** |
 | 午间复盘 | `post_market_lunch` | 11:50 | 模板（午前指数+纸面账户） |
 | 收盘复盘 | `post_market_evening` | 20:10 | 模板（收盘指数+纸面绩效+持仓） |
 
 - `news` 走 LLM（`prompt_news`）去噪要点 + 综合解读，摘要落 `~/.quant/memory/` 供盘前引用。
-- 其余四时段由 `ops/modes.py` 模板生成（指数 + 纸面账户/持仓 + 涨幅榜），**不**做评分、**不**改自选、**不**交易。
-- `daily_decision` 单独推送"日决策·纸面成交"（指令/成交/账户/持仓）。
+- 其余四时段由 `ops/modes.py` 模板生成（指数 + 纸面账户/持仓 + 涨幅榜），**不改自选**；其中 `during_market` 会执行盘中择时买入（见 §3.1）。
+- `daily_decision` 推送「明日作战池 + 卖出成交」（T 晚选股不撮买入；买入在 T+1 盘中 `during_market`）。
 
 ### 3.3 因子层（L1）
 
@@ -208,7 +215,23 @@ raw × direction → winsorize(1%,99%) → 行业+log市值中性 → z-score �
 
 `compose_alpha`（`quant/factors/compose.py`）= 加权 z-score 均值。13 个因子（动量 mom_20/60/120_20/accel、效率比 eff_ratio_60、波动 vol_60/downside_vol_60、距高 dist_high_252、均线 ma_spread/ma_slope_20、放量 vol_ratio_5_20、换手 turnover_z_60、量价 vol_price_corr_20、资金 flow_ratio_5、主题 theme_mom、人气 hot_rank_z）的默认权重与方向见 [R3_ARCHITECTURE.md §5](docs/R3_ARCHITECTURE.md#5-因子层l1指标含义与计算)。
 
+#### 3.3b 盘中因子层（择时，`quant/factors/library/intraday.py`）
+
+`compose_intraday_alpha`（`quant/factors/compose.py`）对作战池用 5 个**盘中因子**（基于 `fetch_spot_em` 实时快照字段）截面 z-score 加权合成 `intraday_alpha`（α_z），用于 T+1 盘中择时触发：
+
+| 因子 | 计算 | 默认权重 |
+|------|------|-----:|
+| `intraday_strength` | (最新−今开)/今开（开盘后走强） | 1.0 |
+| `volume_ratio` | 量比（放量） | 1.0 |
+| `speed` | 涨速（盘中加速） | 0.8 |
+| `day_change` | 涨跌幅 | 0.6 |
+| `turnover` | 换手率 | 0.5 |
+
+触发：作战池内 `α_z ≥ 1.0`（强于池内均值 1 个标准差）。参数为经验初值，待 IC/ML 校准（P2）。
+
 ### 3.4 目标组合（L2，`quant/portfolio2/target.py`）
+
+> **注意**：实盘买入已改「作战池 + 盘中择时」（§3.1）；本节目标组合框架（差额交易）保留供**回测 strict 口径**与持仓排名 buffer 参考，不再用于实盘买入撮合。
 
 `TargetPortfolio.target_weights` 五步：排名 buffer → 等权/逆波动 → vol target 缩放 → 约束 → 权重缓冲。
 
