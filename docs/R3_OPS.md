@@ -45,11 +45,3 @@ python -m scripts.decision.daily        # 同上（脚本入口）
 | 日决策·纸面成交 | daily_decision | 指令 / 成交 / 账户 / 持仓 |
 
 格式：纯文本，`标题\n时间\n\n【小节】\n行…`，简洁可读。
-
-## 已删除的旧主链路
-
-- `quant/orchestrator.py`（五模式专家评分/逐笔信号）
-- 旧脚本：`score_watchlist_*`、`scan_watchlist_trend`、`restore_optional`
-- 调度中的每周旧 ML / 旧 backtest 任务
-
-`quant/scoring`、`quant/signals` 等包仍残留于仓库（API 拉数与部分工具依赖），**不再作为决策主链路**。后续可继续剥离。

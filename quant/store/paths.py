@@ -144,6 +144,15 @@ def state_file(name: str) -> Path:
     return quant_home() / "state" / name
 
 
+def battle_pool_file(date: str) -> Path:
+    """盘中择时作战池：``$QUANT_HOME/battle_pool/{date}.json``。
+
+    T 晚选股落盘（候选池，不定仓位）；T+1 盘中 ``during_market`` 读取并用盘中因子择时买入。
+    在 ``paper_home_context`` 下落到 ``paper_account/battle_pool/``，与纸面持仓隔离一致。
+    """
+    return quant_home() / "battle_pool" / f"{date}.json"
+
+
 def view_file(name: str) -> Path:
     """只读视图 MD，勿手改。"""
     return quant_home() / "views" / name

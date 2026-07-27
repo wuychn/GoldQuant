@@ -34,6 +34,7 @@ DAILY_RAW_COLUMNS = (
 )
 
 # spot_em 字段名 → daily_raw 字段名
+# （pct/vol_ratio/speed 不属 daily_raw，但映射后供盘中因子 SpotRow 使用，write_daily_raw 不会落库这几列）
 SPOT_EM_FIELD_MAP = {
     "代码": "code",
     "名称": "name",
@@ -47,6 +48,9 @@ SPOT_EM_FIELD_MAP = {
     "换手率": "turnover_rate",
     "流通市值": "float_mv",
     "总市值": "total_mv",
+    "涨跌幅": "pct",
+    "量比": "vol_ratio",
+    "涨速": "speed",
 }
 
 # stock_zh_a_hist 字段名 → daily_raw 字段名

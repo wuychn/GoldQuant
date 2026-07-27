@@ -61,8 +61,7 @@ def _parse_time_list_csv(s: str) -> list[tuple[int, int]]:
     return [_parse_hh_mm(p) for p in parts]
 
 
-def _invoke_quant_cli(mode: str, *extra: str) -> None:
-    cmd = [sys.executable, "-m", "quant", mode, *extra]
+def _run_cmd(cmd: list[str], label: str) -> None:
     logger.info("[quant-scheduler] 执行: cwd=%s %s", _PROJECT_ROOT, " ".join(cmd))
     env = os.environ.copy()
     env.setdefault("PYTHONIOENCODING", "utf-8")
@@ -77,16 +76,25 @@ def _invoke_quant_cli(mode: str, *extra: str) -> None:
             errors="replace",
         )
     except Exception as e:
-        log_caught_error(logger, f"[quant-scheduler] 子进程启动失败 mode={mode}", e)
+        log_caught_error(logger, f"[quant-scheduler] 子进程启动失败 {label}", e)
         return
     if proc.returncode != 0:
         err_tail = (proc.stderr or proc.stdout or "").strip().splitlines()
         snippet = " | ".join(line.strip() for line in err_tail[-3:] if line.strip()) or "(无输出)"
         logger.error(
-            color_red(f"[子进程异常退出] mode={mode} 退出码={proc.returncode} — {snippet}")
+            color_red(f"[子进程异常退出] {label} 退出码={proc.returncode} — {snippet}")
         )
     else:
-        logger.info("[quant-scheduler] 完成 mode=%s", mode)
+        logger.info("[quant-scheduler] 完成 %s", label)
+
+
+def _invoke_quant_cli(mode: str, *extra: str) -> None:
+    _run_cmd([sys.executable, "-m", "quant", mode, *extra], f"quant {mode}")
+
+
+def _invoke_python_module(module: str) -> None:
+    """跑 ``python -m <module>``（如 scripts.data.update_daily）。"""
+    _run_cmd([sys.executable, "-m", module], module)
 
 
 def _job_news(_settings: Settings) -> None:
@@ -122,6 +130,16 @@ def _job_daily_decision(_settings: Settings) -> None:
     if not is_real_workday_cn():
         return
     _invoke_quant_cli("daily_decision")
+
+
+def _job_maintain_daily(_settings: Settings) -> None:
+    """收盘后数据维护（无库建库 / 查漏补漏 / 当日增量），仅交易日。
+
+    见 ``scripts/data/maintain.py``；须早于 ``daily_decision``，日决策依赖当日数据。
+    """
+    if not is_real_workday_cn():
+        return
+    _invoke_python_module("scripts.data.maintain")
 
 
 def _job_prefetch_stock_concepts(_settings: Settings) -> None:
@@ -193,6 +211,16 @@ def build_quant_scheduler(settings: Settings) -> BackgroundScheduler | None:
         **defaults,
     )
 
+    # 收盘后数据维护（默认 16:00）：无库建库 / 查漏补漏 / 当日增量；须早于日决策（20:45）
+    uph, upm = _parse_hh_mm(settings.QUANT_SCHED_MAINTAIN_DAILY_TIME)
+    sched.add_job(
+        _job_maintain_daily,
+        CronTrigger(timezone=tz, hour=uph, minute=upm),
+        args=[settings],
+        id="quant_maintain_daily",
+        **defaults,
+    )
+
     # 收盘复盘后跑日决策（默认晚间任务后 30 分钟；可用配置覆盖则仍用 evening+0）
     # 固定：evening 时间 + 35 分钟
     from datetime import datetime, timedelta
@@ -218,7 +246,7 @@ def build_quant_scheduler(settings: Settings) -> BackgroundScheduler | None:
 
     # 旧 weekly ML / 旧 backtest 已退役（改用 scripts/research + scripts/backtest）
     logger.info(
-        "[quant-scheduler] r3 已注册: news / pre / during×%d / lunch / evening / daily_decision",
+        "[quant-scheduler] r3 已注册: news / pre / during×%d / lunch / evening / maintain_daily / daily_decision",
         len(during_times),
     )
     return sched

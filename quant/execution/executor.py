@@ -85,7 +85,7 @@ def execute_signals(
 
     ``enforce_hours=False``：日终纸面批跑跳过连续竞价时段检查。
     ``enforce_late_session=False``：跳过「非紧急卖须 14:30 后」限制（r3 日决策纸面用）。
-    ``allow_add=True``：已持仓允许加仓（均价合并）；默认 False 保持旧 orchestrator 行为。
+    ``allow_add=True``：已持仓允许加仓（均价合并）；默认 False：已持仓不加仓。
     ``trade_date``：覆盖成交归档日期（纸面可用决策日，默认今天）。
     """
     if not signals:

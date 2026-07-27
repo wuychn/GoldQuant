@@ -18,7 +18,14 @@ from quant.backtest2.tradability import shares_for_amount
 from quant.decision.daily_output import DecisionCard
 from quant.execution.executor import execute_signals
 from quant.signals.models import TradeSignal
-from quant.store.paths import ensure_layout, override_quant_home, quant_home, state_file
+from quant.store.paths import (
+    battle_pool_file,
+    ensure_layout,
+    override_quant_home,
+    quant_home,
+    state_file,
+)
+from quant.timeutil import cn_datetime_str
 from quant.store.state import (
     get_account,
     get_holdings,
@@ -246,6 +253,156 @@ def append_paper_equity(as_of: str, account: dict[str, Any], *, n_trades: int = 
     with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
     return path
+
+
+# ---------- 作战池（T 晚选 → T+1 盘中择时） ----------
+
+
+def write_battle_pool(target_date: str, pool: list[dict]) -> Path:
+    """落盘作战池：``paper_account/battle_pool/{target_date}.json``。"""
+    path = battle_pool_file(target_date)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = {"date": target_date, "generated_at": cn_datetime_str(), "pool": pool}
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
+def read_battle_pool(target_date: str) -> list[dict] | None:
+    """读作战池；不存在返回 None。"""
+    path = battle_pool_file(target_date)
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data.get("pool") or []
+
+
+def clear_battle_pool(target_date: str) -> None:
+    """删作战池（执行后清除，幂等）。"""
+    path = battle_pool_file(target_date)
+    if path.is_file():
+        path.unlink()
+
+
+def _bought_today_path(date: str) -> Path:
+    return quant_home() / "state" / f"bought_today_{date}.txt"
+
+
+def read_bought_today(date: str) -> set[str]:
+    p = _bought_today_path(date)
+    if not p.is_file():
+        return set()
+    return {ln.strip() for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()}
+
+
+def _append_bought_today(date: str, codes: list[str]) -> None:
+    p = _bought_today_path(date)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with open(p, "a", encoding="utf-8") as f:
+        for c in codes:
+            f.write(f"{c}\n")
+
+
+def execute_intraday_buys(
+    buys: list,
+    alpha_z: dict[str, float],
+    *,
+    name_map: dict[str, str],
+    today: str,
+    single_weight: float = 0.10,
+    dry_run: bool = False,
+) -> dict:
+    """盘中择时买入：对触发的作战池票按最新价撮合，仓位=分档(5%-10%)，标记当日已买。
+
+    在 ``paper_home_context`` 下执行（调用方已进 paper context 则内部 no-op 不嵌套）。
+    """
+    with paper_home_context():
+        holdings = get_holdings()
+        held = {str(h.get("股票代码", "")).strip() for h in holdings}
+        bought = read_bought_today(today)
+        total_assets = get_total_assets()
+        if total_assets <= 0:
+            total_assets = float(get_account().get("可用资金") or 0) or 100_000.0
+        assets = max(total_assets, 1.0)
+
+        signals: list[TradeSignal] = []
+        quote_rows: list[dict] = []
+        for r in buys:
+            if r.code in held or r.code in bought:
+                continue
+            strength = max(0.0, min(1.0, alpha_z.get(r.code, 0.0) / 2.0))
+            weight = single_weight * (0.5 + 0.5 * strength)
+            amount = weight * assets
+            qty = shares_for_amount(r.last, amount)
+            if qty <= 0:
+                continue
+            name = name_map.get(r.code) or r.code
+            pre = r.pre_close if r.pre_close > 0 else r.last
+            chg = (r.last / pre - 1.0) * 100 if pre > 0 else 0.0
+            signals.append(
+                TradeSignal(
+                    action="买入",
+                    code=r.code,
+                    name=name,
+                    price=r.last,
+                    quantity=qty,
+                    strategy="r3_intraday",
+                    reason=f"intraday α_z={alpha_z.get(r.code, 0):.2f}|tw={weight:.1%}",
+                    signal_kind="intraday_buy",
+                )
+            )
+            quote_rows.append(
+                {
+                    "股票代码": r.code,
+                    "股票名称": name,
+                    "盘口": {
+                        "最新": r.last,
+                        "最新价": r.last,
+                        "今开": r.open,
+                        "昨收": pre,
+                        "涨跌幅": chg,
+                    },
+                }
+            )
+        if dry_run or not signals:
+            return {
+                "dry_run": dry_run,
+                "n_signals": len(signals),
+                "n_executed": 0,
+                "executed": [],
+                "rejected": {},
+                "bought": [],
+            }
+        payload = {"自选股": quote_rows, "持仓股": []}
+        executed, rejected = execute_signals(
+            signals,
+            payload=payload,
+            enforce_hours=False,
+            allow_add=True,
+            trade_date=today,
+        )
+        bought_codes = [e.signal.code for e in executed if e.signal.action == "买入"]
+        if bought_codes:
+            _append_bought_today(today, bought_codes)
+        refresh_account_market_value()
+        return {
+            "dry_run": False,
+            "n_signals": len(signals),
+            "n_executed": len(executed),
+            "executed": [
+                {
+                    "code": e.signal.code,
+                    "qty": e.signal.quantity,
+                    "fill": e.fill_price,
+                    "reason": e.signal.reason,
+                }
+                for e in executed
+            ],
+            "rejected": rejected,
+            "bought": bought_codes,
+        }
 
 
 def execute_decision_card(

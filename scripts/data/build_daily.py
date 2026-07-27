@@ -1,11 +1,13 @@
 """全量初始化离线日线库：逐只拉 stock_zh_a_hist（不复权）+ 指数 + 交易日历。
 
-支持断点续传（跳过已落库代码）、3-5 并发、失败重试。
+支持断点续传（跳过已落库代码）、3-5 并发。失败重试/退避由 fetch_hist 内部 ``_retry`` 兜底。
 建议夜间执行。不要开高并发，会被东财限流。
 
 用法：
     python -m scripts.data.build_daily --start 2021-01-01 --end 2026-07-25
     python -m scripts.data.build_daily --start 2021-01-01 --workers 3
+    # 补日期缺口（对所有代码强制拉一段，write 按 code+date 去重不重复）：
+    python -m scripts.data.build_daily --start 2026-07-20 --end 2026-07-25 --ignore-existing
 """
 
 from __future__ import annotations
@@ -14,13 +16,11 @@ import argparse
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
 
 import pandas as pd
 
 from quant.data.fetch import fetch_hist, fetch_index, fetch_trade_calendar
 from quant.data.store import (
-    daily_raw_dir,
     read_daily_raw,
     write_calendar,
     write_daily_raw,
@@ -45,19 +45,16 @@ def _existing_codes() -> set[str]:
     return set(df["code"].astype(str).str.strip().unique())
 
 
-def _build_one(code: str, start: str, end: str, retries: int = 2) -> tuple[str, int]:
-    last_err: Exception | None = None
-    for _ in range(retries + 1):
-        try:
-            df = fetch_hist(code, start=start, end=end, adjust="")
-            if not df.empty:
-                write_daily_raw(df)
-            return code, len(df)
-        except Exception as e:
-            last_err = e
-            time.sleep(1.0)
-    print(f"[WARN] {code} 拉取失败: {last_err}", file=sys.stderr)
-    return code, 0
+def _build_one(code: str, start: str, end: str) -> tuple[str, int]:
+    """拉单只并落库。重试/退避由 ``fetch_hist`` 内部 ``_retry`` 兜底，失败返回 0 行。"""
+    try:
+        df = fetch_hist(code, start=start, end=end, adjust="")
+        if not df.empty:
+            write_daily_raw(df)
+        return code, len(df)
+    except Exception as e:  # noqa: BLE001
+        print(f"[WARN] {code} 拉取失败: {e}", file=sys.stderr)
+        return code, 0
 
 
 def main() -> None:
@@ -67,6 +64,11 @@ def main() -> None:
     ap.add_argument("--workers", type=int, default=3, help="并发数（建议 3-5）")
     ap.add_argument("--limit", type=int, default=None, help="只拉前 N 只（调试用）")
     ap.add_argument("--codes", default=None, help="逗号分隔的代码列表（调试用）")
+    ap.add_argument(
+        "--ignore-existing",
+        action="store_true",
+        help="跳过代码去重，对所有代码拉（补日期缺口用；write 按 code+date 去重不重复）",
+    )
     args = ap.parse_args()
 
     end = args.end or cn_now().strftime("%Y-%m-%d")
@@ -102,8 +104,12 @@ def main() -> None:
     print(f"全A 代码数: {len(codes)}")
 
     done = _existing_codes()
-    todo = [c for c in codes if c not in done]
-    print(f"已落库: {len(done)}，待拉: {len(todo)}")
+    if args.ignore_existing:
+        todo = list(codes)
+        print(f"--ignore-existing：强制全拉 {len(todo)} 只（write 按 code+date 去重，不重复）")
+    else:
+        todo = [c for c in codes if c not in done]
+        print(f"已落库: {len(done)}，待拉: {len(todo)}")
 
     ok = fail = 0
     t0 = time.time()

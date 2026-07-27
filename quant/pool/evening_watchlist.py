@@ -1,4 +1,4 @@
-"""晚间自选池更新（无 LLM/落盘，供 orchestrator 与回测共用）。"""
+"""晚间自选池更新（无 LLM/落盘）。"""
 
 from __future__ import annotations
 

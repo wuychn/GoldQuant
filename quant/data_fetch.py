@@ -1,6 +1,5 @@
 """从 FastAPI 拉取五时段量化 JSON，或从 ``data/`` 读取本地 fixture。
 
-endpoint 与 orchestrator 模式一一对应；勿使用已废弃的 /post_market 单路由。
 ``QUANT_USE_LOCAL_FIXTURE=true`` 时 ``fetch_mode`` 读 ``data/*.json``，不请求 HTTP API。
 """
 

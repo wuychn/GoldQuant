@@ -75,7 +75,7 @@ def test_phase_list_limit(*, default: int) -> int:
 
 
 def trim_quant_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
-    """量化 payload 统一截断（orchestrator / fixture 路径）。"""
+    """量化 payload 统一截断。"""
     if not payload:
         return {}
     out = maybe_trim_for_test_phase(payload)

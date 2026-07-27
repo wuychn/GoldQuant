@@ -66,9 +66,6 @@ flowchart TB
 | 运维 | `quant/ops/` | 新闻/盘前/盯盘/复盘 + 飞书 |
 | 决策入口 | `scripts/decision/daily.py` / `python -m quant daily_decision` | 日决策闭环 |
 
-**已退役主链路**：`quant/orchestrator.py`（专家评分 + 逐笔信号）。  
-`scoring/`、`signals/buy|pipeline` 等可能仍残留于仓库，**不作为 r3 决策主路径**（部分被 API 拉数依赖）。
-
 ---
 
 ## 3. 交易闭环（日频）

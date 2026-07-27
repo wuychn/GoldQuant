@@ -1,4 +1,4 @@
-"""r3 日运维：新闻 / 盘前 / 盯盘 / 复盘 + 飞书推送（取代旧 orchestrator）。"""
+"""r3 日运维：新闻 / 盘前 / 盯盘 / 复盘 + 飞书推送。"""
 
 from quant.ops.runner import run_mode
 

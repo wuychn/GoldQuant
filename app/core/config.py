@@ -124,7 +124,7 @@ class Settings(BaseSettings):
     #: IANA 时区名，决定 Cron 触发本地钟点（A 股建议 `Asia/Shanghai`）。
     QUANT_SCHED_TIMEZONE: str = "Asia/Shanghai"
     #: 新闻任务：在哪些「整点小时」执行（逗号分隔 0–23），配合 `QUANT_SCHED_NEWS_MINUTE`。
-    QUANT_SCHED_NEWS_HOURS: str = "7,8,9,12,16,17,18,19,20,22,23"
+    QUANT_SCHED_NEWS_HOURS: str = "8,9,10,11,12,13,14,15,16,17,18,19,20,21,22"
     QUANT_SCHED_NEWS_MINUTE: int = Field(default=0, ge=0, le=59)
     #: 盘前（`pre_market`），仅工作日历命中时才会真正拉起子进程。
     QUANT_SCHED_PRE_MARKET_TIME: str = "09:25"
@@ -134,6 +134,9 @@ class Settings(BaseSettings):
     QUANT_SCHED_POST_MARKET_LUNCH_TIME: str = "11:50"
     #: 晚间复盘（`post_market_evening`），仅交易日（`is_real_workday_cn`）执行。
     QUANT_SCHED_POST_MARKET_EVENING_TIME: str = "20:10"
+    #: 收盘后数据维护（`scripts.data.maintain`：无库建库 / 查漏补漏 / 当日增量），仅交易日。
+    #: 须早于 `daily_decision`（默认 20:45），日决策依赖当日数据。
+    QUANT_SCHED_MAINTAIN_DAILY_TIME: str = "16:00"
     #: 每日预取自选/持仓问财所属概念（减轻盘中 enrich 耗时）。
     QUANT_SCHED_PREFETCH_CONCEPTS_ENABLED: bool = True
     QUANT_SCHED_PREFETCH_CONCEPTS_TIME: str = "05:00"
@@ -208,7 +211,7 @@ class Settings(BaseSettings):
     #: 每累计一次同花顺资金流失败，后续请求额外等待秒数（失败越多等越久）。
     QUANT_THS_FUNDS_FAILURE_BACKOFF_SEC: float = Field(default=5.0, ge=0.0, le=120.0)
 
-    #: 测试阶段：为 true 时 API 出参、enrich/推送/orchestrator/state 等列表统一限 3 条。
+    #: 测试阶段：为 true 时 API 出参、enrich/推送/state 等列表统一限 3 条。
     QUANT_TEST_PHASE: bool = False
     #: 本地数据：为 true 时 ``python -m quant`` 从 ``data/*.json`` 读数，不请求 FastAPI。
     QUANT_USE_LOCAL_FIXTURE: bool = False
