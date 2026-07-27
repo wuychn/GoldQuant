@@ -195,6 +195,44 @@ def _intraday_buy_block(*, theta: float = 1.0) -> str:
     return icon_section(ICON_ORDER, "盘中择时买入", lines)
 
 
+def _intraday_sell_block() -> str:
+    """盘中卖出择时：读 sell_watch → spot_em → force_sell 或 价破 stop → 全平卖出。
+
+    返回推送段字符串；非交易日/无监控/无触发返回 ""。
+    """
+    from quant.data.calendar import is_trading_day
+    from quant.data.fetch import fetch_spot_em
+    from quant.decision.paper_execute import (
+        execute_intraday_sells,
+        paper_home_context,
+        read_sell_watch,
+    )
+    from quant.timeutil import cn_now
+
+    today = cn_now().date()
+    if not is_trading_day(today):
+        return ""
+    today_s = today.isoformat()
+    with paper_home_context():
+        sells = read_sell_watch(today_s)
+        if not sells:
+            return ""
+        try:
+            spot = fetch_spot_em()
+        except Exception as e:  # noqa: BLE001
+            return icon_section(ICON_TIP, "盘中卖出", [f"取价失败: {e}"])
+        spot_by_code = {str(r.get("code")): r for r in spot.to_dict("records")}
+        result = execute_intraday_sells(sells, spot_by_code, today=today_s)
+    if not result.get("n_signals"):
+        return icon_section(ICON_WATCH, "盘中卖出", [f"监控{len(sells)}只 无触发"])
+    lines = [f"触发{result.get('n_signals')} 卖出{result.get('n_executed')}笔"]
+    for e in result.get("executed", [])[:8]:
+        lines.append(f"🛒 {e['code']} x{e['qty']} @{e['fill']} {e.get('reason', '')}")
+    for c, why in (result.get("rejected") or {}).items():
+        lines.append(f"拒 {c}: {why}")
+    return icon_section(ICON_ORDER, "盘中卖出", lines)
+
+
 def build_during_body(raw: dict) -> str:
     payload = unwrap_payload(raw) if isinstance(raw, dict) else {}
     if not isinstance(payload, dict):
@@ -208,6 +246,9 @@ def build_during_body(raw: dict) -> str:
             _top_movers(payload, key_candidates=("涨幅榜", "自选股", "持仓股"), limit=6),
         ),
     ]
+    sell_block = _intraday_sell_block()
+    if sell_block:
+        parts.append(sell_block)
     buy_block = _intraday_buy_block()
     if buy_block:
         parts.append(buy_block)
@@ -270,37 +311,22 @@ _REASON_LABEL = {
 
 
 def build_decision_push_body(payload: dict[str, Any]) -> str:
-    """日决策 + 纸面成交摘要推送正文。"""
-    actions = payload.get("actions") or []
+    """日决策推送正文：账户 + 明日作战池 + 卖出监控 + 持仓（晚间只定计划，不撮合）。"""
     paper = payload.get("paper") or {}
     acc = paper.get("account") or {}
-    executed = paper.get("executed") or []
-    lines_act = []
-    for a in actions[:12]:
-        side = str(a.get("side") or "")
-        icon = _SIDE_ICON.get(side, "•")
-        side_label = _SIDE_LABEL.get(side, side)
-        code = a.get("code") or ""
-        name = a.get("name") or code
-        reason_raw = str(a.get("reason") or "")
-        reason = _REASON_LABEL.get(reason_raw, reason_raw)
-        lines_act.append(
-            f"{icon} {side_label} {name}({code}) "
-            f"目标仓位{float(a.get('target_weight') or 0)*100:.1f}% "
-            f"较当前{float(a.get('delta_weight') or 0)*100:+.1f}% "
-            f"{reason}"
-        )
-    lines_fill = []
-    for e in executed[:12]:
-        lines_fill.append(
-            f"{e.get('action')} {e.get('code')} x{e.get('qty')} @{e.get('fill')} "
-            f"pnl={e.get('pnl')} {e.get('reason') or ''}"
-        )
     pool = payload.get("battle_pool") or []
+    sell_watch = payload.get("sell_watch") or []
     pool_lines = [
         f"{p.get('name')}({p.get('code')}) α={p.get('alpha')} #{p.get('rank')}"
         for p in pool[:8]
     ]
+    sell_lines = []
+    for s in sell_watch[:10]:
+        flag = "⚡" if s.get("force_sell") else "·"
+        hs = s.get("hard_stop")
+        sell_lines.append(
+            f"{flag} {s.get('name')}({s.get('code')}) 止损{hs} {(s.get('reason') or '').strip()}"
+        )
     parts = [
         icon_section(
             ICON_ACCOUNT,
@@ -308,14 +334,12 @@ def build_decision_push_body(payload: dict[str, Any]) -> str:
             [
                 f"总资产 {money(acc.get('总资产'))}",
                 f"现金 {money(acc.get('可用资金'))} | 市值 {money(acc.get('持仓市值'))}",
-                f"成交 {paper.get('n_executed', 0)} 笔",
             ],
         ),
         icon_section(
             ICON_WATCH, f"明日作战池({payload.get('battle_pool_date', '')})", pool_lines
         ),
-        icon_section(ICON_ORDER, "指令(卖出)", lines_act),
-        icon_section(ICON_FILL, "成交", lines_fill),
+        icon_section(ICON_ORDER, "卖出监控", sell_lines),
         icon_section(
             ICON_HOLD,
             "持仓",

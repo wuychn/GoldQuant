@@ -332,11 +332,11 @@ python -m quant prefetch_concepts
 | 标签 | 模式 | 要点 |
 |------|------|------|
 | 新闻聚焦 | `news` | LLM 去噪要点 + 综合解读 |
-| 盘前准备 | `pre_market` | 指数 / 纸面账户 / 关注 |
+| 开盘啦 | `pre_market` | 指数 / 纸面账户 / 关注 |
 | 智能盯盘 | `during_market` | 指数 / 纸面持仓 / 异动 |
 | 午间复盘 | `post_market_lunch` | 午前指数 + 纸面账户 |
 | 收盘复盘 | `post_market_evening` | 收盘指数 + 纸面绩效 / 持仓 |
-| 日决策·纸面成交 | `daily_decision` | 指令 / 成交 / 账户 / 持仓 |
+| 晚间复盘 | `daily_decision` | 作战池 / 卖出监控 / 账户 / 持仓 |
 
 格式：纯文本，`标题 + 时间 + 【小节】要点`（`quant/push/format.py`）。
 

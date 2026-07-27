@@ -24,6 +24,7 @@ from quant.decision.paper_execute import (
     paper_home_context,
     paper_summary_text,
     write_battle_pool,
+    write_sell_watch,
 )
 from quant.exit.atr import atr
 from quant.exit.rules import evaluate_exits
@@ -36,7 +37,7 @@ from quant.ops.modes import build_decision_push_body
 from quant.ops.push import push_text
 from quant.portfolio2.target import TargetPortfolio
 from quant.store.paths import reports_dir
-from quant.store.state import get_holdings, update_holding_exit_meta
+from quant.store.state import get_account, get_holdings, update_holding_exit_meta
 from quant.timeutil import cn_now
 
 
@@ -182,6 +183,54 @@ def build_today_card(
     return card, daily, prices, names, uni, alpha
 
 
+def _build_sell_watch(card, daily, names, as_of, holdings) -> list[dict]:
+    """对持仓算 stop 价 + force_sell，落盘供 T+1 盘中卖出监控（不撮合）。
+
+    - atr_stop = max(entry,highest) − 3×ATR14；hard_stop = max(entry×0.92, entry−2×ATR14)
+    - force_sell = T 晚 evaluate_exits 触发的趋势/时间止损（次日开盘卖）
+    """
+    from quant.exit.atr import atr
+
+    exit_by_code = {str(s.get("code")): s for s in (card.exit_signals or [])}
+    rows: list[dict] = []
+    for h in holdings:
+        code = str(h.get("股票代码") or "").strip()
+        if not code:
+            continue
+        try:
+            entry = float(h.get("买入价") or 0)
+            qty = int(float(h.get("持仓股数") or 0))
+        except (TypeError, ValueError):
+            continue
+        if entry <= 0 or qty <= 0:
+            continue
+        hist = daily[(daily["code"] == code) & (daily["date"] <= as_of)].sort_values("date")
+        if hist.empty:
+            continue
+        highest = float(h.get("持仓最高价") or hist["close"].max())
+        a = float(atr(hist, 14).iloc[-1]) if len(hist) >= 15 else 0.0
+        hard_stop = max(entry * 0.92, entry - 2 * a) if a > 0 else entry * 0.92
+        atr_stop = (max(entry, highest) - 3 * a) if a > 0 else None
+        ma20 = float(hist["close"].rolling(20).mean().iloc[-1]) if len(hist) >= 20 else None
+        es = exit_by_code.get(code)
+        rows.append(
+            {
+                "code": code,
+                "name": names.get(code) or code,
+                "qty": qty,
+                "entry": round(entry, 4),
+                "highest": round(highest, 4),
+                "atr": round(a, 4) if a > 0 else None,
+                "hard_stop": round(hard_stop, 4),
+                "atr_stop": round(atr_stop, 4) if atr_stop else None,
+                "ma20": round(ma20, 4) if ma20 else None,
+                "force_sell": es is not None,
+                "reason": (es or {}).get("reason") or "",
+            }
+        )
+    return rows
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--date", default=None)
@@ -258,35 +307,31 @@ def main() -> None:
     }
 
     if do_paper:
-        # 只撮卖出（evaluate_exits 出场）；买入移到 T+1 盘中择时，T 晚不撮合
-        from quant.decision.daily_output import DecisionCard
-
-        sell_card = DecisionCard(
-            date=card.date,
-            target_weights={},
-            actions=[a for a in card.actions if a.side in ("sell", "reduce")],
-            exit_signals=card.exit_signals,
-            alpha_top=card.alpha_top,
-        )
-        result = execute_decision_card(
-            sell_card, daily=daily, as_of=as_of, prices=prices, names=names, dry_run=args.dry_run
-        )
-        print()
-        print(paper_summary_text(result))
+        # 晚间只定计划，不撮合任何交易：算持仓 stop 价 → sell_watch（T+1 盘中监控）
+        with paper_home_context():
+            holdings = get_holdings()
+        sell_rows = _build_sell_watch(card, daily, names, as_of, holdings)
+        with paper_home_context():
+            _sw_path = write_sell_watch(target_date, sell_rows)
+        print(f"卖出监控({target_date}): {len(sell_rows)} 只 → {_sw_path}")
+        payload["sell_watch"] = sell_rows
+        # 账户/持仓快照（只读，不撮合）
+        with paper_home_context():
+            _acc = get_account()
         payload["paper"] = {
-            "home": result.get("home"),
-            "n_executed": result.get("n_executed", 0),
-            "account": result.get("account"),
-            "executed": result.get("executed"),
-            "rejected": result.get("rejected"),
-            "holdings": result.get("holdings"),
+            "account": _acc,
+            "holdings": [
+                {"code": str(h.get("股票代码")), "name": h.get("股票名称"),
+                 "shares": h.get("持仓股数"), "cost": h.get("买入价")}
+                for h in holdings
+            ],
         }
         (out_dir / f"paper_{as_of}.json").write_text(
             json.dumps(payload["paper"], ensure_ascii=False, indent=2), encoding="utf-8"
         )
         if not args.no_push and not args.dry_run:
             body = build_decision_push_body(payload)
-            push_text("日决策·纸面成交", body, mode="daily_decision", push=True)
+            push_text("晚间复盘", body, mode="daily_decision", push=True)
 
     (out_dir / f"decision_{as_of}.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"

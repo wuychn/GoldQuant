@@ -119,14 +119,8 @@ def _job_post_market_lunch(_settings: Settings) -> None:
     _invoke_quant_cli("post_market_lunch")
 
 
-def _job_post_market_evening(_settings: Settings) -> None:
-    if not is_real_workday_cn():
-        return
-    _invoke_quant_cli("post_market_evening")
-
-
 def _job_daily_decision(_settings: Settings) -> None:
-    """收盘后日决策 + 纸面撮合 + 推送。"""
+    """晚间选股 + 制定明日计划（作战池/卖出监控），不撮合；买卖在 T+1 盘中。"""
     if not is_real_workday_cn():
         return
     _invoke_quant_cli("daily_decision")
@@ -202,16 +196,7 @@ def build_quant_scheduler(settings: Settings) -> BackgroundScheduler | None:
         **defaults,
     )
 
-    eh, em = _parse_hh_mm(settings.QUANT_SCHED_POST_MARKET_EVENING_TIME)
-    sched.add_job(
-        _job_post_market_evening,
-        CronTrigger(timezone=tz, hour=eh, minute=em),
-        args=[settings],
-        id="quant_post_market_evening",
-        **defaults,
-    )
-
-    # 收盘后数据维护（默认 16:00）：无库建库 / 查漏补漏 / 当日增量；须早于日决策（20:45）
+    # 收盘后数据维护（默认 16:00）：无库建库 / 查漏补漏 / 当日增量；须早于日决策
     uph, upm = _parse_hh_mm(settings.QUANT_SCHED_MAINTAIN_DAILY_TIME)
     sched.add_job(
         _job_maintain_daily,
@@ -221,14 +206,11 @@ def build_quant_scheduler(settings: Settings) -> BackgroundScheduler | None:
         **defaults,
     )
 
-    # 收盘复盘后跑日决策（默认晚间任务后 30 分钟；可用配置覆盖则仍用 evening+0）
-    # 固定：evening 时间 + 35 分钟
-    from datetime import datetime, timedelta
-
-    base = datetime(2000, 1, 1, eh, em) + timedelta(minutes=35)
+    # 晚间选股 + 明日计划（post_market_evening 已并入此任务）：作战池 + 卖出监控，不撮合
+    dh, dm = _parse_hh_mm(settings.QUANT_SCHED_DAILY_DECISION_TIME)
     sched.add_job(
         _job_daily_decision,
-        CronTrigger(timezone=tz, hour=base.hour, minute=base.minute),
+        CronTrigger(timezone=tz, hour=dh, minute=dm),
         args=[settings],
         id="quant_daily_decision",
         **defaults,

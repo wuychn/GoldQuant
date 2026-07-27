@@ -23,6 +23,7 @@ from quant.store.paths import (
     ensure_layout,
     override_quant_home,
     quant_home,
+    sell_watch_file,
     state_file,
 )
 from quant.timeutil import cn_datetime_str
@@ -286,6 +287,33 @@ def clear_battle_pool(target_date: str) -> None:
         path.unlink()
 
 
+def write_sell_watch(target_date: str, rows: list[dict]) -> Path:
+    """落盘卖出监控清单：``paper_account/sell_watch/{target_date}.json``。"""
+    path = sell_watch_file(target_date)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = {"date": target_date, "generated_at": cn_datetime_str(), "rows": rows}
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
+def read_sell_watch(target_date: str) -> list[dict] | None:
+    """读卖出监控清单；不存在返回 None。"""
+    path = sell_watch_file(target_date)
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data.get("rows") or []
+
+
+def clear_sell_watch(target_date: str) -> None:
+    path = sell_watch_file(target_date)
+    if path.is_file():
+        path.unlink()
+
+
 def _bought_today_path(date: str) -> Path:
     return quant_home() / "state" / f"bought_today_{date}.txt"
 
@@ -402,6 +430,130 @@ def execute_intraday_buys(
             ],
             "rejected": rejected,
             "bought": bought_codes,
+        }
+
+
+def _sold_today_path(date: str) -> Path:
+    return quant_home() / "state" / f"sold_today_{date}.txt"
+
+
+def read_sold_today(date: str) -> set[str]:
+    p = _sold_today_path(date)
+    if not p.is_file():
+        return set()
+    return {ln.strip() for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()}
+
+
+def _append_sold_today(date: str, codes: list[str]) -> None:
+    p = _sold_today_path(date)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with open(p, "a", encoding="utf-8") as f:
+        for c in codes:
+            f.write(f"{c}\n")
+
+
+def execute_intraday_sells(
+    sells: list[dict],
+    spot_by_code: dict[str, dict],
+    *,
+    today: str,
+    dry_run: bool = False,
+) -> dict:
+    """盘中卖出择时：``force_sell`` 或 实时价 ≤ ``hard_stop``/``atr_stop`` → 全平卖出。
+
+    sells: sell_watch 项（code/qty/hard_stop/atr_stop/force_sell/reason）；
+    spot_by_code: ``{code: spot_em 行}``（取 close=最新价, pre_close 做涨跌停判定）。
+    """
+    with paper_home_context():
+        sold = read_sold_today(today)
+        signals: list[TradeSignal] = []
+        quote_rows: list[dict] = []
+        for s in sells:
+            code = str(s.get("code") or "")
+            if not code or code in sold:
+                continue
+            sr = spot_by_code.get(code) or {}
+            try:
+                last = float(sr.get("close") or 0)
+            except (TypeError, ValueError):
+                last = 0.0
+            if last <= 0:
+                continue
+            hard = s.get("hard_stop")
+            atr = s.get("atr_stop")
+            force = bool(s.get("force_sell"))
+            reason = None
+            if force:
+                reason = str(s.get("reason") or "force_sell")
+            elif hard is not None and last <= float(hard):
+                reason = f"hard_stop@{hard}"
+            elif atr is not None and last <= float(atr):
+                reason = f"atr_stop@{atr}"
+            if not reason:
+                continue
+            try:
+                qty = int(s.get("qty") or 0)
+            except (TypeError, ValueError):
+                qty = 0
+            if qty <= 0:
+                continue
+            try:
+                pre = float(sr.get("pre_close") or last)
+            except (TypeError, ValueError):
+                pre = last
+            chg = (last / pre - 1.0) * 100 if pre > 0 else 0.0
+            signals.append(
+                TradeSignal(
+                    action="卖出",
+                    code=code,
+                    name=s.get("name") or code,
+                    price=last,
+                    quantity=qty,
+                    strategy="r3_intraday",
+                    reason=f"intraday {reason}",
+                    sell_type="止损",
+                    signal_kind="intraday_sell",
+                )
+            )
+            quote_rows.append(
+                {
+                    "股票代码": code,
+                    "股票名称": s.get("name") or code,
+                    "盘口": {"最新": last, "最新价": last, "昨收": pre, "涨跌幅": chg},
+                }
+            )
+        if dry_run or not signals:
+            return {
+                "dry_run": dry_run,
+                "n_signals": len(signals),
+                "n_executed": 0,
+                "executed": [],
+                "rejected": {},
+                "sold": [],
+            }
+        payload = {"自选股": quote_rows, "持仓股": []}
+        executed, rejected = execute_signals(
+            signals, payload=payload, enforce_hours=False, trade_date=today
+        )
+        sold_codes = [e.signal.code for e in executed if e.signal.action == "卖出"]
+        if sold_codes:
+            _append_sold_today(today, sold_codes)
+        refresh_account_market_value()
+        return {
+            "dry_run": False,
+            "n_signals": len(signals),
+            "n_executed": len(executed),
+            "executed": [
+                {
+                    "code": e.signal.code,
+                    "qty": e.signal.quantity,
+                    "fill": e.fill_price,
+                    "reason": e.signal.reason,
+                }
+                for e in executed
+            ],
+            "rejected": rejected,
+            "sold": sold_codes,
         }
 
 

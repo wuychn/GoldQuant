@@ -50,10 +50,10 @@ python -m scripts.data.maintain         # 数据维护：无库建库/查漏补�
 | 标签 | 模式 | 要点 |
 |------|------|------|
 | 新闻聚焦 | news | LLM 去噪要点 + 综合解读 |
-| 盘前准备 | pre_market | 新闻要点 / 指数 / 纸面账户 / 关注 |
+| 开盘啦 | pre_market | 新闻要点 / 指数 / 纸面账户 / 关注 |
 | 智能盯盘 | during_market | 指数 / 纸面持仓 / 异动 + **盘中择时买入** |
 | 午间复盘 | post_market_lunch | 午前指数 + 纸面账户 |
 | 收盘复盘 | post_market_evening | 收盘指数 + 纸面绩效/持仓 |
-| 日决策 | daily_decision | 明日作战池 / 卖出指令+成交 / 账户 / 持仓 |
+| 晚间复盘 | daily_decision | 明日作战池 / 卖出监控 / 账户 / 持仓 |
 
 格式：纯文本，`标题\n时间\n\n【小节】\n行…`，简洁可读。

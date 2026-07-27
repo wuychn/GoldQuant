@@ -132,8 +132,10 @@ class Settings(BaseSettings):
     QUANT_SCHED_DURING_MARKET_TIMES: str = _QUANT_SCHED_DEFAULT_DURING_TIMES
     #: 午间复盘（`post_market_lunch`），仅交易日（`is_real_workday_cn`）执行。
     QUANT_SCHED_POST_MARKET_LUNCH_TIME: str = "11:50"
-    #: 晚间复盘（`post_market_evening`），仅交易日（`is_real_workday_cn`）执行。
+    #: （已退役）`post_market_evening` 已并入 `daily_decision`；字段保留避免破坏旧 .env。
     QUANT_SCHED_POST_MARKET_EVENING_TIME: str = "20:10"
+    #: 晚间选股 + 明日计划（作战池 / 卖出监控，**不撮合**），仅交易日；买卖在 T+1 盘中执行。
+    QUANT_SCHED_DAILY_DECISION_TIME: str = "20:10"
     #: 收盘后数据维护（`scripts.data.maintain`：无库建库 / 查漏补漏 / 当日增量），仅交易日。
     #: 须早于 `daily_decision`（默认 20:45），日决策依赖当日数据。
     QUANT_SCHED_MAINTAIN_DAILY_TIME: str = "16:00"

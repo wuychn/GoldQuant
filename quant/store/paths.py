@@ -153,6 +153,15 @@ def battle_pool_file(date: str) -> Path:
     return quant_home() / "battle_pool" / f"{date}.json"
 
 
+def sell_watch_file(date: str) -> Path:
+    """盘中卖出监控清单：``$QUANT_HOME/sell_watch/{date}.json``。
+
+    T 晚对持仓算 stop 价（ATR/硬止损/MA20）+ force_sell 落盘；T+1 盘中读，
+    实时价破 stop 即时止损，或 force_sell 次日开盘卖。``paper_home_context`` 下落 paper_account。
+    """
+    return quant_home() / "sell_watch" / f"{date}.json"
+
+
 def view_file(name: str) -> Path:
     """只读视图 MD，勿手改。"""
     return quant_home() / "views" / name
