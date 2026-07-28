@@ -101,6 +101,35 @@ def _code_history(daily_by_code: dict[str, pd.DataFrame], code: str, as_of: str)
     return sub[sub["date"] <= as_of]
 
 
+def _code_history_before(daily_by_code: dict[str, pd.DataFrame], code: str, as_of: str) -> pd.DataFrame:
+    """严格截断：< as_of（不含 as_of 当日 K 线），供 strict 出场避免 T 日前视。"""
+    sub = daily_by_code.get(code)
+    if sub is None or sub.empty:
+        return sub if sub is not None else pd.DataFrame()
+    return sub[sub["date"] < as_of]
+
+
+def _adv_vol_for(daily_by_code: dict[str, pd.DataFrame], code: str, as_of: str) -> tuple[float, float]:
+    """截至 as_of 之前（< as_of）的 20 日均成交额（元）与 14 日日波动（%）。PIT，供回测滑点冲击。"""
+    sub = daily_by_code.get(code)
+    if sub is None or sub.empty:
+        return 0.0, 0.0
+    prev = sub[sub["date"] < as_of].sort_values("date")
+    if prev.empty:
+        return 0.0, 0.0
+    adv = 0.0
+    amt = pd.to_numeric(prev["amount"], errors="coerce").dropna().tail(20)
+    if not amt.empty:
+        adv = float(amt.mean())
+    vol = 0.0
+    closes = pd.to_numeric(prev["close"], errors="coerce").dropna().tail(15)
+    if len(closes) >= 2:
+        rets = closes.pct_change().dropna()
+        if len(rets) >= 2:
+            vol = float(rets.std() * 100.0)
+    return adv, vol
+
+
 def run_backtest(
     *,
     daily: pd.DataFrame,  # columns: code,date,open,high,low,close,volume,...
@@ -141,22 +170,27 @@ def run_backtest(
             open_prices[code] = float(r.get("open") or r["close"])
             prev_closes[code] = prev_close_index.get(code, {}).get(d)
 
-        # 出场检查（先于再平衡）：触发则强制清仓
+        # 出场检查（先于再平衡）：触发则强制清仓。
+        # strict：决策只用 ≤T-1 信息（highest_close 更新到 T-1 收盘、hist 不含 T 日、
+        # 成交用 T 开盘），消除"T 收盘才决定止损"的前视。
         forced: set[str] = set()
         if tracker is not None and exit_config is not None:
             for code in list(broker.holdings.keys()):
                 h = broker.holdings[code]
-                tracker.update(code, prices.get(code, 0.0))
+                tracker.update(code, prev_closes.get(code) or 0.0)
                 st = tracker.get(code)
                 if st is None or code not in rows_by_code:
                     continue
-                hist = _code_history(daily_by_code, code, d)
+                hist_prev = _code_history_before(daily_by_code, code, d)
+                if hist_prev is None or hist_prev.empty:
+                    continue
+                as_of_prev = str(hist_prev["date"].iloc[-1])
                 sig = evaluate_exits(
-                    hist,
+                    hist_prev,
                     entry_price=h.cost_price,
                     highest_close=st.highest_close,
                     buy_date=h.buy_date,
-                    as_of=d,
+                    as_of=as_of_prev,
                     atr_mult=exit_config.atr_mult,
                     atr_mult_stop=exit_config.atr_mult_stop,
                     hard_pct=exit_config.hard_pct,
@@ -164,11 +198,16 @@ def run_backtest(
                     calendar_fn=exit_config.calendar_fn,
                 )
                 if sig is not None:
+                    adv, vol = _adv_vol_for(daily_by_code, code, d)
+                    ref = open_prices.get(code) if strict_signals else None
                     broker.sell(
                         code,
                         rows_by_code[code],
                         prev_closes.get(code),
                         reason=sig.reason,
+                        ref_price=ref,
+                        adv_amount=adv,
+                        volatility_pct=vol,
                     )
                     if code not in broker.holdings or broker.holdings[code].shares <= 0:
                         tracker.close(code)
@@ -178,18 +217,20 @@ def run_backtest(
         signal_date = iso_dates[i - 1] if (strict_signals and i > 0) else d
         alpha = alpha_fn(signal_date, rows_by_code)
         if not alpha:
-            broker.record_equity(d, prices)
+            broker.suspended_codes = set(broker.mark_suspended(rows_by_code))
+            broker.record_equity(d, prices, prev_closes)
             broker.end_of_day()
             continue
 
-        # 当前持仓权重
-        eq = broker.total_equity(prices) or 1.0
+        # 当前持仓权重。strict：仓位价值用 T 开盘（成交基准），非 strict 用 T 收盘
+        price_basis = open_prices if strict_signals else prices
+        eq = broker.total_equity(price_basis, prev_closes) or 1.0
         current = {}
         for code, h in broker.holdings.items():
-            p = prices.get(code, 0.0)
+            p = price_basis.get(code) or prev_closes.get(code) or 0.0
             current[code] = p * h.shares / eq
 
-        target = policy.target_weights(alpha, prices, current, d)
+        target = policy.target_weights(alpha, price_basis, current, d)
         # 强制清仓的票不计入目标
         for c in forced:
             target.pop(c, None)
@@ -207,36 +248,42 @@ def run_backtest(
             cur_w = current.get(code, 0.0)
             if tw < cur_w - 1e-6 and code in rows_by_code:
                 target_value = tw * eq
-                cur_value = prices.get(code, 0.0) * broker.holdings[code].shares
+                cur_value = price_basis.get(code, 0.0) * broker.holdings[code].shares
                 excess = cur_value - target_value
                 if excess > 0:
-                    ref = fill_price_for.get(code) or prices.get(code, 0.0)
+                    ref = fill_price_for.get(code) or price_basis.get(code, 0.0)
                     sell_shares = shares_for_amount(ref, excess)
                     if sell_shares > 0:
+                        adv, vol = _adv_vol_for(daily_by_code, code, d)
                         broker.sell(
                             code, rows_by_code[code], prev_closes.get(code),
                             target_shares=sell_shares,
                             ref_price=ref if strict_signals else None,
+                            adv_amount=adv,
+                            volatility_pct=vol,
                         )
                         if code not in broker.holdings or broker.holdings[code].shares <= 0:
                             if tracker is not None:
                                 tracker.close(code)
 
         # 买入
-        eq = broker.total_equity(prices) or 1.0
+        eq = broker.total_equity(price_basis, prev_closes) or 1.0
         for code, tw in target.items():
             row = rows_by_code.get(code)
             if row is None:
                 continue
             cur_shares = broker.holdings[code].shares if code in broker.holdings else 0
-            cur_value = prices.get(code, 0.0) * cur_shares
+            cur_value = price_basis.get(code, 0.0) * cur_shares
             target_value = tw * eq
             excess = target_value - cur_value
             if excess > 0:
-                ref = fill_price_for.get(code) or prices.get(code, 0.0)
+                ref = fill_price_for.get(code) or price_basis.get(code, 0.0)
+                adv, vol = _adv_vol_for(daily_by_code, code, d)
                 broker.buy(
                     code, row, prev_closes.get(code), excess,
                     ref_price=ref if strict_signals else None,
+                    adv_amount=adv,
+                    volatility_pct=vol,
                 )
                 # buy 可能因涨停/停牌/现金不足而未成交，只在真正持仓时同步 tracker；
                 # upsert 保证加仓不重置 highest_close（否则跟踪止损失效）
@@ -244,7 +291,8 @@ def run_backtest(
                     h = broker.holdings[code]
                     tracker.upsert(code, h.cost_price, h.buy_date)
 
-        broker.record_equity(d, prices)
+        broker.suspended_codes = set(broker.mark_suspended(rows_by_code))
+        broker.record_equity(d, prices, prev_closes)
         broker.end_of_day()
 
     return broker

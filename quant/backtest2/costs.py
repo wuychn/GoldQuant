@@ -44,8 +44,14 @@ class CostModel:
         code: str = "",
         stock: dict | None = None,
         quantity: int = 0,
+        ctx=None,
     ) -> float:
-        """滑点后成交价（买高卖低），滑点仅在此应用一次。"""
+        """滑点后成交价（买高卖低），滑点仅在此应用一次。
+
+        ``ctx``(SlippageContext)由调用方预构造时直接使用(回测 broker 传 ADV/波动),
+        否则从 ``stock``(live spot 快照)推导;二者均无 → 固定档。保持默认路径数值不变
+        以兼容 ``test_engine_parity``。
+        """
         return slip_price_with_context(
             price,
             side="buy" if is_buy else "sell",
@@ -53,6 +59,7 @@ class CostModel:
             stock=stock,
             code=code,
             quantity=quantity,
+            ctx=ctx,
         )
 
     def buy_cost(self, fill_price: float, shares: int, *, code: str = "") -> float:

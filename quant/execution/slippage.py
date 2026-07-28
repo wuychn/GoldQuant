@@ -63,12 +63,14 @@ def slip_price_with_context(
     stock: dict | None = None,
     code: str = "",
     quantity: int = 0,
+    ctx: SlippageContext | None = None,
 ) -> float:
     from quant.execution.sim_rules import limit_pct
     from quant.pool.liquidity import avg_daily_amount_yi
 
-    ctx = None
-    if getattr(cfg, "slippage_model", "fixed") != "fixed":
+    # 调用方(回测 broker)可预构造 ctx(ADV/波动已知),跳过 spot-style stock 适配;
+    # live 仍走 stock 路径;二者均无 → 固定档(向后兼容)
+    if ctx is None and getattr(cfg, "slippage_model", "fixed") != "fixed":
         chg = quote_change_pct(stock) if stock else None
         notional = price * max(quantity, 100)
         adv_yi = avg_daily_amount_yi(stock) if stock else None

@@ -112,11 +112,11 @@ def build_universe_snapshot(
             included = False
         else:
             try:
-                vol = float(r.get("volume", 0) or 0)
+                _vol = float(r.get("volume", 0) or 0)
             except (TypeError, ValueError):
-                vol = 0.0
-            if vol <= 0:
-                included = False  # 当日停牌/无成交
+                _vol = 0.0
+            if pd.isna(_vol) or _vol <= 0:
+                included = False  # 当日停牌/无成交/数据缺失(NaN)
             else:
                 adv = adv_map.get(code, 0.0)
                 if adv / 1e8 < min_adv_yi:

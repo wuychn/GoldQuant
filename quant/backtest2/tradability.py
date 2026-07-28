@@ -14,7 +14,21 @@ A股涨跌停分档：
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
+
+
+def _fnum(v) -> float:
+    """转 float;None/异常/非有限(NaN/inf)→ nan。
+
+    供停牌/涨跌停判定做保守处理:数据缺失(NaN)不应被当作"可交易"。
+    """
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return float("nan")
+    return f if math.isfinite(f) else float("nan")
 
 
 def _limit_pct(code: str, name: str | None = None) -> float:
@@ -42,15 +56,12 @@ def _limit_pct(code: str, name: str | None = None) -> float:
 
 
 def is_suspended(row: dict) -> bool:
-    vol = row.get("volume")
-    if vol is not None and float(vol) <= 0:
-        return True
-    o = float(row.get("open") or 0)
-    h = float(row.get("high") or 0)
-    l = float(row.get("low") or 0)
-    c = float(row.get("close") or 0)
-    if o == 0 and h == 0 and l == 0 and c == 0:
-        return True
+    vol = _fnum(row.get("volume"))
+    if math.isnan(vol) or vol <= 0:
+        return True  # 无成交/停牌/数据缺失(NaN)→ 保守判停牌
+    o, h, l, c = (_fnum(row.get(k)) for k in ("open", "high", "low", "close"))
+    if all(math.isnan(x) or x == 0 for x in (o, h, l, c)):
+        return True  # OHLC 全 0(停牌补零)或全 NaN → 停牌
     return False
 
 
@@ -69,11 +80,11 @@ def limit_state(row: dict, prev_close: float | None, *, code: str | None = None,
     """
     if prev_close is None or prev_close <= 0:
         return "none"
-    o = float(row.get("open") or 0)
-    h = float(row.get("high") or 0)
-    l = float(row.get("low") or 0)
-    c = float(row.get("close") or 0)
-    if o <= 0 or h <= 0:
+    o = _fnum(row.get("open"))
+    h = _fnum(row.get("high"))
+    l = _fnum(row.get("low"))
+    c = _fnum(row.get("close"))
+    if math.isnan(o) or math.isnan(h) or o <= 0 or h <= 0:
         return "none"
     limit = _limit_pct(code or str(row.get("code", "")), name or row.get("name"))
     up_price = round(prev_close * (1 + limit), 2)
@@ -83,6 +94,34 @@ def limit_state(row: dict, prev_close: float | None, *, code: str | None = None,
         return "up"
     # 跌停封死：收盘已达跌停价且最低价未低于收盘
     if c <= down_price + _PRICE_TOL and l >= c - _PRICE_TOL:
+        return "down"
+    return "none"
+
+
+def price_at_limit(
+    price: float,
+    prev_close: float | None,
+    *,
+    code: str | None = None,
+    name: str | None = None,
+) -> str:
+    """给定一个具体价格（开盘/最新/成交价），判定是否触及涨跌停价。
+
+    供 strict 模式（T 开盘成交）使用：开盘价已达涨停价→不可买，已达跌停价→不可卖。
+    与 ``limit_state``（基于日 K close==high 判全天封板）互补——后者判"尾盘封板"，
+    本函数判"给定时刻价格是否封板"，避免 strict 下用收盘封板口径误判开盘可买。
+    """
+    if prev_close is None or prev_close <= 0:
+        return "none"
+    p = _fnum(price)
+    if math.isnan(p) or p <= 0:
+        return "none"
+    limit = _limit_pct(code or "", name)
+    up_price = round(prev_close * (1 + limit), 2)
+    down_price = round(prev_close * (1 - limit), 2)
+    if p >= up_price - _PRICE_TOL:
+        return "up"
+    if p <= down_price + _PRICE_TOL:
         return "down"
     return "none"
 
