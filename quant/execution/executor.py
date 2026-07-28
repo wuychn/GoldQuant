@@ -72,6 +72,30 @@ def _stock_map(payload: dict | None) -> dict[str, dict]:
     return m
 
 
+def _cap_qty_by_adv_live(code: str, price: float, qty: int, sim) -> int:
+    """live 买单 ADV 封顶：单笔 ≤ 历史 20 日均成交额 × participation_rate（大资金不击穿流动性）。"""
+    rate = float(getattr(sim, "participation_rate", 0.0) or 0.0)
+    if rate <= 0 or price <= 0:
+        return qty
+    try:
+        import pandas as pd
+        from quant.data.store import read_daily_raw
+
+        df = read_daily_raw(codes=[code])
+        if df.empty:
+            return qty  # 无历史，回退不限制
+        amt = pd.to_numeric(df["amount"], errors="coerce").dropna().tail(20)
+        if amt.empty:
+            return qty
+        adv = float(amt.mean())
+        if adv <= 0:
+            return qty
+        max_qty = int(adv * rate / price / 100) * 100
+        return min(qty, max(max_qty, 0))
+    except Exception:
+        return qty
+
+
 def execute_signals(
     signals: list[TradeSignal],
     *,
@@ -191,7 +215,11 @@ def execute_signals(
             print(f"买入跳过 涨停：{signal.name}({signal.code})")
             rejected[signal.code] = "涨停封板"
             continue
-        cost = calc_buy_cost(signal.price, signal.quantity, signal.code, sim)
+        qty = _cap_qty_by_adv_live(signal.code, signal.price, signal.quantity, sim)
+        if qty <= 0:
+            rejected.setdefault(signal.code, "ADV不足/整手不足")
+            continue
+        cost = calc_buy_cost(signal.price, qty, signal.code, sim)
         if cost.total > cash + _CASH_EPS:
             print(
                 f"买入跳过 可用不足：{signal.name}({signal.code}) "
@@ -205,8 +233,8 @@ def execute_signals(
             h = holdings[i]
             old_q = int(h.get("持仓股数", 0) or 0)
             old_p = float(h.get("买入价", 0) or 0)
-            new_q = old_q + signal.quantity
-            avg = (old_p * old_q + cost.fill_price * signal.quantity) / new_q if new_q else cost.fill_price
+            new_q = old_q + qty
+            avg = (old_p * old_q + cost.fill_price * qty) / new_q if new_q else cost.fill_price
             h["持仓股数"] = new_q
             h["买入价"] = round(avg, 4)
             h["买入原因"] = (signal.reason[:200] if signal.reason else h.get("买入原因", ""))
@@ -220,7 +248,7 @@ def execute_signals(
                     "买入时间": cn_datetime_str(),
                     "买入类型": signal.signal_kind or "",
                     "买入原因": (signal.reason or "")[:200],
-                    "持仓股数": signal.quantity,
+                    "持仓股数": qty,
                 }
             )
             held_codes.add(signal.code)
@@ -234,7 +262,7 @@ def execute_signals(
                 transfer_fee=cost.transfer_fee,
             )
         )
-        append_trade(date_str, _trade_record(signal, ts, date_str, signal.quantity, cost))
+        append_trade(date_str, _trade_record(signal, ts, date_str, qty, cost))
 
     if not executed:
         return [], rejected

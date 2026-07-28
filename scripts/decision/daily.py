@@ -337,6 +337,11 @@ def main() -> None:
         # 账户/持仓快照（只读，不撮合）
         with paper_home_context():
             _acc = get_account()
+        # 写 T+1 风控日内基准（T 晚总资产 ≈ T+1 开盘前），避免盘中首次调用把带亏总资产当基准
+        with paper_home_context():
+            from quant.execution.risk_gate import set_day_start_equity
+
+            set_day_start_equity(float(_acc.get("总资产") or 0), target_date=target_date)
         payload["paper"] = {
             "account": _acc,
             "holdings": [

@@ -163,6 +163,41 @@ def get_or_init_day_start_equity(total_assets: float) -> float:
     return equity
 
 
+def set_day_start_equity(total_assets: float, target_date: str | None = None) -> None:
+    """显式写某日基准权益（盘前 / 前一日决策时调）。幂等：当日已写不覆盖，防盘中劫持。"""
+    import json as _json
+
+    path = state_file("day_start_equity.json")
+    d = target_date or cn_today().isoformat()
+    if path.is_file():
+        try:
+            data = _json.loads(path.read_text(encoding="utf-8"))
+            if str(data.get("date", "")) == d and float(data.get("equity", 0) or 0) > 0:
+                return  # 当日已写，不覆盖
+        except (ValueError, OSError):
+            pass
+    equity = float(total_assets) if total_assets and total_assets > 0 else 0.0
+    path.write_text(_json.dumps({"date": d, "equity": equity}, ensure_ascii=False), encoding="utf-8")
+
+
+def get_day_start_equity() -> float | None:
+    """只读当日基准权益。无则 None（gate 不判 daily_loss，而非用当前值作基准 → 防盘中劫持）。"""
+    import json as _json
+
+    path = state_file("day_start_equity.json")
+    today = cn_today().isoformat()
+    if not path.is_file():
+        return None
+    try:
+        data = _json.loads(path.read_text(encoding="utf-8"))
+        if str(data.get("date", "")) == today:
+            v = float(data.get("equity", 0) or 0)
+            return v if v > 0 else None
+    except (ValueError, OSError):
+        pass
+    return None
+
+
 # ---------------- 配置读取 ----------------
 
 
@@ -177,21 +212,39 @@ def _risk_config() -> tuple[dict, dict, dict]:
     return trading, risk, cb  # type: ignore[return-value]
 
 
+_IDX_CACHE: dict = {"date": None, "ts": 0.0, "value": None}
+_IDX_TTL = 60.0  # 秒：同日多笔买入只网络取数一次
+
+
 def fetch_index_change_pct() -> float | None:
-    """大盘涨跌幅（百分点）。取数失败返回 None（不阻断）。"""
+    """大盘涨跌幅（百分点）。TTL 60s 缓存；网络失败时用上次缓存值（避免抖动让熔断失效）。"""
+    import time
+
+    today = cn_today().isoformat()
+    now = time.time()
+    if (
+        _IDX_CACHE["date"] == today
+        and _IDX_CACHE["value"] is not None
+        and (now - _IDX_CACHE["ts"]) < _IDX_TTL
+    ):
+        return _IDX_CACHE["value"]
     try:
         from quant.data.fetch import fetch_spot_em
 
         df = fetch_spot_em()
         if df is None or df.empty or "pct" not in df.columns:
-            return None
+            raise RuntimeError("spot_em 空/无 pct")
         sh = df[df["code"].astype(str).str.startswith("000001")]
         if sh.empty:
-            return None
+            raise RuntimeError("无上证指数")
         v = float(sh.iloc[0]["pct"])
-        return v if v == v else None
+        if v != v:  # NaN
+            raise RuntimeError("NaN")
+        _IDX_CACHE.update(date=today, ts=now, value=v)
+        return v
     except Exception:
-        return None
+        # 网络抖动/取数失败：用上次缓存值，避免熔断 fail-open（无缓存才降级 None）
+        return _IDX_CACHE["value"]
 
 
 def build_risk_context(*, total_assets: float, cooldown_days: int | None = None) -> RiskDecision:
@@ -225,7 +278,7 @@ def build_risk_context(*, total_assets: float, cooldown_days: int | None = None)
     days = cooldown_days if cooldown_days is not None else int(trading.get("stoploss_cooldown_days", 3))
     cooldown = stoploss_cooldown_codes(days)
     sold = codes_sold_today()
-    day_start = get_or_init_day_start_equity(total_assets)
+    day_start = get_day_start_equity()  # 只读：基准由盘前/前一日决策显式写，防盘中首调劫持
     idx_chg = fetch_index_change_pct()
 
     return assess_buy_gate(

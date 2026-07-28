@@ -236,7 +236,9 @@ def run_backtest(
             p = price_basis.get(code) or prev_closes.get(code) or 0.0
             current[code] = p * h.shares / eq
 
-        target = policy.target_weights(alpha, price_basis, current, d)
+        # date 用 signal_date（strict=T-1）：voltarget 的 realized_vol/协方差取 ≤date，
+        # 传 d 会含 T 日收盘 → 前视（暴跌日才缩仓，实盘 T 开盘做不到）
+        target = policy.target_weights(alpha, price_basis, current, signal_date)
         # 强制清仓的票不计入目标
         for c in forced:
             target.pop(c, None)
