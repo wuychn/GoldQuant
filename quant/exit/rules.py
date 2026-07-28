@@ -9,6 +9,13 @@ import pandas as pd
 
 from quant.exit.atr import atr
 
+# 出场默认参数（单一来源：rules / engine.ExitConfig / daily._build_sell_watch 共用，
+# 避免三处魔法数 atr_mult=3 / atr_mult_stop=2 / hard_pct=0.08 / max_hold=20 漂移）
+DEFAULT_ATR_MULT = 3.0
+DEFAULT_ATR_MULT_STOP = 2.0
+DEFAULT_HARD_PCT = 0.08
+DEFAULT_MAX_HOLD_DAYS = 20
+
 
 @dataclass
 class ExitSignal:
@@ -120,10 +127,10 @@ def evaluate_exits(
     highest_close: float,
     buy_date: str,
     as_of: str,
-    atr_mult: float = 3.0,
-    atr_mult_stop: float = 2.0,
-    hard_pct: float = 0.08,
-    max_hold_days: int = 20,
+    atr_mult: float = DEFAULT_ATR_MULT,
+    atr_mult_stop: float = DEFAULT_ATR_MULT_STOP,
+    hard_pct: float = DEFAULT_HARD_PCT,
+    max_hold_days: int = DEFAULT_MAX_HOLD_DAYS,
     calendar_fn=None,
 ) -> ExitSignal | None:
     last = float(pd.to_numeric(df["close"], errors="coerce").iloc[-1]) if len(df) else 0.0

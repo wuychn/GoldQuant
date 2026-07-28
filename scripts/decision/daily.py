@@ -16,7 +16,7 @@ from pathlib import Path
 
 from quant.config import load_factor_weights
 from quant.data.adjust import load_adjusted_daily
-from quant.data.calendar import is_trading_day, next_trading_day, to_iso, trading_day_list
+from quant.data.calendar import is_trading_day, next_trading_day, to_iso, trading_day_list, trading_days_between
 from quant.data.industry import read_industry_snapshot
 from quant.data.universe import universe_codes
 from quant.decision.daily_output import DecisionCard, build_decision_card, card_to_text
@@ -28,7 +28,7 @@ from quant.decision.paper_execute import (
     write_sell_watch,
 )
 from quant.exit.atr import atr
-from quant.exit.rules import evaluate_exits
+from quant.exit.rules import DEFAULT_ATR_MULT, DEFAULT_ATR_MULT_STOP, DEFAULT_HARD_PCT, evaluate_exits
 from quant.exit.state import ExitTracker
 from quant.factors.compose import compose_alpha
 from quant.factors.panel_builder import build_panel
@@ -128,6 +128,10 @@ def build_today_card(
     current = {c: v / total for c, v in cur_val.items()} if total > 0 else {}
     target = policy.target_weights(alpha, prices, current, as_of)
 
+    def _cal(a: str, b: str) -> int:
+        from datetime import date as _d
+        return trading_days_between(_d.fromisoformat(a), _d.fromisoformat(b))
+
     exit_signals: list[dict] = []
     tracker = ExitTracker()
     for h in holdings:
@@ -135,25 +139,31 @@ def build_today_card(
         if not code or code not in prices:
             continue
         try:
-            entry = float(h.get("买入价") or h.get("成本价") or 0)
+            entry_raw = float(h.get("买入价") or h.get("成本价") or 0)
         except (TypeError, ValueError):
-            entry = 0.0
-        buy_date = str(h.get("买入时间") or "")[:10]
-        if entry <= 0:
+            entry_raw = 0.0
+        buy_date = str(h.get("买入时间") or "")[:10] or as_of
+        if entry_raw <= 0:
             continue
         hist = daily[(daily["code"] == code) & (daily["date"] <= as_of)].sort_values("date")
         if hist.empty:
             continue
-        highest = float(h.get("持仓最高价") or hist["close"].max())
-        tracker.upsert(code, entry, buy_date or as_of)
+        # entry 是 raw 买入价，而 prices/hist 是后复权；用 buy_date 的 hfq close 作 entry
+        # 的复权近似（买入价≈当日 close），消除 "raw entry vs hfq close" 除权累积偏差（P0）
+        buy_row = hist[hist["date"] == buy_date]
+        entry = float(buy_row["close"].iloc[0]) if not buy_row.empty else entry_raw
+        # highest_close 缺失回退 entry（与回测 ExitTracker 同源），而非全历史 close.max()（P1）
+        highest = float(h.get("持仓最高价") or entry)
+        tracker.upsert(code, entry, buy_date)
         tracker.update(code, prices[code])
         st = tracker.get(code)
         sig = evaluate_exits(
             hist,
             entry_price=entry,
             highest_close=st.highest_close if st else highest,
-            buy_date=buy_date or as_of,
+            buy_date=buy_date,
             as_of=as_of,
+            calendar_fn=_cal,  # 交易日计数（与回测 ExitConfig 一致），消除 live 自然日偏差（P0）
         )
         if len(hist) >= 15:
             a = atr(hist, 14).iloc[-1]
@@ -212,8 +222,8 @@ def _build_sell_watch(card, daily, names, as_of, holdings) -> list[dict]:
             continue
         highest = float(h.get("持仓最高价") or hist["close"].max())
         a = float(atr(hist, 14).iloc[-1]) if len(hist) >= 15 else 0.0
-        hard_stop = max(entry * 0.92, entry - 2 * a) if a > 0 else entry * 0.92
-        atr_stop = (max(entry, highest) - 3 * a) if a > 0 else None
+        hard_stop = max(entry * (1 - DEFAULT_HARD_PCT), entry - DEFAULT_ATR_MULT_STOP * a) if a > 0 else entry * (1 - DEFAULT_HARD_PCT)
+        atr_stop = (max(entry, highest) - DEFAULT_ATR_MULT * a) if a > 0 else None
         ma20 = float(hist["close"].rolling(20).mean().iloc[-1]) if len(hist) >= 20 else None
         es = exit_by_code.get(code)
         rows.append(

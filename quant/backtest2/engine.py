@@ -25,7 +25,13 @@ from quant.backtest2.broker import SimBroker
 from quant.backtest2.policy import PortfolioPolicy
 from quant.backtest2.tradability import shares_for_amount
 from quant.data.calendar import to_iso
-from quant.exit.rules import evaluate_exits
+from quant.exit.rules import (
+    DEFAULT_ATR_MULT,
+    DEFAULT_ATR_MULT_STOP,
+    DEFAULT_HARD_PCT,
+    DEFAULT_MAX_HOLD_DAYS,
+    evaluate_exits,
+)
 from quant.exit.state import ExitTracker
 
 
@@ -36,10 +42,10 @@ AlphaFn = Callable[[str, dict[str, dict]], dict[str, float]]
 class ExitConfig:
     """出场参数；为 None 时禁用对应规则。"""
 
-    atr_mult: float = 3.0
-    atr_mult_stop: float = 2.0
-    hard_pct: float = 0.08
-    max_hold_days: int = 20
+    atr_mult: float = DEFAULT_ATR_MULT
+    atr_mult_stop: float = DEFAULT_ATR_MULT_STOP
+    hard_pct: float = DEFAULT_HARD_PCT
+    max_hold_days: int = DEFAULT_MAX_HOLD_DAYS
     calendar_fn: Callable[[str, str], int] | None = None
 
     def __post_init__(self) -> None:
