@@ -130,6 +130,10 @@ def optimize_weights_lightgbm(
         max_depth=4,
         learning_rate=0.08,
         verbose=-1,
+        random_state=42,
+        n_jobs=1,
+        deterministic=True,
+        force_col_wise=True,
     )
     model.fit(X, y)
     imp = model.feature_importances_

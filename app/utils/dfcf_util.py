@@ -1,6 +1,9 @@
 import json
 
-import akshare as ak
+try:
+    import akshare as ak
+except ImportError:  # 测试/CI 无 akshare 时仍可 import；调用 ak 接口处需安装
+    ak = None
 import requests
 
 from app.utils.common_util import sort_by_field_and_limit, today, get_val, set_field_value, list_to_dict, \

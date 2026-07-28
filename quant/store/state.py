@@ -47,19 +47,34 @@ def _read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
 
 
+def _file_lock(path: Path):
+    """进程级文件锁（防两进程 read-modify-write 丢失更新）。无 filelock 时降级无锁。
+
+    调度器 max_instances=1 已防同 job 重叠；本锁防不同 job / 手动 CLI 与调度器并发写
+    holding.jsonl/account.json 等。完整 RMW 并发安全需调用方在 read-modify-write 整段加锁。
+    """
+    try:
+        from filelock import FileLock
+    except ImportError:
+        from contextlib import nullcontext
+        return nullcontext()
+    return FileLock(str(path) + ".lock", timeout=30)
+
+
 def _write_text_atomic(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(text)
-        os.replace(tmp, path)
-    except Exception:
+    with _file_lock(path):
+        fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
         try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(text)
+            os.replace(tmp, path)
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
 
 
 def _write_json_atomic(path: Path, obj: Any) -> None:
