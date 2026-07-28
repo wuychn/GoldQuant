@@ -111,12 +111,16 @@ def to_iso(d) -> str:
 
 
 def _is_workday_fallback(d: date) -> bool:
+    # A 股不在调休周末交易：周末一律非交易日，避免 is_real_workday_cn 把
+    # "调休上班的周六"误判为交易日（仅当 parquet 日历缺失/越界时触发本兜底）。
+    if d.weekday() >= 5:
+        return False
     try:
         from app.utils.common_util import is_real_workday_cn
 
         return bool(is_real_workday_cn(d))
     except Exception:
-        return d.weekday() < 5
+        return True  # 周内且无日历时，保守判为交易日
 
 
 def is_trading_day(d: date) -> bool:

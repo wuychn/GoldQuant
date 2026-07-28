@@ -195,6 +195,38 @@ def read_universe_snapshot(date_str: str) -> pd.DataFrame:
     return pd.read_parquet(path)
 
 
+def name_snapshot_dir() -> Path:
+    return store_root() / "name_snapshot"
+
+
+def write_name_snapshot(date_str: str, code_name: dict[str, str]) -> None:
+    """落 PIT 名称快照 {code: name}（按日）。供 universe ST/退市过滤、涨跌停 ST
+    分档使用——避免依赖 daily_raw.name（历史常缺失或为查询当下的当前名，非 PIT）。"""
+    _ensure_pyarrow()
+    if not code_name:
+        return
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    year = str(date_str)[:4]
+    path = name_snapshot_dir() / f"year={year}" / f"{date_str}.parquet"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df = pd.DataFrame(
+        [{"date": date_str, "code": c, "name": n} for c, n in code_name.items()]
+    )
+    pq.write_table(pa.Table.from_pandas(df, preserve_index=False), path)
+
+
+def read_name_snapshot(date_str: str) -> dict[str, str]:
+    _ensure_pyarrow()
+    year = str(date_str)[:4]
+    path = name_snapshot_dir() / f"year={year}" / f"{date_str}.parquet"
+    if not path.is_file():
+        return {}
+    df = pd.read_parquet(path)
+    return dict(zip(df["code"].astype(str), df["name"].astype(str)))
+
+
 def write_calendar(trade_dates: list[str]) -> None:
     _ensure_pyarrow()
     import pyarrow as pa

@@ -34,8 +34,10 @@ def detect_ex_dividend_codes(latest_spot: pd.DataFrame, prev_close_map: dict[str
             continue
         if spot_prev <= 0:
             continue
-        # 除权：昨收按比例调整，差异超 0.1% 视为除权（避免浮点噪声）
-        if abs(spot_prev - prev) / prev > 0.001:
+        # 除权：相对差异 >0.5% 或绝对差异 >0.05 元（旧 0.1% 阈值过低，
+        # 既漏判小额分红积累偏差，又因 T-1 坏 tick 误报）
+        diff = abs(spot_prev - prev)
+        if diff / prev > 0.005 or diff > 0.05:
             out.append(code)
     return out
 
@@ -98,11 +100,14 @@ def refresh_adj_for_codes(codes: list[str]) -> int:
     """对给定代码重拉后复权因子并落库；返回更新条数。"""
     if not codes:
         return 0
+    import sys
+
     frames = []
     for code in codes:
         try:
             frames.append(fetch_hfq_factor(code))
-        except Exception:
+        except Exception as e:  # 单只失败不阻断，但记日志（旧静默吞错会留隐患）
+            print(f"[WARN] hfq_factor {code} 拉取失败: {e}", file=sys.stderr)
             continue
     if not frames:
         return 0

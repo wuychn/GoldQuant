@@ -14,22 +14,29 @@ from __future__ import annotations
 from datetime import date
 
 import pandas as pd
+import sys
 
 from quant.data.schema import (
     DEFAULT_ADV_LOOKBACK,
     DEFAULT_MIN_ADV_YI,
     DEFAULT_MIN_LIST_DAYS,
-    ST_NAME_MARKERS,
 )
-from quant.data.store import read_daily_raw, read_universe_snapshot, write_universe_snapshot
+from quant.data.store import read_daily_raw, read_name_snapshot, read_universe_snapshot, write_universe_snapshot
 from quant.data.calendar import prev_trading_day, to_iso
 
 
 def _is_st_name(name: str) -> bool:
     if not name:
         return False
-    n = str(name).upper().strip()
-    return any(m.upper() in n for m in ST_NAME_MARKERS)
+    n = str(name).strip()
+    nu = n.upper()
+    # ST/*ST 必须前缀（A股 ST 标识在名称开头），避免子串误命中含 "ST" 的英文名；
+    # "退"（退市整理期，如"中弘退"）/"PT"（历史遗留）用子串。旧子串匹配会误判。
+    if nu.startswith(("ST", "*ST")):
+        return True
+    if "退" in n or "PT" in nu:
+        return True
+    return False
 
 
 def _coerce_iso(s: str):
@@ -96,13 +103,18 @@ def build_universe_snapshot(
         if today_rows.empty:
             return pd.DataFrame(columns=["date", "code", "name", "included"])
 
+    name_snap = read_name_snapshot(as_of)
     list_days = _listing_days_map(daily, as_of)
     adv_map = _adv_yi_map(daily, as_of, adv_lookback)
 
+    missing_name = 0
     rows: list[dict] = []
     for _, r in today_rows.iterrows():
         code = str(r.get("code", "")).strip()
-        name = str(r.get("name", "")).strip()
+        # 优先 PIT 名称快照（已落库则天然 PIT），回退 daily_raw.name（历史可能空/当前名）
+        name = str(name_snap.get(code) or r.get("name") or "").strip()
+        if not name:
+            missing_name += 1
         if not code:
             continue
         included = True
@@ -123,6 +135,12 @@ def build_universe_snapshot(
                     included = False
         rows.append({"date": as_of, "code": code, "name": name, "included": included})
 
+    if missing_name:
+        print(
+            f"[WARN] universe {as_of}: {missing_name} 只票无名称（name_snapshot 与 daily_raw 均缺），"
+            f"ST/退市 PIT 过滤退化",
+            file=sys.stderr,
+        )
     return pd.DataFrame(rows, columns=["date", "code", "name", "included"])
 
 

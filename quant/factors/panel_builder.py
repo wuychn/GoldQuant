@@ -26,13 +26,14 @@ from quant.factors.registry import FactorRegistry, REGISTRY
 
 
 def _industry_map_for(as_of: str) -> dict[str, str]:
-    """PIT 行业映射：优先读落库快照；缺失回退当前东财映射（仅当无任何历史快照）。"""
-    from quant.data.industry import fetch_current_industry_map, read_industry_snapshot
+    """PIT 行业映射：只读落库快照；缺失返回空（中性化该日退化）。
 
-    m = read_industry_snapshot(as_of)
-    if m:
-        return m
-    return fetch_current_industry_map()
+    不再用 ``fetch_current_industry_map`` 回填历史——那会把"今天的"行业分类用于
+    历史日期，在个股主业转型 / 申万分类调整时构成 look-ahead。
+    """
+    from quant.data.industry import read_industry_snapshot
+
+    return read_industry_snapshot(as_of) or {}
 
 
 def _normalize_daily(daily: pd.DataFrame) -> pd.DataFrame:

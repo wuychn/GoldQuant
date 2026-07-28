@@ -64,6 +64,35 @@ def _build_one(code: str, start: str, end: str) -> tuple[str, int]:
         return code, 0
 
 
+def _refresh_adj_all(codes: list[str]) -> None:
+    """对所有代码全量拉后复权因子并体检覆盖率（修复 build_daily 不写 adj_factor 的 P0）。
+
+    旧版 ``_build_one`` 只写不复权 daily_raw，导致 ``load_adjusted_daily`` 在新库返回
+    未复权价，除权日 raw close 假跳空（10 送 10 → 10 跌到 5）污染 mom/IC/ATR/回测。
+    """
+    from quant.data.adjust import refresh_adj_for_codes
+    from quant.data.store import read_adj_factor, read_daily_raw
+
+    try:
+        n = refresh_adj_for_codes(codes)
+        print(f"复权因子: {n} 条")
+    except Exception as e:  # noqa: BLE001
+        print(f"[WARN] 复权因子全量拉取失败: {e}", file=sys.stderr)
+        return
+    try:
+        adj_codes = set(read_adj_factor()["code"].astype(str).unique())
+        raw_codes = set(read_daily_raw()["code"].astype(str).unique())
+        cov = len(adj_codes & raw_codes) / max(len(raw_codes), 1)
+        print(f"复权因子覆盖率: {cov:.1%} ({len(adj_codes & raw_codes)}/{len(raw_codes)})")
+        if cov < 0.9:
+            print(
+                "[WARN] 复权因子覆盖率 <90%，因子/IC/回测可能用未复权价（除权日假跳空）",
+                file=sys.stderr,
+            )
+    except Exception as e:  # noqa: BLE001
+        print(f"[WARN] 复权因子覆盖率检查失败: {e}", file=sys.stderr)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--start", default="2021-01-01", help="起始日 YYYY-MM-DD")
@@ -80,6 +109,11 @@ def main() -> None:
         "--no-delisted",
         action="store_true",
         help="不并入退市股（默认并入，修复幸存者偏差）",
+    )
+    ap.add_argument(
+        "--no-adj",
+        action="store_true",
+        help="跳过后复权因子全量初始化（默认拉取，修复除权日假跳空）",
     )
     args = ap.parse_args()
 
@@ -145,6 +179,10 @@ def main() -> None:
                 print(f"进度 {i}/{len(todo)}  ok={ok} fail={fail}  {time.time()-t0:.0f}s")
 
     print(f"完成: ok={ok} fail={fail}  耗时 {time.time()-t0:.0f}s")
+
+    # 后复权因子全量初始化（默认开；--no-adj 跳过）
+    if not args.no_adj:
+        _refresh_adj_all(codes)
 
 
 if __name__ == "__main__":

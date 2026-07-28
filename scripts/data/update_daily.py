@@ -68,6 +68,22 @@ def main() -> None:
     write_daily_raw(spot_out)
     print(f"spot_em 追加: {len(spot_out)} 行 @ {today}")
 
+    # 1b. PIT 名称快照（供 universe ST/退市过滤、涨跌停 ST 分档）
+    #     spot_em 的 name 是当日真实名（PIT），落库后 universe 可按日取，避免依赖
+    #     daily_raw.name（历史常缺失或为查询当下的当前名）。
+    try:
+        from quant.data.store import write_name_snapshot
+
+        code_name = {
+            str(r.get("code", "")).strip(): str(r.get("name", "")).strip()
+            for _, r in spot.iterrows()
+            if str(r.get("code", "")).strip() and str(r.get("name", "")).strip()
+        }
+        write_name_snapshot(today, code_name)
+        print(f"name 快照: {len(code_name)} 只 @ {today}")
+    except Exception as e:
+        print(f"[WARN] name 快照失败: {e}", file=sys.stderr)
+
     # 2. 除权检测 + 因子补拉
     daily = read_daily_raw(end=today)
     prev_map = _prev_close_map(daily, today)
