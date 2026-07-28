@@ -9,14 +9,14 @@ from __future__ import annotations
 import argparse
 from datetime import date
 
-from quant.backtest2.engine import ExitConfig, run_backtest
-from quant.backtest2.report import export_report
+from quant.backtest.engine import ExitConfig, run_backtest
+from quant.backtest.report import export_report
 from quant.data.adjust import load_adjusted_daily
 from quant.data.calendar import to_iso, trading_day_list
 from quant.data.industry import read_industry_snapshot
 from quant.factors.compose import compose_alpha
 from quant.factors.panel_builder import build_panel
-from quant.portfolio2.target import TargetPortfolio
+from quant.portfolio.target import TargetPortfolio
 from quant.store.paths import reports_dir
 
 

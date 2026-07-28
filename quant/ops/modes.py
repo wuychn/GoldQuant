@@ -327,8 +327,10 @@ def build_decision_push_body(payload: dict[str, Any]) -> str:
     acc = paper.get("account") or {}
     pool = payload.get("battle_pool") or []
     sell_watch = payload.get("sell_watch") or []
+    from quant.narrative.exit_phrases import exit_reason_label
+
     pool_lines = [
-        f"{p.get('name')}({p.get('code')}) α={p.get('alpha')} #{p.get('rank')}"
+        f"{p.get('name')}({p.get('code')}) α={p.get('alpha')} #{p.get('rank')} {p.get('why') or ''}".rstrip()
         for p in pool[:8]
     ]
     sell_lines = []
@@ -336,7 +338,7 @@ def build_decision_push_body(payload: dict[str, Any]) -> str:
         flag = "⚡" if s.get("force_sell") else "·"
         hs = s.get("hard_stop")
         sell_lines.append(
-            f"{flag} {s.get('name')}({s.get('code')}) 止损{hs} {(s.get('reason') or '').strip()}"
+            f"{flag} {s.get('name')}({s.get('code')}) 止损{hs} {exit_reason_label(s.get('reason'))}"
         )
     parts = [
         icon_section(

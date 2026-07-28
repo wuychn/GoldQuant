@@ -12,16 +12,16 @@ import json
 from datetime import date
 from pathlib import Path
 
-from quant.backtest2.engine import ExitConfig, run_backtest
-from quant.backtest2.metrics import compute_metrics
+from quant.backtest.engine import ExitConfig, run_backtest
+from quant.backtest.metrics import compute_metrics
 from quant.data.adjust import load_adjusted_daily
 from quant.data.calendar import to_iso, trading_day_list
 from quant.factors.compose import compose_alpha
 from quant.factors.panel_builder import build_panel
-from quant.portfolio2.target import TargetPortfolio
-from quant.research2.sensitivity import parameter_budget, scan_param
-from quant.research2.significance import deflated_sharpe
-from quant.research2.walk_forward import walk_forward
+from quant.portfolio.target import TargetPortfolio
+from quant.research.sensitivity import parameter_budget, scan_param
+from quant.research.significance import deflated_sharpe
+from quant.research.walk_forward import walk_forward
 
 
 def _build_alpha(dates: list[str], daily):

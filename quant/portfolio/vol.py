@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from quant.scoring.tech_indicators import hist_close, hist_rows_sorted
+from quant.data.quote import hist_close, hist_rows_sorted
 
 
 def _row_hlc(row: dict) -> tuple[float | None, float | None, float | None]:

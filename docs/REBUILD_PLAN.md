@@ -1,5 +1,8 @@
-# GoldQuant 量化重构执行计划
+# GoldQuant 量化重构执行计划（历史归档）
 
+> **历史归档**：本文件为 r1→r3 重构的设计稿。r1 的评分（14 维）/ 主升浪战法 /
+> 三确认链 / 概念追踪 / ML 校准体系已于 r3 全部退役，决策/回测/盘中撮合统一到
+> IC 因子链（factors + compose_alpha + portfolio2）。实施现状见 [R3_ARCHITECTURE.md](R3_ARCHITECTURE.md)。
 > 版本：v1 · 2026-07-26
 > 目标操作风格：A股波段 / 主升浪，日频决策，人在环路的辅助决策
 > 环境基准：AKShare 1.18.63（已在 `.venv` 中验证接口可用性）

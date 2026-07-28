@@ -10,9 +10,9 @@ from datetime import date
 import numpy as np
 import pandas as pd
 
-from quant.backtest2.engine import run_backtest
-from quant.backtest2.policy import EqualWeightTopN
-from quant.backtest2.tradability import _limit_pct, limit_state
+from quant.backtest.engine import run_backtest
+from quant.backtest.policy import EqualWeightTopN
+from quant.backtest.tradability import _limit_pct, limit_state
 from quant.data.calendar import to_iso, trading_day_list
 from quant.exit.rules import evaluate_exits
 from quant.exit.state import ExitTracker
@@ -98,7 +98,7 @@ def test_engine_exit_tracker_closed_on_full_sell():
     def alpha_fn(d, _rows):
         return {c: 1.0 for c in _rows}
 
-    from quant.backtest2.engine import ExitConfig
+    from quant.backtest.engine import ExitConfig
 
     broker = run_backtest(
         daily=daily, dates=list(dates), alpha_fn=alpha_fn,
@@ -243,7 +243,7 @@ def test_factors_do_not_leak_future():
 
 
 def test_dsr_decreases_with_trials_still_holds():
-    from quant.research2.significance import deflated_sharpe
+    from quant.research.significance import deflated_sharpe
 
     s1 = deflated_sharpe(1.5, n=252, n_trials=1)
     s100 = deflated_sharpe(1.5, n=252, n_trials=100)

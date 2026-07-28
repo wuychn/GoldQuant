@@ -26,12 +26,55 @@ from quant.factors.weights import full_weight_map
 from quant.store.paths import config_file
 
 
+def fit_walk_forward_weights(
+    dates: list[str],
+    daily,
+    *,
+    train_window: int = 504,
+    step: int = 63,
+    min_icir: float = 0.0,
+    min_tstat: float = 1.0,
+    fdr_alpha: float = 0.05,
+) -> dict[str, dict[str, float]]:
+    """滚动 walk-forward：每个 test 日 t 用 [t-train_window, t-1] 面板拟合权重。
+
+    返回 {date: {factor: weight}}。train_window 默认 2 年(504 交易日)，step 默认季度(63)。
+    生产 ``daily`` 经 ``load_factor_weights(as_of=t)`` 取 ≤t 最近一组（严格 OOS，
+    权重只用 t-1 及更早数据拟合，杜绝 in-sample 高估）。
+    """
+    from collections import defaultdict
+
+    names = REGISTRY.names()
+    panel = build_panel(dates, daily=daily)
+    by_date: dict[str, list] = defaultdict(list)
+    for r in panel:
+        by_date[r.date].append(r)
+    sorted_dates = sorted(by_date.keys())
+    ts: dict[str, dict[str, float]] = {}
+    for i, td in enumerate(sorted_dates):
+        if i < train_window or i % step:
+            continue
+        train_rows: list = []
+        for sd in sorted_dates[max(0, i - train_window):i]:
+            train_rows.extend(by_date[sd])
+        if len(train_rows) < 200:
+            continue
+        report = factor_ic_report(train_rows, names)
+        full = full_weight_map(report, names, min_icir=min_icir, min_tstat=min_tstat, fdr_alpha=fdr_alpha)
+        ts[td] = {k: round(v, 4) for k, v in full.items()}
+    return ts
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--start", required=True, help="YYYY-MM-DD")
     ap.add_argument("--end", required=True, help="YYYY-MM-DD")
     ap.add_argument("--min-icir", type=float, default=0.0)
     ap.add_argument("--min-tstat", type=float, default=1.0)
+    ap.add_argument("--walk-forward", action="store_true", help="滚动 walk-forward 时变权重表")
+    ap.add_argument("--train-window", type=int, default=504)
+    ap.add_argument("--step", type=int, default=63)
+    ap.add_argument("--fdr-alpha", type=float, default=0.05, help="BH-FDR 显著性水平（0=关闭）")
     args = ap.parse_args()
 
     dates = [
@@ -43,11 +86,22 @@ def main() -> None:
         return
 
     daily = load_adjusted_daily()
+    if args.walk_forward:
+        ts = fit_walk_forward_weights(
+            dates, daily, train_window=args.train_window, step=args.step,
+            min_icir=args.min_icir, min_tstat=args.min_tstat,
+        )
+        path = config_file("factor_weights_ts.yml")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            yaml.safe_dump({"apply": True, "weights_ts": ts}, f, allow_unicode=True, sort_keys=False)
+        print(f"walk-forward 权重表 → {path} | {len(ts)} 个日期")
+        return
     panel = build_panel(dates, daily=daily)
     print(f"面板 {len(panel)} 行")
     names = REGISTRY.names()
     report = factor_ic_report(panel, names)
-    full = full_weight_map(report, names, min_icir=args.min_icir, min_tstat=args.min_tstat)
+    full = full_weight_map(report, names, min_icir=args.min_icir, min_tstat=args.min_tstat, fdr_alpha=args.fdr_alpha or None)
     weights = {k: round(v, 4) for k, v in full.items()}
     n_pos = sum(1 for v in weights.values() if v > 0)
 

@@ -33,7 +33,7 @@ from app.utils.error_log import log_caught_error
 from app.services.stock_enrich import enrich_stock_rows
 from app.utils.etf52_util import zdfb_52etf
 from app.utils.ths_util import concept_board_top_lists, hyylb, hot_stock, zdfb_ths, zdfb_v2_realtime
-from quant.scoring.theme_boards import normalize_industry_board_rows
+from app.utils.board_normalize import normalize_industry_board_rows
 from quant.pool.candidate_config import (
     PAYLOAD_KEY_CXFL,
     PAYLOAD_KEY_CXG,
@@ -279,15 +279,13 @@ async def _enrich_stock_list(
 
 
 async def _async_observe_rows(_settings: SettingsDep) -> list:
-    from quant.store.state import get_observe
-
-    return await run_in_threadpool(get_observe)
+    # 自选池/观察池（r1）已退役，enrichment 仅用持仓股
+    return []
 
 
 async def _async_optional_rows(_settings: SettingsDep) -> list:
-    from quant.store.state import get_optional
-
-    return await run_in_threadpool(get_optional)
+    # 自选池（r1）已退役，enrichment 仅用持仓股
+    return []
 
 
 async def _async_holding_rows(_settings: SettingsDep) -> list:

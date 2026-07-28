@@ -4,7 +4,26 @@ from __future__ import annotations
 
 import math
 
-from quant.portfolio.constraints import industry_of_stock
+def industry_of_stock(stock: dict, payload: dict) -> str:
+    """取个股行业。"""
+    for key in ("行业", "所属行业", "板块"):
+        val = stock.get(key)
+        if isinstance(val, list) and val:
+            return str(val[0]).strip()
+        if isinstance(val, str) and val.strip():
+            return val.split(",")[0].strip()
+    code = str(stock.get("股票代码", "")).strip()
+    for key in ("自选股", "持仓股"):
+        for row in payload.get(key) or []:
+            if str(row.get("股票代码", "")).strip() != code:
+                continue
+            for ik in ("行业", "所属行业", "板块"):
+                val = row.get(ik)
+                if isinstance(val, list) and val:
+                    return str(val[0]).strip()
+                if isinstance(val, str) and val.strip():
+                    return val.split(",")[0].strip()
+    return ""
 
 
 def stock_industry(stock: dict, payload: dict | None = None) -> str:

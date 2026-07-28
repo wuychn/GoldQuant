@@ -1,8 +1,8 @@
-"""候选股来源初筛与通用漏斗配置（quant.yml scoring.candidate）。"""
+"""候选股来源初筛与通用漏斗配置（quant.yml candidate）。"""
 
 from __future__ import annotations
 
-from quant.config import load_scoring_config
+from quant.config import load_quant_config
 
 # 三来源 + 形态榜在 payload / builder 中使用的键
 PAYLOAD_KEY_POPULARITY = "同花顺人气榜"
@@ -27,7 +27,7 @@ DEFAULT_CXG_LABELS = ("创月新高", "半年新高", "一年新高", "历史新
 
 
 def load_candidate_config() -> dict:
-    return load_scoring_config().get("candidate") or {}
+    return load_quant_config().get("candidate") or {}
 
 
 def popularity_limit(cfg: dict | None = None) -> int:

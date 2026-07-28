@@ -14,7 +14,7 @@ import argparse
 import json
 from datetime import date
 
-from quant.backtest2.intraday_timing import run_intraday_timing_backtest
+from quant.backtest.intraday_timing import run_intraday_timing_backtest
 from quant.data.adjust import load_adjusted_daily
 from quant.data.calendar import to_iso, trading_day_list
 from quant.factors.compose import compose_alpha

@@ -1,6 +1,6 @@
 # GoldQuant
 
-A 股日频波段量化辅助系统：**FastAPI 数据聚合服务** + **因子评分/目标组合决策** + **纸面撮合** + **LLM 复盘叙述** + **飞书推送** + **ML 离线校准**。
+A 股日频波段量化辅助系统：**FastAPI 数据聚合服务** + **IC 因子/目标组合决策** + **纸面撮合** + **LLM 复盘叙述** + **飞书推送**。
 
 > 本仓库仅做数据聚合与纸面模拟交易辅助，**不构成投资建议**。行情来自 AKShare / 东财 / 同花顺等第三方，存在延迟、字段变更或访问失败的可能。
 
@@ -23,7 +23,7 @@ A 股日频波段量化辅助系统：**FastAPI 数据聚合服务** + **因子�
 └───────────────────────────┬─────────────────────────────────┘
                             │ 离线
 ┌───────────────────────────▼─────────────────────────────────┐
-│  quant/ml  读 ~/.quant/daily 历史 → 校准阈值/权重              │
+│  research2/  walk-forward / DSR / 敏感性（参数治理）          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -32,8 +32,7 @@ A 股日频波段量化辅助系统：**FastAPI 数据聚合服务** + **因子�
 | 组件 | 做什么 | 不做什么 |
 |------|--------|----------|
 | 因子 + 目标组合 + 撮合 | 决定买卖、仓位（差额交易 + 时序出场） | — |
-| LLM | 解读数据、写新闻/复盘文案 | 不参与下单决策 |
-| ML | 离线优化阈值与维度权重 | 盘中不推理 |
+| LLM | 解读数据、写新闻文案 | 不参与下单决策 |
 
 设计原则：**可回溯优先**（主链路只用 ≤T 信息重建）、**相对优于绝对**（横截面排名而非绝对分数）、**目标组合优于逐笔信号**（每日目标权重，交易差额）、**横截面入场 + 时序出场**（排名处理相对变弱，ATR/破位处理个股崩塌）。
 
@@ -61,11 +60,11 @@ GoldQuant/
 │   ├── push/                   # 飞书推送
 │   ├── journal/                # 漏斗统计 + 偏离日志（辅助决策闭环）
 │   ├── research2/              # walk-forward / DSR / 敏感性（参数治理）
-│   ├── ml/                     # 离线校准
-│   ├── scoring/ pool/          # 评分维度 + 候选池（被 factors/app 活依赖）
-│   ├── strategy/ market/       # 战法工具 + 资金流（被 scoring/narrative 引）
-│   ├── signals/{models,sell_policy}  # 信号模型 + 卖出策略（撮合活依赖）
-│   ├── narrative/{llm,prompts,...}   # LLM 叙述（运维推送活依赖）
+│   ├── market/                 # 资金流 + 市场状态（regime）
+│   ├── data/quote.py           # 盘口/历史行情纯价工具（从 scoring 迁出）
+│   ├── pool/                   # 候选池（被 factors/app 引）
+│   ├── signals/{models,sell_policy}  # 信号模型 + 卖出时段门（撮合活依赖）
+│   ├── narrative/{llm,prompts} # LLM 叙述（仅 news 摘要，运维推送活依赖）
 │   └── config.py / timeutil.py / trading_hours.py / data_fetch.py
 ├── scripts/{decision,backtest,data,factors,research}/
 ├── docs/R3_ARCHITECTURE.md     # 架构 / 指标 / 交易闭环（主文档）
@@ -356,7 +355,7 @@ python -m scripts.backtest.run --start 2026-06-17 --end 2026-06-26 --cash 100000
 
 ## 五、配置
 
-### 5.1 评分与组合参数
+### 5.1 组合参数
 
 默认：`quant/config/quant.yml`（包内）；用户覆盖：`~/.quant/config/quant.yml`（deep merge）。组合参数见 §3.4，因子权重见 [R3_ARCHITECTURE.md §5](docs/R3_ARCHITECTURE.md#5-因子层l1指标含义与计算)。
 
@@ -368,27 +367,9 @@ python -m scripts.backtest.run --start 2026-06-17 --end 2026-06-26 --cash 100000
 
 ---
 
-## 六、ML 离线校准
+## 六、ML 离线校准（已退役）
 
-ML **不参与盘中推理**，仅在收盘后（或周末）用历史数据优化阈值与维度权重。
-
-### 6.1 数据来源
-
-自动扫描 `~/.quant/daily/*/derived/` 评分，结合次日行情涨幅与后续成交盈亏构建标签。**至少积累约 100 条样本**后再跑（默认 `--min-samples 100`）。
-
-### 6.2 命令
-
-```powershell
-python -m quant.ml calibrate --method grid --dry-run       # 预览
-python -m quant.ml calibrate --method grid --apply         # 网格搜索阈值
-python -m quant.ml calibrate --method linear --apply        # 线性回归 → 维度权重 + 阈值
-python -m quant.ml calibrate --method lightgbm --apply      # LightGBM 特征重要性 → 权重
-python -m quant.ml calibrate --method bayesian --apply      # 贝叶斯优化 → 阈值
-```
-
-### 6.3 生效方式
-
-`--apply` 写入 `~/.quant/config/ml_calibration.yml`，下次 `python -m quant` 启动时自动合并到评分配置（优先级高于包内默认值）。取消 ML 覆盖：删除该文件或将 `apply: false`。
+r3 决策链改用 IC 驱动权重（`~/.quant/config/factor_weights.yml`，由 `scripts/factors/fit_weights.py` 拟合）；r1 的评分阈值/维度权重校准（`quant.ml calibrate`）随评分体系退役。因子 IC 检验见 `scripts/factors/ic_report.py`。
 
 ---
 
@@ -451,7 +432,6 @@ A：使用 `python -m app` 启动；裸 `uvicorn` 需显式 `--port`，见 `.env
 ```powershell
 curl http://127.0.0.1:8085/health
 curl http://127.0.0.1:8085/api/v1/quant/market/pre_market
-python -m quant.ml calibrate --method grid --dry-run
 python -m scripts.decision.daily --dry-run
 ```
 

@@ -46,9 +46,9 @@ def run_smoke() -> None:
     )
     from quant.data.universe import build_universe_snapshot
     from quant.factors.panel_builder import build_panel
-    from quant.backtest2.engine import ExitConfig, run_backtest
-    from quant.backtest2.metrics import compute_metrics
-    from quant.portfolio2.target import TargetPortfolio
+    from quant.backtest.engine import ExitConfig, run_backtest
+    from quant.backtest.metrics import compute_metrics
+    from quant.portfolio.target import TargetPortfolio
 
     # 合成日历（不依赖外部网络日历）
     synth_dates = list(pd.bdate_range(start="2024-01-01", end="2024-06-28").strftime("%Y-%m-%d"))

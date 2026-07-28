@@ -1,14 +1,13 @@
 """~/.quant/state 热状态读写。
 
 源文件（程序唯一写入点）
-  optional.jsonl  自选股
-  observe.jsonl   观察池（不对外返回）
   holding.jsonl   持仓
   account.json    可用/市值/总资产/当日盈亏
   stoploss.jsonl  止损冷却记录
 
-views/*.md 由本模块在 save_optional/save_holdings/save_account 时自动生成。
-API quant_endpoint 读取 optional/holding 路径为 state/ 下 JSONL。
+views/*.md 由本模块在 save_holdings/save_account 时自动生成。
+API quant_endpoint 读取 holding 路径为 state/ 下 JSONL。
+（r1 自选池 optional.jsonl / observe.jsonl 已退役）
 """
 
 from __future__ import annotations
@@ -22,18 +21,16 @@ from quant.timeutil import cn_date_str, cn_datetime_str, cn_now, cn_today
 from pathlib import Path
 from typing import Any
 
-from quant.constants import STRATEGY_NAME
-from quant.scoring.tech_indicators import quote_last_price
+from quant.data.quote import quote_last_price
 from quant.store.paths import (
     ensure_layout,
     state_file,
     view_file,
     memory_file,
 )
-from quant.store.views import render_holding_md, render_optional_md
+from quant.store.views import render_holding_md
 
 INITIAL_CAPITAL = 100_000.0
-STRATEGY_TAGS = frozenset({STRATEGY_NAME})
 
 
 def _read_text(path: Path) -> str:
@@ -139,21 +136,6 @@ def read_jsonl(path: Path) -> list[dict]:
 def write_jsonl(path: Path, rows: list[dict]) -> None:
     lines = [json.dumps(r, ensure_ascii=False) for r in rows]
     _write_text_atomic(path, "\n".join(lines) + ("\n" if lines else ""))
-
-
-def get_observe() -> list[dict]:
-    ensure_layout()
-    return read_jsonl(state_file("observe.jsonl"))
-
-
-def save_observe(rows: list[dict]) -> None:
-    ensure_layout()
-    write_jsonl(state_file("observe.jsonl"), rows)
-
-
-def get_optional() -> list[dict]:
-    ensure_layout()
-    return read_jsonl(state_file("optional.jsonl"))
 
 
 def get_holdings() -> list[dict]:
@@ -273,16 +255,6 @@ def merge_payload_holdings(payload: dict) -> dict:
     merged = dict(payload)
     merged["持仓股"] = list(by_code.values())
     return merged
-
-
-def save_optional(rows: list[dict], *, delta: dict | None = None) -> None:
-    ensure_layout()
-    write_jsonl(state_file("optional.jsonl"), rows)
-    _write_text_atomic(view_file("optional.md"), render_optional_md(rows))
-    if delta:
-        hist = state_file("optional_history.jsonl")
-        with open(hist, "a", encoding="utf-8") as f:
-            f.write(json.dumps({"时间": cn_now().isoformat(), **delta}, ensure_ascii=False) + "\n")
 
 
 def save_holdings(rows: list[dict]) -> None:
@@ -429,7 +401,7 @@ def get_total_assets() -> float:
 
 def holding_mark_price(h: dict) -> float | None:
     """单只持仓现价：盘口 → 历史收盘 → 买入价。"""
-    from quant.scoring.tech_indicators import hist_close, hist_rows_sorted
+    from quant.data.quote import hist_close, hist_rows_sorted
 
     price = quote_last_price(h)
     if price is not None and price > 0:

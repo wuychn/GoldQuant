@@ -1,6 +1,6 @@
 """日决策纸面撮合：DecisionCard → TradeSignal → 写 paper 账户 state。
 
-与历史回测（backtest2）分离：用 execution 成本规则，持久化到
+与历史回测（backtest）分离：用 execution 成本规则，持久化到
 ``$QUANT_HOME/paper_account/``，不污染实盘/人工持仓。
 """
 
@@ -14,7 +14,7 @@ from typing import Any, Iterator
 
 import pandas as pd
 
-from quant.backtest2.tradability import shares_for_amount
+from quant.backtest.tradability import shares_for_amount
 from quant.decision.daily_output import DecisionCard
 from quant.execution.executor import execute_signals
 from quant.signals.models import TradeSignal

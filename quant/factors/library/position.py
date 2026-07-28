@@ -49,8 +49,27 @@ def ma_slope_20(bars: BarSeries, as_of: str) -> float | None:
     return (ma20_now - ma20_prev) / price
 
 
+def spread_accel_5(bars: BarSeries, as_of: str) -> float | None:
+    """MA 发散加速度：ma_spread(t) - ma_spread(t-5)。
+
+    与 ma_spread（水平量）正交——导数捕捉主升启动（水平中、导数强）与见顶
+    （水平高、导数转负）。吸收自 r1 main_wave 的发散加速信号，降维成因子。
+    """
+    c = bars.close_up_to(as_of)
+    if len(c) < 25:  # 20 + 5
+        return None
+    ma5_now = float(c.iloc[-5:].mean())
+    ma20_now = float(c.iloc[-20:].mean())
+    ma5_prev = float(c.iloc[-10:-5].mean())
+    ma20_prev = float(c.iloc[-25:-5].mean())
+    if ma20_now <= 0 or ma20_prev <= 0:
+        return None
+    return (ma5_now / ma20_now - 1.0) - (ma5_prev / ma20_prev - 1.0)
+
+
 POSITION_FACTORS: list[FactorDef] = [
     FactorDef("dist_high_252", "距252日高点", dist_high_252, direction=1.0, default_weight=1.0),
     FactorDef("ma_spread", "MA5/MA20发散", ma_spread, direction=1.0, default_weight=0.8),
+    FactorDef("spread_accel_5", "MA发散加速度", spread_accel_5, direction=1.0, default_weight=0.6),
     FactorDef("ma_slope_20", "MA20斜率", ma_slope_20, direction=1.0, default_weight=0.6),
 ]

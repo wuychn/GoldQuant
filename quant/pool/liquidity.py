@@ -5,12 +5,11 @@ from __future__ import annotations
 from typing import Any
 
 from quant.config import load_quant_config
-from quant.scoring.tech_indicators import hist_rows_sorted
+from quant.data.quote import hist_rows_sorted
 
 
 def _candidate_universe_cfg() -> dict:
-    scoring = load_quant_config().get("scoring") or {}
-    return scoring.get("candidate") or {}
+    return load_quant_config().get("candidate") or {}
 
 
 def _parse_amount_yi(raw: object) -> float | None:

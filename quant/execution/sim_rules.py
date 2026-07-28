@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from quant.config import load_gates_config
-from quant.scoring.tech_indicators import quote_change_pct
+from quant.data.quote import quote_change_pct
 
 
 @dataclass
@@ -49,11 +49,11 @@ def load_trade_sim_config() -> TradeSimConfig:
 def limit_pct(code: str, cfg: TradeSimConfig, name: str | None = None) -> float:
     """涨跌停比例（百分点）。
 
-    单一来源 = ``backtest2.tradability._limit_pct``（board + ST 感知）：
+    单一来源 = ``backtest.tradability._limit_pct``（board + ST 感知）：
     主板 10 / 创业板·科创 20 / 北交 30 / ST 5。旧实现仅 9.9/19.9，漏判 ST 5% 与北交 30%，
     致实盘对 ST 与北交股的涨跌停判定偏松；现与回测 ``tradability`` 完全一致。
     """
-    from quant.backtest2.tradability import _limit_pct as _tier
+    from quant.backtest.tradability import _limit_pct as _tier
 
     return _tier(code, name) * 100.0
 

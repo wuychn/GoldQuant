@@ -238,7 +238,8 @@ def execute_signals(
             h["持仓股数"] = new_q
             h["买入价"] = round(avg, 4)
             h["买入原因"] = (signal.reason[:200] if signal.reason else h.get("买入原因", ""))
-            h.pop("战法", None)
+            h.pop("strategy", None)
+            h.pop("战法", None)  # 清历史 holding 残留键
         else:
             holdings.append(
                 {
@@ -291,7 +292,7 @@ def _trade_record(
         "股票代码": signal.code,
         "股票名称": signal.name,
         "股数": qty,
-        "战法": signal.strategy,
+        "strategy": signal.strategy,
         "理由": signal.reason,
         "卖出类型": signal.sell_type or "",
         "信号价": round(float(signal.price), 4),  # 供滑点经验校准（Phase 7）

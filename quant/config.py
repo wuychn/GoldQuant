@@ -48,48 +48,6 @@ def _deep_merge(dst: dict, src: dict) -> None:
             dst[k] = copy.deepcopy(v)
 
 
-def _apply_ml_scoring(scoring: dict, ml: dict) -> None:
-    if ml.get("apply") is False:
-        return
-    th = ml.get("thresholds") or {}
-    for key in ("watchlist_threshold", "buy_threshold", "sell_threshold"):
-        if key in th:
-            scoring[key] = th[key]
-    dw = ml.get("dimension_weights") or {}
-    dims = scoring.get("dimensions") or {}
-    for name, weight in dw.items():
-        if name in dims and isinstance(dims[name], dict):
-            dims[name]["weight"] = weight
-
-
-def _apply_ml_gates(gates: dict, ml: dict) -> None:
-    if ml.get("apply") is False:
-        return
-    conf = ml.get("confirmation")
-    if isinstance(conf, dict):
-        block = gates.setdefault("confirmation", {})
-        for regime in ("强势", "震荡", "弱势"):
-            if regime in conf and isinstance(conf[regime], dict):
-                block.setdefault(regime, {}).update(conf[regime])
-        for key in (
-            "default_persistence_minutes",
-            "default_min_consecutive_runs",
-            "max_window_minutes",
-        ):
-            if key in conf:
-                block[key] = conf[key]
-    mw = ml.get("main_wave")
-    if isinstance(mw, dict):
-        gates.setdefault("main_wave", {}).update(mw)
-    ct = ml.get("concept_tracker")
-    if isinstance(ct, dict):
-        block = gates.setdefault("concept_tracker", {})
-        sw = ct.get("score_weights")
-        if isinstance(sw, dict):
-            score_weights = block.setdefault("score_weights", {})
-            score_weights.update(sw)
-
-
 @lru_cache(maxsize=1)
 def load_quant_config() -> dict:
     from quant.store.paths import config_file, ensure_layout
@@ -116,55 +74,9 @@ def _validate_config_quiet(cfg: dict) -> None:
         pass
 
 
-def _apply_dimension_overrides(scoring: dict, overrides: dict) -> None:
-    """合并 dimension_overrides.yml：weight_factor 乘法降权 / enabled 关闭。"""
-    if overrides.get("apply") is False:
-        return
-    block = overrides.get("dimensions") or {}
-    dims = scoring.setdefault("dimensions", {})
-    for name, ov in block.items():
-        if not isinstance(ov, dict):
-            continue
-        if name not in dims or not isinstance(dims[name], dict):
-            dims[name] = {}
-        target = dims[name]
-        if "enabled" in ov:
-            target["enabled"] = bool(ov["enabled"])
-        if "weight" in ov:
-            target["weight"] = float(ov["weight"])
-        factor = ov.get("weight_factor")
-        if factor is not None:
-            try:
-                f = float(factor)
-            except (TypeError, ValueError):
-                continue
-            base_w = float(target.get("weight", 0) or 0)
-            target["weight"] = round(base_w * f, 4)
-
-
-@lru_cache(maxsize=1)
-def load_scoring_config() -> dict:
-    from quant.store.paths import config_file
-
-    scoring = copy.deepcopy(load_quant_config().get("scoring") or {})
-    ml = config_file("ml_calibration.yml")
-    if ml.is_file():
-        _apply_ml_scoring(scoring, _load_yaml(ml))
-    ov = config_file("dimension_overrides.yml")
-    if ov.is_file():
-        _apply_dimension_overrides(scoring, _load_yaml(ov))
-    return scoring
-
-
 @lru_cache(maxsize=1)
 def load_gates_config() -> dict:
-    from quant.store.paths import config_file
-
-    gates = copy.deepcopy(load_quant_config().get("gates") or {})
-    ml = config_file("ml_calibration.yml")
-    if ml.is_file():
-        _apply_ml_gates(gates, _load_yaml(ml))
-    return gates
+    return copy.deepcopy(load_quant_config().get("gates") or {})
 
 
 @lru_cache(maxsize=1)
@@ -174,15 +86,30 @@ def load_push_config() -> dict:
 
 
 @lru_cache(maxsize=1)
-def load_factor_weights() -> dict[str, float] | None:
-    """IC 驱动的因子权重（``~/.quant/config/factor_weights.yml``）。
+def load_factor_weights(as_of: str | None = None) -> dict[str, float] | None:
+    """IC 驱动的因子权重。
 
-    无文件或 ``apply=False`` 时返回 None → 调用方回退到 ``registry.weights()``（手工默认），
-    保持向后兼容。有文件时返回**完整**权重表（registry 全因子，未入选因子权重 0），
-    使 ``compose_alpha`` 跳过 IC 阴性/噪声因子。
+    - ``as_of`` 给定：优先读 walk-forward 时变权重表 ``factor_weights_ts.yml``，
+      取 ≤as_of 最近一组（严格 OOS，权重只用 t-1 及更早数据拟合）。
+    - 否则或时变表缺失：回退静态 ``factor_weights.yml``（周期性拟合，OOS）。
+    - 无文件或 ``apply=False`` 返回 None → 调用方回退 ``registry.weights()``。
+
+    返回完整权重表（registry 全因子，未入选因子权重 0），使 ``compose_alpha``
+    跳过 IC 阴性/噪声因子。
     """
     from quant.factors.registry import REGISTRY
     from quant.store.paths import config_file
+
+    if as_of:
+        ts_path = config_file("factor_weights_ts.yml")
+        if ts_path.is_file():
+            ts_data = _load_yaml(ts_path)
+            if ts_data.get("apply") is not False:
+                ts = ts_data.get("weights_ts") or {}
+                avail = sorted(d for d in ts if str(d) <= str(as_of))
+                if avail:
+                    latest = ts[avail[-1]]
+                    return {n: float(latest.get(n, 0.0)) for n in REGISTRY.names()}
 
     path = config_file("factor_weights.yml")
     if not path.is_file():
@@ -196,7 +123,6 @@ def load_factor_weights() -> dict[str, float] | None:
 
 def reload_config_cache() -> None:
     load_quant_config.cache_clear()
-    load_scoring_config.cache_clear()
     load_gates_config.cache_clear()
     load_push_config.cache_clear()
     load_factor_weights.cache_clear()

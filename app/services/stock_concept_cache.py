@@ -211,11 +211,11 @@ def get_daily_concept_cache(trade_date: str | None = None) -> StockConceptCache:
 
 
 def _collect_optional_holding_symbols() -> list[tuple[str, str | None]]:
-    from quant.store.state import get_holdings, get_optional
+    from quant.store.state import get_holdings
 
     out: list[tuple[str, str | None]] = []
     seen: set[str] = set()
-    for row in get_optional() + get_holdings():
+    for row in get_holdings():
         if not isinstance(row, dict):
             continue
         code = str(row.get("股票代码", "")).strip()

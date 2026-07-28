@@ -29,13 +29,14 @@ from quant.decision.paper_execute import (
 from quant.exit.atr import atr
 from quant.exit.rules import DEFAULT_ATR_MULT, DEFAULT_ATR_MULT_STOP, DEFAULT_HARD_PCT, evaluate_exits
 from quant.exit.state import ExitTracker
-from quant.factors.compose import compose_alpha
+from quant.factors.compose import alpha_attribution, compose_alpha
+from quant.narrative.factor_phrases import attribution_summary
 from quant.factors.panel_builder import build_panel
 from quant.journal.deviation import DeviationJournal
 from quant.journal.funnel import FunnelTracker
 from quant.ops.modes import build_decision_push_body
 from quant.ops.push import push_text
-from quant.portfolio2.target import TargetPortfolio
+from quant.portfolio.target import TargetPortfolio
 from quant.store.paths import reports_dir
 from quant.store.state import get_account, get_holdings, update_holding_exit_meta
 from quant.timeutil import cn_now
@@ -88,9 +89,11 @@ def build_today_card(
             raise SystemExit("面板为空，检查离线库")
 
     # IC 驱动权重（过去拟合、今日应用 = 干净 OOS）；无 factor_weights.yml 时回退 registry 默认
-    alpha = compose_alpha(rows_today, weights=load_factor_weights())
+    factor_weights = load_factor_weights(as_of=as_of)
+    alpha = compose_alpha(rows_today, weights=factor_weights)
+    attribution = alpha_attribution(rows_today, weights=factor_weights)
     sectors = read_industry_snapshot(as_of)
-    policy = TargetPortfolio(
+    policy = TargetPortfolio.from_config(
         n_enter=n_enter,
         n_exit=n_exit,
         max_stocks=max_positions,
@@ -192,7 +195,7 @@ def build_today_card(
     card = build_decision_card(as_of, alpha, target, current, exit_signals)
     # 扩展 alpha_top 为全量排序前 50，供买入原因写 rank/α
     card.alpha_top = sorted(alpha.items(), key=lambda kv: -kv[1])[:50]
-    return card, daily, prices, names, uni, alpha
+    return card, daily, prices, names, uni, alpha, attribution
 
 
 def _build_sell_watch(card, daily, names, as_of, holdings) -> list[dict]:
@@ -258,7 +261,7 @@ def main() -> None:
 
     do_paper = not args.no_paper
     as_of = _resolve_as_of(args.date)
-    card, daily, prices, names, uni, _alpha = build_today_card(
+    card, daily, prices, names, uni, _alpha, _attribution = build_today_card(
         as_of,
         n_enter=args.n_enter,
         n_exit=args.n_exit,
@@ -288,6 +291,7 @@ def main() -> None:
             "alpha": round(float(a), 4),
             "rank": i + 1,
             "target_weight": round(float(_tgt.get(c, 0.0)), 4),
+            "why": attribution_summary(_attribution.get(c, [])),
         }
         for i, (c, a) in enumerate(alpha_ranked[: args.battle_pool_size])
     ]

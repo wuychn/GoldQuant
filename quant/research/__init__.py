@@ -1,5 +1,5 @@
-"""量化研究平台：实验注册、因子检验、归因、统计显著性。"""
+"""研究层：参数治理与验证 + 配置校验。
 
-from quant.research.registry import ExperimentRun, create_experiment, save_experiment
-
-__all__ = ["ExperimentRun", "create_experiment", "save_experiment"]
+防过拟合三件套：walk_forward + significance(Deflated Sharpe) + sensitivity。
+config_schema 校验 quant.yml 结构；factor/ic 提供 Spearman rank IC。
+"""

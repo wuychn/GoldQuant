@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from quant.execution.sim_rules import TradeSimConfig
-from quant.scoring.tech_indicators import quote_change_pct
+from quant.data.quote import quote_change_pct
 
 
 @dataclass
