@@ -21,7 +21,6 @@ from quant.data.industry import read_industry_snapshot
 from quant.data.universe import universe_codes
 from quant.decision.daily_output import DecisionCard, build_decision_card, card_to_text
 from quant.decision.paper_execute import (
-    execute_decision_card,
     paper_home_context,
     paper_summary_text,
     write_battle_pool,
