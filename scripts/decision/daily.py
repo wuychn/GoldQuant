@@ -14,7 +14,7 @@ import json
 from datetime import date, timedelta
 from pathlib import Path
 
-from quant.config import load_factor_weights
+from quant.config import load_factor_weights_info
 from quant.data.adjust import load_adjusted_daily
 from quant.data.calendar import is_trading_day, next_trading_day, to_iso, trading_day_list, trading_days_between
 from quant.data.industry import read_industry_snapshot
@@ -88,8 +88,13 @@ def build_today_card(
         else:
             raise SystemExit("面板为空，检查离线库")
 
-    # IC 驱动权重（过去拟合、今日应用 = 干净 OOS）；无 factor_weights.yml 时回退 registry 默认
-    factor_weights = load_factor_weights(as_of=as_of)
+    # IC 驱动权重（walk-forward OOS）；无 factor_weights_ts.yml 时回退 registry 默认
+    w_info = load_factor_weights_info(as_of=as_of)
+    factor_weights = w_info.get("weights") if w_info else None
+    if w_info:
+        print(f"因子权重: source={w_info.get('source')} meta={w_info.get('meta')}")
+    else:
+        print("[WARN] walk-forward 权重缺失（strict OOS），回退 registry 默认权重")
     alpha = compose_alpha(rows_today, weights=factor_weights)
     attribution = alpha_attribution(rows_today, weights=factor_weights)
     sectors = read_industry_snapshot(as_of)

@@ -134,6 +134,31 @@ def main() -> None:
     except Exception as e:
         print(f"[WARN] universe 快照失败: {e}", file=sys.stderr)
 
+    # 7. 上市日表（jbxx + daily 首条，供 universe PIT）
+    try:
+        from quant.data.listing import build_listing_map_from_daily, merge_jbxx_listing, write_listing_table
+
+        mp = merge_jbxx_listing(build_listing_map_from_daily(daily))
+        write_listing_table(mp)
+        print(f"listing_dates 更新: {len(mp)} 只")
+    except Exception as e:
+        print(f"[WARN] listing_dates 失败: {e}", file=sys.stderr)
+
+
+    # 8. 因子 PIT 快照（hot/flow/fundamentals/theme）
+    try:
+        from quant.data.factor_capture import capture_all_factor_snapshots
+        from quant.data.universe import universe_codes
+
+        uni = universe_codes(today, rebuild=False)
+        import akshare as ak
+
+        raw_spot = ak.stock_zh_a_spot_em()
+        counts = capture_all_factor_snapshots(today, spot=raw_spot, universe_codes=uni)
+        print(f"因子快照 @ {today}: {counts}")
+    except Exception as e:
+        print(f"[WARN] 因子快照失败: {e}", file=sys.stderr)
+
 
 if __name__ == "__main__":
     main()

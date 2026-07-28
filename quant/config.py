@@ -91,14 +91,23 @@ def load_factor_weights(as_of: str | None = None) -> dict[str, float] | None:
 
     - ``as_of`` 给定：优先读 walk-forward 时变权重表 ``factor_weights_ts.yml``，
       取 ≤as_of 最近一组（严格 OOS，权重只用 t-1 及更早数据拟合）。
-    - 否则或时变表缺失：回退静态 ``factor_weights.yml``（周期性拟合，OOS）。
+    - ``research.factors.strict_oos_weights=true`` 时禁止回退静态全样本 yml（live 防前视）。
+    - 否则或时变表缺失：回退静态 ``factor_weights.yml``（须 ``meta.fit_end <= as_of``）。
     - 无文件或 ``apply=False`` 返回 None → 调用方回退 ``registry.weights()``。
-
-    返回完整权重表（registry 全因子，未入选因子权重 0），使 ``compose_alpha``
-    跳过 IC 阴性/噪声因子。
     """
+    info = load_factor_weights_info(as_of)
+    return info.get("weights") if info else None
+
+
+def load_factor_weights_info(as_of: str | None = None) -> dict | None:
+    """返回 {weights, source, meta}；供审计拟合区间与 OOS 来源。"""
     from quant.factors.registry import REGISTRY
     from quant.store.paths import config_file
+
+    cfg = load_quant_config()
+    research = cfg.get("research") or {}
+    factors_cfg = research.get("factors") or {}
+    strict_oos = bool(factors_cfg.get("strict_oos_weights", True))
 
     if as_of:
         ts_path = config_file("factor_weights_ts.yml")
@@ -108,17 +117,40 @@ def load_factor_weights(as_of: str | None = None) -> dict[str, float] | None:
                 ts = ts_data.get("weights_ts") or {}
                 avail = sorted(d for d in ts if str(d) <= str(as_of))
                 if avail:
-                    latest = ts[avail[-1]]
-                    return {n: float(latest.get(n, 0.0)) for n in REGISTRY.names()}
+                    latest = avail[-1]
+                    entry = ts[latest]
+                    if isinstance(entry, dict) and "weights" in entry:
+                        w_raw = entry["weights"]
+                        meta = {k: v for k, v in entry.items() if k != "weights"}
+                    else:
+                        w_raw = entry
+                        meta = {}
+                    meta.setdefault("effective_date", latest)
+                    meta.setdefault("train_end", latest)
+                    return {
+                        "weights": {n: float(w_raw.get(n, 0.0)) for n in REGISTRY.names()},
+                        "source": "walk_forward",
+                        "meta": meta,
+                    }
 
     path = config_file("factor_weights.yml")
+    if strict_oos and as_of:
+        return None
     if not path.is_file():
         return None
     data = _load_yaml(path)
     if data.get("apply") is False:
         return None
+    meta = data.get("meta") or {}
+    fit_end = str(data.get("fit_end") or meta.get("fit_end") or "")
+    if as_of and fit_end and fit_end > str(as_of):
+        return None
     raw = data.get("weights") or {}
-    return {n: float(raw.get(n, 0.0)) for n in REGISTRY.names()}
+    return {
+        "weights": {n: float(raw.get(n, 0.0)) for n in REGISTRY.names()},
+        "source": "static",
+        "meta": meta,
+    }
 
 
 def reload_config_cache() -> None:

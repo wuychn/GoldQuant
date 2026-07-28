@@ -7,8 +7,9 @@ gates:
       stamp_tax_rate: 0.0005
       transfer_fee_rate: 1.0e-05
       slippage_pct: 0.001
-      slippage_model: vol_scaled
-      slippage_max_pct: 0.005
+      slippage_model: sqrt_law
+      slippage_sqrt_k: 0.5
+      slippage_max_pct: 0.008
       partial_fill_enabled: true
       participation_rate: 0.1
       main_limit_pct: 9.9
@@ -89,6 +90,8 @@ research:
   factors:
     holding_horizon_days: 5
     min_cross_section: 5
+    strict_oos_weights: true
+    ic_horizons: [5, 10, 20]
   promote:
     min_samples: 80
     min_total_ic_mean: 0.02
@@ -96,6 +99,11 @@ research:
     min_oos_sharpe: 0.5
 portfolio:
   allocator_v2_enabled: true
+  optimizer: mvo
+  optimizer_mvo:
+    risk_aversion: 2.0
+  covariance:
+    method: ewma
   continuous_position:
     enabled: true
     min_pct: 20
@@ -110,6 +118,11 @@ portfolio:
     enabled: true
     max_concept_pct: 40
     max_industry_pct: 40
+  style_exposure:
+    alpha_weighted: true
+    alpha_shrink: 0.4
+    max_small_cap_pct: 50
+    max_high_mom_pct: 60
   risk:
     max_drawdown_halt_enabled: true
     max_drawdown_pct: 15

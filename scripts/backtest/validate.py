@@ -15,8 +15,7 @@ from quant.backtest.engine import ExitConfig, run_backtest
 from quant.backtest.metrics import compute_metrics
 from quant.data.calendar import to_iso, trading_day_list
 from quant.data.adjust import load_adjusted_daily
-from quant.factors.compose import compose_alpha
-from quant.factors.panel_builder import build_panel
+from quant.factors.alpha_builder import build_alpha_by_date
 from quant.portfolio.target import TargetPortfolio
 
 
@@ -37,13 +36,7 @@ def main() -> None:
         return
 
     daily = load_adjusted_daily()
-    panel = build_panel(dates, daily=daily)
-    alpha_by_date: dict[str, dict[str, float]] = {}
-    rows_by: dict[str, list] = {}
-    for r in panel:
-        rows_by.setdefault(r.date, []).append(r)
-    for d, rows in rows_by.items():
-        alpha_by_date[d] = compose_alpha(rows)
+    alpha_by_date = build_alpha_by_date(dates, daily, use_ic_weights=True)
 
     codes = sorted({r.code for r in panel})
     rng = np.random.default_rng(args.seed)

@@ -61,7 +61,7 @@ def _build_bar_series(code_df: pd.DataFrame, code: str) -> BarSeries | None:
     if code_df.empty:
         return None
     df = code_df.sort_values("date").set_index("date")
-    cols = [c for c in ("open", "high", "low", "close", "volume", "amount", "turnover_rate") if c in df.columns]
+    cols = [c for c in ("open", "high", "low", "close", "volume", "amount", "turnover_rate", "float_mv") if c in df.columns]
     return BarSeries(code=code, df=df[cols])
 
 
@@ -159,8 +159,10 @@ def build_panel(
             )
             rows.append(fr)
 
-    # 行业动量代理 → theme_mom（同日同行业 mom_20 均值的横截面分位）
-    _fill_theme_mom(rows)
+    # PIT 快照 → flow / hot / theme / fundamentals
+    _inject_snapshot_factors(rows, iso_dates)
+    # 行业动量代理 → theme_mom（快照缺失时回退）
+    _fill_theme_mom(rows, overwrite=False)
 
     # 截面中性化（含 winsorize）
     from quant.factors.neutralize import neutralize_panel_rows
@@ -176,7 +178,7 @@ def build_panel(
     return rows
 
 
-def _fill_theme_mom(rows: list[FactorRow]) -> None:
+def _fill_theme_mom(rows: list[FactorRow], *, overwrite: bool = True) -> None:
     """用同日同行业 mom_20 均值的分位填充 theme_mom（无板块日线时的代理）。"""
     from collections import defaultdict
 
@@ -184,9 +186,10 @@ def _fill_theme_mom(rows: list[FactorRow]) -> None:
     for r in rows:
         by_date[r.date].append(r)
     for _d, grp in by_date.items():
-        # 行业 → mom 列表
         ind_moms: dict[str, list[float]] = defaultdict(list)
         for r in grp:
+            if not overwrite and r.raw.get("theme_mom") is not None:
+                continue
             m = r.raw.get("mom_20")
             if m is not None and r.industry:
                 ind_moms[r.industry].append(float(m))
@@ -196,12 +199,57 @@ def _fill_theme_mom(rows: list[FactorRow]) -> None:
         vals = sorted(ind_mean.values())
         n = len(vals)
         for r in grp:
+            if not overwrite and r.raw.get("theme_mom") is not None:
+                continue
             if not r.industry or r.industry not in ind_mean:
                 continue
             v = ind_mean[r.industry]
-            # 分位 0~1
             rank = sum(1 for x in vals if x <= v) / n
             r.raw["theme_mom"] = rank
+
+
+def _inject_snapshot_factors(rows: list[FactorRow], iso_dates: list[str]) -> None:
+    from quant.data.factor_snapshots import read_fund_flow_snapshot, read_hot_rank_snapshot, read_theme_snapshot
+    from quant.data.fundamentals import read_fundamentals_snapshot
+
+    snap_cache: dict[str, tuple] = {}
+    for r in rows:
+        d = r.date
+        if d not in snap_cache:
+            snap_cache[d] = (
+                read_fund_flow_snapshot(d),
+                read_hot_rank_snapshot(d),
+                read_theme_snapshot(d),
+                read_fundamentals_snapshot(d),
+            )
+        flow_snap, hot_snap, theme_snap, fund_snap = snap_cache[d]
+        if "flow_ratio_5" not in r.raw:
+            v = flow_snap.get(r.code)
+            if v is not None:
+                r.raw["flow_ratio_5"] = float(v)
+        if "hot_rank_z" not in r.raw:
+            hv = hot_snap.get(r.code)
+            if hv is not None:
+                r.raw["hot_rank_z"] = float(hv)
+        if "theme_mom" not in r.raw:
+            tv = theme_snap.get(r.code)
+            if tv is not None:
+                r.raw["theme_mom"] = float(tv)
+        fb = fund_snap.get(r.code) or {}
+        if fb.get("pe_ttm") is not None:
+            pe = float(fb["pe_ttm"])
+            r.raw.setdefault("pe_ttm", pe)
+            if pe > 0:
+                r.raw.setdefault("ep_ttm", 1.0 / pe)
+        if fb.get("pb") is not None:
+            pb = float(fb["pb"])
+            r.raw.setdefault("pb", pb)
+            if pb > 0:
+                r.raw.setdefault("bp", 1.0 / pb)
+        if fb.get("roe") is not None:
+            r.raw.setdefault("roe", float(fb["roe"]))
+        if fb.get("rev_yoy") is not None:
+            r.raw.setdefault("rev_yoy", float(fb["rev_yoy"]))
 
 
 def _resolve_universe(

@@ -32,12 +32,21 @@ def _spearman(a: np.ndarray, b: np.ndarray) -> float:
         return float(np.corrcoef(a, b)[0, 1])
 
 
+def _forward_at(row: FactorRow, horizon: int) -> float | None:
+    if horizon == 5 and row.forward_return_pct is not None:
+        return float(row.forward_return_pct)
+    fwd = row.meta.get("fwd") or {}
+    v = fwd.get(horizon)
+    return float(v) if v is not None else None
+
+
 def daily_rank_ic(
     rows: list[FactorRow],
     factor_name: str,
     *,
     min_names: int = 5,
     neutralize_return: bool = True,
+    horizon: int = 5,
 ) -> dict[str, Any]:
     """单因子日度截面 RankIC 汇总（用 neutral z；缺则回退 raw）。
 
@@ -53,15 +62,16 @@ def daily_rank_ic(
     for d in sorted(by_date):
         grp = by_date[d]
         # 中性化前瞻收益（与因子同口径）→ 纯 alpha IC 标签
+        raw_fwd = [_forward_at(r, horizon) for r in grp]
         if neutralize_return:
             fwd_neut = neutralize_cross_section(
-                [r.forward_return_pct for r in grp],
+                raw_fwd,
                 industries=[r.industry for r in grp],
                 log_mcaps=[r.log_mcap for r in grp],
                 min_names=min_names,
             )
         else:
-            fwd_neut = [r.forward_return_pct for r in grp]
+            fwd_neut = raw_fwd
         scores = []
         rets = []
         for r, fn in zip(grp, fwd_neut):
@@ -96,7 +106,7 @@ def daily_rank_ic(
 def ic_decay(rows: list[FactorRow], factor_name: str, horizons=(1, 3, 5, 10, 20)) -> dict[int, float]:
     """IC 衰减曲线。需要 rows 上挂多档前瞻收益（meta['fwd']）。
 
-    本面板默认只算 5 日；多档需 panel_builder 扩展。
+    多档前瞻由 panel_builder 写入 ``meta['fwd']``；主 IC 默认 5 日。
     """
     fwd_map: dict[int, list[tuple[float, float]]] = defaultdict(list)
     for r in rows:
@@ -156,14 +166,29 @@ def quintile_spread(rows: list[FactorRow], factor_name: str) -> dict[str, Any]:
     }
 
 
-def factor_ic_report(rows: list[FactorRow], factor_names: list[str]) -> list[dict[str, Any]]:
+def factor_ic_report(
+    rows: list[FactorRow],
+    factor_names: list[str],
+    *,
+    horizon: int = 5,
+    horizons: tuple[int, ...] = (5, 10, 20),
+) -> list[dict[str, Any]]:
+    """单因子 IC 报告。``horizons`` 用于多持有期 ICIR 混合（权重拟合用）。"""
     out = []
     for f in factor_names:
-        ic = daily_rank_ic(rows, f)
+        ic = daily_rank_ic(rows, f, horizon=horizon)
         qs = quintile_spread(rows, f)
         decay = ic_decay(rows, f)
+        blend_icirs: list[float] = []
+        for h in horizons:
+            sub = daily_rank_ic(rows, f, horizon=h)
+            if sub.get("icir") is not None:
+                blend_icirs.append(float(sub["icir"]))
+        blended_icir = float(np.mean(blend_icirs)) if blend_icirs else float(ic.get("icir") or 0.0)
         out.append({
             **ic,
+            "icir": round(blended_icir, 4),
+            "primary_horizon": horizon,
             "ls_spread_bps": qs["ls_spread_bps"],
             "hit_rate": qs["hit_rate"],
             "ic_decay": decay,

@@ -89,3 +89,58 @@ def truncate_to_n(weights: dict[str, float], n: int) -> dict[str, float]:
         return dict(weights)
     ranked = sorted(weights.items(), key=lambda kv: -kv[1])[:n]
     return dict(ranked)
+
+
+def apply_style_cap(
+    weights: dict[str, float],
+    style_buckets: dict[str, str],
+    caps: dict[str, float],
+) -> dict[str, float]:
+    """风格暴露封顶：``style_buckets`` {code: bucket_name}，``caps`` {bucket: max_weight}。"""
+    if not style_buckets or not caps:
+        return dict(weights)
+    out = dict(weights)
+    for _ in range(5):
+        by_b: dict[str, float] = {}
+        for c, w in out.items():
+            b = style_buckets.get(c)
+            if b:
+                by_b[b] = by_b.get(b, 0.0) + w
+        over = {b: e for b, e in by_b.items() if e > caps.get(b, 1.0) + 1e-9}
+        if not over:
+            break
+        for b, exp in over.items():
+            cap = caps.get(b, 1.0)
+            k = cap / exp
+            for c in list(out):
+                if style_buckets.get(c) == b:
+                    out[c] = out[c] * k
+    return out
+
+
+def alpha_strength_weights(
+    alpha: dict[str, float],
+    codes: list[str],
+    *,
+    full_invest: float,
+    shrink: float = 0.5,
+) -> dict[str, float]:
+    """alpha 强度配权：softmax(z) 与等权混合（shrink→1 趋等权）。"""
+    if not codes:
+        return {}
+    vals = [float(alpha.get(c, 0.0)) for c in codes]
+    mu = sum(vals) / len(vals)
+    sd = (sum((v - mu) ** 2 for v in vals) / max(len(vals), 1)) ** 0.5
+    if sd < 1e-9:
+        base = full_invest / len(codes)
+        return {c: base for c in codes}
+    z = [(v - mu) / sd for v in vals]
+    import math
+
+    exp_z = [math.exp(min(3.0, max(-3.0, x))) for x in z]
+    s = sum(exp_z) or 1.0
+    soft = {c: full_invest * e / s for c, e in zip(codes, exp_z)}
+    eq = full_invest / len(codes)
+    shrink = max(0.0, min(1.0, shrink))
+    return {c: shrink * eq + (1.0 - shrink) * soft[c] for c in codes}
+

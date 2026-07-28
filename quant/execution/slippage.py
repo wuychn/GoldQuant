@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from quant.execution.sim_rules import TradeSimConfig
@@ -26,14 +27,22 @@ def effective_slippage_pct(cfg: TradeSimConfig, ctx: SlippageContext | None = No
         return base
 
     slip = base
-    if model in ("vol_scaled", "microstructure"):
+    model = getattr(cfg, "slippage_model", "fixed") or "fixed"
+
+    if model in ("vol_scaled", "microstructure", "sqrt_law"):
         vol = max(0.5, ctx.volatility_pct)
         slip += base * (vol / 2.0 - 1.0) * 0.5
         if ctx.amount > 0:
             slip += min(0.002, 50000.0 / max(ctx.amount, 1.0) * 0.0001)
 
-    # ADV 冲击：参与率越高滑点越大（分档）
-    if ctx.adv_amount > 0 and ctx.amount > 0:
+    # Square-root 冲击（Almgren-Chriss 风格）：σ * sqrt(participation)
+    if model == "sqrt_law" and ctx.adv_amount > 0 and ctx.amount > 0:
+        part = ctx.participation if ctx.participation > 0 else ctx.amount / ctx.adv_amount
+        k = float(getattr(cfg, "slippage_sqrt_k", 0.5) or 0.5)
+        slip += k * (max(0.5, ctx.volatility_pct) / 100.0) * math.sqrt(max(part, 1e-9))
+
+    # ADV 冲击：参与率越高滑点越大（分档；sqrt_law 下作为补充底档）
+    if model != "sqrt_law" and ctx.adv_amount > 0 and ctx.amount > 0:
         part = ctx.participation if ctx.participation > 0 else ctx.amount / ctx.adv_amount
         if part >= 0.2:
             slip += 0.003

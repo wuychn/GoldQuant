@@ -1,8 +1,4 @@
-"""回测脚本：离线库 + 因子面板 + TargetPortfolio + 出场规则。
-
-用法：
-    python -m scripts.backtest.run --start 2022-01-01 --end 2024-12-31
-"""
+"""回测脚本（更新：IC 权重 + MVO + 敏感性 + strict 标注）。"""
 
 from __future__ import annotations
 
@@ -10,12 +6,13 @@ import argparse
 from datetime import date
 
 from quant.backtest.engine import ExitConfig, run_backtest
+from quant.backtest.metrics import compute_metrics
 from quant.backtest.report import export_report
+from quant.backtest.sensitivity_report import run_backtest_sensitivity
 from quant.data.adjust import load_adjusted_daily
 from quant.data.calendar import to_iso, trading_day_list
 from quant.data.industry import read_industry_snapshot
-from quant.factors.compose import compose_alpha
-from quant.factors.panel_builder import build_panel
+from quant.factors.alpha_builder import build_alpha_by_date
 from quant.portfolio.target import TargetPortfolio
 from quant.store.paths import reports_dir
 
@@ -30,9 +27,12 @@ def main() -> None:
     ap.add_argument("--n-exit", type=int, default=15)
     ap.add_argument("--target-vol", type=float, default=0.15)
     ap.add_argument("--no-exit", action="store_true")
-    ap.add_argument("--loose", action="store_true", help="关闭 strict 开盘成交")
+    ap.add_argument("--loose", action="store_true", help="关闭 strict 开盘成交（非官方口径）")
+    ap.add_argument("--registry-weights", action="store_true", help="忽略 IC 权重")
+    ap.add_argument("--sensitivity", action="store_true", help="输出参数敏感性")
     args = ap.parse_args()
 
+    strict = not args.loose
     out = args.out or str(reports_dir("bt"))
     dates = [
         to_iso(d)
@@ -43,27 +43,19 @@ def main() -> None:
         return
 
     daily = load_adjusted_daily()
-    panel = build_panel(dates, daily=daily)
-    print(f"面板 {len(panel)} 行")
-
-    alpha_by_date: dict[str, dict[str, float]] = {}
-    rows_by_date: dict[str, list] = {}
-    for r in panel:
-        rows_by_date.setdefault(r.date, []).append(r)
-    for d, rows in rows_by_date.items():
-        alpha_by_date[d] = compose_alpha(rows)
+    alpha_by_date = build_alpha_by_date(dates, daily, use_ic_weights=not args.registry_weights)
+    print(f"alpha 覆盖 {len(alpha_by_date)} 日")
 
     def alpha_fn(d: str, _rows: dict) -> dict[str, float]:
         return alpha_by_date.get(d, {})
 
-    sectors = read_industry_snapshot(dates[-1]) if dates else {}
-    policy = TargetPortfolio(
+    policy = TargetPortfolio.from_config(
         n_enter=args.n_enter,
         n_exit=args.n_exit,
         max_stocks=args.max_positions,
         target_vol=args.target_vol,
         daily=daily,
-        sectors=sectors,
+        sectors=read_industry_snapshot(dates[-1]) if dates else {},
     )
     exit_cfg = None if args.no_exit else ExitConfig()
     broker = run_backtest(
@@ -73,9 +65,36 @@ def main() -> None:
         policy=policy,
         max_positions=args.max_positions,
         exit_config=exit_cfg,
-        strict_signals=not args.loose,
+        strict_signals=strict,
     )
-    rep = export_report(broker, out)
+
+    sens = None
+    if args.sensitivity:
+
+        def _sens_run(params: dict[str, float]) -> float:
+            ne = int(params.get("n_enter", args.n_enter))
+            tv = float(params.get("target_vol", args.target_vol))
+            pol = TargetPortfolio.from_config(
+                n_enter=ne,
+                n_exit=max(ne + 5, args.n_exit),
+                max_stocks=args.max_positions,
+                target_vol=tv,
+                daily=daily,
+            )
+            b = run_backtest(
+                daily=daily,
+                dates=dates[-min(252, len(dates)) :],
+                alpha_fn=alpha_fn,
+                policy=pol,
+                max_positions=args.max_positions,
+                exit_config=exit_cfg,
+                strict_signals=strict,
+            )
+            return float(compute_metrics(b).get("sharpe") or 0.0)
+
+        sens = run_backtest_sensitivity(base_run_fn=_sens_run)
+
+    rep = export_report(broker, out, daily=daily, strict_signals=strict, sensitivity=sens)
     print(rep["metrics_data"])
 
 

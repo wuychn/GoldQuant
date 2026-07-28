@@ -16,8 +16,7 @@ from quant.backtest.engine import ExitConfig, run_backtest
 from quant.backtest.metrics import compute_metrics
 from quant.data.adjust import load_adjusted_daily
 from quant.data.calendar import to_iso, trading_day_list
-from quant.factors.compose import compose_alpha
-from quant.factors.panel_builder import build_panel
+from quant.factors.alpha_builder import build_alpha_by_date
 from quant.portfolio.target import TargetPortfolio
 from quant.research.sensitivity import parameter_budget, scan_param
 from quant.research.significance import deflated_sharpe
@@ -25,14 +24,7 @@ from quant.research.walk_forward import walk_forward
 
 
 def _build_alpha(dates: list[str], daily):
-    panel = build_panel(dates, daily=daily)
-    by_date: dict[str, dict[str, float]] = {}
-    rows_by: dict[str, list] = {}
-    for r in panel:
-        rows_by.setdefault(r.date, []).append(r)
-    for d, rows in rows_by.items():
-        by_date[d] = compose_alpha(rows)
-    return by_date
+    return build_alpha_by_date(dates, daily, use_ic_weights=True)
 
 
 def main() -> None:
@@ -202,6 +194,8 @@ def main() -> None:
             "peak_to_median": sens.peak_to_median,
         },
         "parameter_budget_trials": n_trials,
+        "strict_signals": True,
+        "weights_source": "ic_walk_forward",
     }
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)

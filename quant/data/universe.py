@@ -2,7 +2,7 @@
 
 规则（全部 PIT，可对任意历史日 T 重建，且只依赖 T 及之前信息）：
 1. 剔除 ST/ST带星/退/PT —— 名称字符串匹配（名称随每日快照落库，天然 PIT）
-2. 剔除上市不足 ``min_list_days`` 交易日 —— 由 daily_raw 首条记录推断
+2. 剔除上市不足 ``min_list_days`` 交易日 —— 优先 ``listing_dates`` 表（jbxx/交易所），回退 daily 首条
 3. 剔除当日停牌 —— volume == 0
 4. 20 日 ADV >= ``min_adv_yi`` —— 由 amount 滚动计算
 
@@ -51,11 +51,10 @@ def _coerce_iso(s: str):
 
 
 def _listing_days_map(daily: pd.DataFrame, as_of: str) -> dict[str, int]:
-    """截至 as_of，每只票已上市交易日数。"""
-    if daily.empty:
-        return {}
-    d = daily[daily["date"] <= as_of]
-    return d.groupby("code")["date"].count().to_dict()
+    """截至 as_of，每只票已上市交易日数（PIT 上市日表 + daily 回退）。"""
+    from quant.data.listing import listing_days_map
+
+    return listing_days_map(daily, as_of)
 
 
 def _adv_yi_map(daily: pd.DataFrame, as_of: str, lookback: int) -> dict[str, float]:

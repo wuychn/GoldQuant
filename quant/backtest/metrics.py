@@ -8,7 +8,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from quant.backtest.broker import SimBroker
+from quant.backtest.stats import newey_west_sharpe
 
 
 def _to_returns(equity: list[tuple[str, float]]) -> np.ndarray:
@@ -129,6 +129,9 @@ def compute_metrics(
     trading_days: int = 252,
     benchmark: pd.DataFrame | None = None,
     benchmark_code: str = "000300",
+    daily: pd.DataFrame | None = None,
+    initial_cash: float = 1_000_000.0,
+    participation_rate: float = 0.1,
 ) -> dict[str, Any]:
     eq = broker.equity_curve
     empty = {
@@ -136,10 +139,13 @@ def compute_metrics(
         "ann_return_pct": 0.0,
         "ann_vol_pct": 0.0,
         "sharpe": 0.0,
+        "sharpe_nw": 0.0,
         "sortino": 0.0,
         "max_drawdown_pct": 0.0,
         "calmar": 0.0,
         "turnover_annual": 0.0,
+        "turnover_buy_annual": 0.0,
+        "turnover_sell_annual": 0.0,
         "win_rate": 0.0,
         "profit_factor": 0.0,
         "avg_hold_days": 0.0,
@@ -161,6 +167,7 @@ def compute_metrics(
     ann_ret = (1 + total_ret) ** (trading_days / max(n, 1)) - 1.0
     ann_vol = float(rets.std(ddof=1) * np.sqrt(trading_days)) if n > 1 else 0.0
     sharpe = (ann_ret / ann_vol) if ann_vol > 1e-12 else 0.0
+    sharpe_nw = newey_west_sharpe(rets, trading_days=trading_days)
 
     downside = rets[rets < 0]
     down_vol = float(downside.std(ddof=1) * np.sqrt(trading_days)) if len(downside) > 1 else 0.0
@@ -170,8 +177,12 @@ def compute_metrics(
     calmar = ann_ret / abs(max_dd) if abs(max_dd) > 1e-12 else 0.0
 
     avg_eq = float(vals.mean()) or 1.0
-    total_turnover = sum(t.price * t.shares for t in broker.trades)
+    buy_turn = sum(t.price * t.shares for t in broker.trades if t.side == "buy")
+    sell_turn = sum(t.price * t.shares for t in broker.trades if t.side == "sell")
+    total_turnover = buy_turn + sell_turn
     turnover_annual = (total_turnover / avg_eq) * (trading_days / max(n, 1))
+    turnover_buy_annual = (buy_turn / avg_eq) * (trading_days / max(n, 1))
+    turnover_sell_annual = (sell_turn / avg_eq) * (trading_days / max(n, 1))
 
     sells = [t for t in broker.trades if t.side == "sell" and t.pnl is not None]
     win = sum(1 for t in sells if t.pnl > 0)
@@ -194,15 +205,25 @@ def compute_metrics(
 
     excess = benchmark_excess(broker, benchmark, code=benchmark_code)
 
+    from quant.backtest.attribution import capacity_metrics, style_attribution
+
+    style = style_attribution(broker, daily, benchmark=benchmark, benchmark_code=benchmark_code)
+    capacity = capacity_metrics(
+        broker, daily, initial_cash=initial_cash, participation_rate=participation_rate
+    )
+
     return {
         "total_return_pct": round(total_ret * 100, 2),
         "ann_return_pct": round(ann_ret * 100, 2),
         "ann_vol_pct": round(ann_vol * 100, 2),
         "sharpe": round(sharpe, 3),
+        "sharpe_nw": round(sharpe_nw, 3),
         "sortino": round(sortino, 3),
         "max_drawdown_pct": round(max_dd * 100, 2),
         "calmar": round(calmar, 3),
         "turnover_annual": round(turnover_annual, 2),
+        "turnover_buy_annual": round(turnover_buy_annual, 2),
+        "turnover_sell_annual": round(turnover_sell_annual, 2),
         "win_rate": round(win_rate, 3),
         "profit_factor": round(float(profit_factor), 3) if profit_factor != float("inf") else 999.0,
         "avg_hold_days": round(float(np.mean(hold_days)), 1) if hold_days else 0.0,
@@ -211,5 +232,7 @@ def compute_metrics(
         "final_equity": round(float(vals[-1]), 2),
         "exit_attribution": exit_attribution(broker),
         "yearly": yearly_breakdown(broker),
+        "style_attribution": style,
+        "capacity": capacity,
         **excess,
     }
