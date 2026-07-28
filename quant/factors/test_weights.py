@@ -51,3 +51,24 @@ def test_compose_alpha_skips_zero_weights():
 def test_empty_report_returns_empty():
     assert icir_weights({}) == {}
     assert full_weight_map({}, ["a", "b"]) == {"a": 0.0, "b": 0.0}
+
+
+def test_ic_neutralize_return_removes_industry_beta():
+    """IC 标签中性化：剔除 forward_return 的行业 beta 后，纯 alpha IC 显现（P0-⑦）。"""
+    from quant.factors.base import FactorRow
+    from quant.factors.ic import daily_rank_ic
+
+    # 因子 f 组内排序 [1,2,3]；return 含行业 beta（A+10）+ 纯 alpha（=f）
+    rows = []
+    for i, (ind, fv, fr) in enumerate(
+        [("A", 1.0, 11.0), ("A", 2.0, 12.0), ("A", 3.0, 13.0),
+         ("B", 1.0, 1.0), ("B", 2.0, 2.0), ("B", 3.0, 3.0)]
+    ):
+        rows.append(FactorRow(date="2024-01-01", code=f"c{i}", industry=ind, log_mcap=10.0,
+                              raw={"f": fv}, neutral={"f": fv}, forward_return_pct=fr))
+    ic_raw = daily_rank_ic(rows, "f", neutralize_return=False)["ic_mean"]
+    ic_neut = daily_rank_ic(rows, "f", neutralize_return=True)["ic_mean"]
+    # 中性化剔除行业 beta 后，纯 alpha 完全正相关 → IC 升高
+    assert ic_neut > ic_raw
+    assert ic_neut > 0.9
+

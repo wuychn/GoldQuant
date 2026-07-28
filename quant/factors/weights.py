@@ -16,7 +16,7 @@ def icir_weights(
     *,
     min_icir: float = 0.0,
     min_ic_mean: float = 0.0,
-    min_tstat: float = 1.0,
+    min_tstat: float = 2.0,
 ) -> dict[str, float]:
     """从 IC 报告产出 {factor: weight}（仅含通过阈值的因子）。
 
@@ -54,7 +54,7 @@ def full_weight_map(
     *,
     min_icir: float = 0.0,
     min_ic_mean: float = 0.0,
-    min_tstat: float = 1.0,
+    min_tstat: float = 2.0,
     floor: float = 0.0,
 ) -> dict[str, float]:
     """完整权重表：通过阈值的因子取 ICIR 权重，其余 0（供 compose_alpha 全覆盖）。"""

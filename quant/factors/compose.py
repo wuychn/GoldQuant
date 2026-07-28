@@ -91,21 +91,21 @@ def compose_alpha(
     每个 row 用 row.neutral（中性化 z）或回退 row.raw；权重取 registry 默认或覆盖。
     """
     wmap = weights or registry.weights()
+    # 固定正权重因子集 → 分母跨票一致，避免缺因子票 den 偏小导致 |alpha| 放大
+    active = [(k, float(w)) for k, w in wmap.items() if float(w) > 0]
+    den = sum(w for _, w in active)
+    if den <= 0:
+        return {}
     out: dict[str, float] = {}
     for r in rows:
         src = r.neutral if (use_neutral and r.neutral) else r.raw
-        if not src:
-            continue
         num = 0.0
-        den = 0.0
-        for k, v in src.items():
-            w = float(wmap.get(k, 1.0))
-            if w <= 0 or v is None or not np.isfinite(v):
-                continue
+        for k, w in active:
+            v = src.get(k)
+            if v is None or not np.isfinite(v):
+                continue  # 缺失因子按 z 中位数 0 贡献（不累加 num）
             num += float(v) * w
-            den += w
-        if den > 0:
-            out[r.code] = num / den
+        out[r.code] = num / den
     return out
 
 

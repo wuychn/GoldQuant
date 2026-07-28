@@ -13,6 +13,7 @@ from typing import Any
 import numpy as np
 
 from quant.factors.base import FactorRow
+from quant.factors.neutralize import neutralize_cross_section
 
 
 def _spearman(a: np.ndarray, b: np.ndarray) -> float:
@@ -31,8 +32,19 @@ def _spearman(a: np.ndarray, b: np.ndarray) -> float:
         return float(np.corrcoef(a, b)[0, 1])
 
 
-def daily_rank_ic(rows: list[FactorRow], factor_name: str, *, min_names: int = 5) -> dict[str, Any]:
-    """单因子日度截面 RankIC 汇总（用 neutral z；缺则回退 raw）。"""
+def daily_rank_ic(
+    rows: list[FactorRow],
+    factor_name: str,
+    *,
+    min_names: int = 5,
+    neutralize_return: bool = True,
+) -> dict[str, Any]:
+    """单因子日度截面 RankIC 汇总（用 neutral z；缺则回退 raw）。
+
+    ``neutralize_return=True`` 时对每日截面 forward_return 做行业+log市值中性化后再算 IC
+    （与因子中性化同口径），剔除市场/行业/市值 beta，度量纯 alpha IC。旧版用原始
+    forward_return，IC 系统性混入风格溢价被高估（P0-⑦）。
+    """
     by_date: dict[str, list[FactorRow]] = defaultdict(list)
     for r in rows:
         by_date[r.date].append(r)
@@ -40,16 +52,26 @@ def daily_rank_ic(rows: list[FactorRow], factor_name: str, *, min_names: int = 5
     ics: list[float] = []
     for d in sorted(by_date):
         grp = by_date[d]
+        # 中性化前瞻收益（与因子同口径）→ 纯 alpha IC 标签
+        if neutralize_return:
+            fwd_neut = neutralize_cross_section(
+                [r.forward_return_pct for r in grp],
+                industries=[r.industry for r in grp],
+                log_mcaps=[r.log_mcap for r in grp],
+                min_names=min_names,
+            )
+        else:
+            fwd_neut = [r.forward_return_pct for r in grp]
         scores = []
         rets = []
-        for r in grp:
+        for r, fn in zip(grp, fwd_neut):
             v = r.neutral.get(factor_name) if r.neutral else None
             if v is None:
                 v = r.raw.get(factor_name)
-            if v is None or r.forward_return_pct is None:
+            if v is None or fn is None:
                 continue
             scores.append(float(v))
-            rets.append(float(r.forward_return_pct))
+            rets.append(float(fn))
         if len(scores) < min_names:
             continue
         ics.append(_spearman(np.array(scores), np.array(rets)))

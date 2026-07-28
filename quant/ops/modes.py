@@ -150,7 +150,7 @@ def _intraday_buy_block(*, theta: float = 1.0) -> str:
     )
     from quant.factors.compose import compose_intraday_alpha
     from quant.factors.library.intraday import spot_row_from_dict
-    from quant.timeutil import cn_now
+    from quant.timeutil import cn_now, intraday_minutes_since_open
 
     today = cn_now().date()
     if not is_trading_day(today):
@@ -178,6 +178,14 @@ def _intraday_buy_block(*, theta: float = 1.0) -> str:
                 name_map[code] = p.get("name") or code
         if not rows:
             return ""
+        # 开盘 10 分钟内 intraday_strength 噪声主导（集合竞价 open 在 9:30-9:35 浮动极大），
+        # α_z 易瞬间穿越阈值触发假买；待开盘稳定后再触发
+        try:
+            mins_open = intraday_minutes_since_open()
+        except Exception:
+            mins_open = None
+        if mins_open is not None and mins_open < 10:
+            return icon_section(ICON_TIP, "盘中择时", [f"开盘 {mins_open} 分钟，跳过（噪声主导）"])
         alpha_z = compose_intraday_alpha(rows)
         buys = [r for r in rows if alpha_z.get(r.code, 0.0) >= theta]
         if not buys:

@@ -81,21 +81,24 @@ def neutralize_cross_section(
     idx = np.where(valid)[0]
     y_v = y[idx]
     if not cols:
-        z = _zscore(y_v)
+        z = np.clip(_zscore(y_v), -3.0, 3.0)
         out: list[float | None] = [None] * n
         for j, i in enumerate(idx):
             out[i] = float(z[j])
         return out
 
     X = np.column_stack([np.ones(n)] + cols)[idx]
-    # 最小二乘；奇异则退回 z-score
+    # 最小二乘（lstsq 用 SVD，对共线/近奇异矩阵返回 least-norm 解，列空间投影仍正确）；
+    # 仅在残差数值异常（NaN/inf）时退回去均值。残差 z 二次截尾防极端值主导合成。
     try:
         beta, *_ = np.linalg.lstsq(X, y_v, rcond=None)
         resid = y_v - X @ beta
+        if not np.all(np.isfinite(resid)):
+            resid = y_v - float(np.mean(y_v))
     except np.linalg.LinAlgError:
         resid = y_v - float(np.mean(y_v))
 
-    z = _zscore(resid)
+    z = np.clip(_zscore(resid), -3.0, 3.0)
     out = [None] * n
     for j, i in enumerate(idx):
         out[i] = float(z[j])
