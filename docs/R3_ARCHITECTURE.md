@@ -60,8 +60,8 @@ flowchart TB
 |---|---|---|
 | L0 | `quant/data/` | 离线 parquet 库、日历、复权、宇宙、行业 |
 | L1 | `quant/factors/` | 因子计算、中性化、面板、合成 alpha |
-| L2 | `quant/portfolio2/` | `TargetPortfolio`：buffer / 约束 / vol target |
-| L3 | `quant/execution/` + `quant/decision/paper_execute.py` | 纸面撮合；回测用 `quant/backtest2/` |
+| L2 | `quant/portfolio/` | `TargetPortfolio`：buffer / 约束 / vol target |
+| L3 | `quant/execution/` + `quant/decision/paper_execute.py` | 纸面撮合；回测用 `quant/backtest/` |
 | 盘中择时 | `quant/factors/library/intraday.py` + `ops/modes.py:_intraday_buy_block` | 盘中因子（5）择时触发买入 |
 | L4 | `quant/exit/` | 时序出场规则 |
 | 运维 | `quant/ops/` | 新闻/盘前/盯盘/复盘 + 飞书 |
@@ -109,7 +109,7 @@ T 晚选 alpha top N（默认 30）作战池（**不定仓位**）；T+1 盘中�
 - **仓位** = 单票上限 10% × 分档（α_z 越强仓位越大，5%–10%）；总仓 ≤ gates 上限
 - **幂等** = `bought_today_{date}.txt` 标记，当日不重复买
 
-> 旧"目标组合差额交易"（`ΔV=(w*−w)×总资产`）已退役为实盘买入方式，保留在回测 strict 口径（`backtest2`）。
+> 旧"目标组合差额交易"（`ΔV=(w*−w)×总资产`）已退役为实盘买入方式，保留在回测 strict 口径（`backtest`）。
 
 ### 3.3 卖出（日频出场）
 
@@ -182,12 +182,12 @@ raw × direction → winsorize(1%,99%) → 行业+log市值中性 → z-score �
 | `mom_20` | 短期收益（偏反转） | \(C_t/C_{t-20}-1\) | 负 | 0.8 |
 | `mom_60` | 中期动量 | \(C_t/C_{t-60}-1\) | 正 | 1.0 |
 | `mom_120_20` | 跳过近月的中期动量 | \(C_{t-20}/C_{t-120}-1\) | 正 | 1.0 |
-| `mom_accel` | 动量加速 | \(mom_{20}-mom_{60}/3\) | 正 | 0.8 |
 | `eff_ratio_60` | 趋势顺滑度 | \(\|净涨幅\|/\sum\|日收益\|\) | 正 | 1.0 |
+| `flip_rate_60` | 方向稳定性 | 60 日涨跌反转频率 | 负 | 0.6 |
 | `vol_60` | 年化波动 | \(\mathrm{std}(r,60)\sqrt{252}\) | 负 | 0.8 |
-| `downside_vol_60` | 下行波动 | 负收益半方差年化 | 负 | 0.6 |
 | `dist_high_252` | 距 52 周高 | \(C/\max(H_{252})-1\) | 正 | 1.0 |
 | `ma_spread` | 均线发散 | \(MA5/MA20-1\) | 正 | 0.8 |
+| `spread_accel_5` | 发散加速度 | \(ma\_spread(t)-ma\_spread(t-5)\) | 正 | 0.6 |
 | `ma_slope_20` | MA20 斜率 | 斜率 / 价格 | 正 | 0.6 |
 | `vol_ratio_5_20` | 放量 | \(Amt_5/Amt_{20}\) | 正 | 0.8 |
 | `turnover_z_60` | 换手偏高 | \((TO-\mu_{60})/\sigma_{60}\) | 正 | 0.6 |
@@ -227,7 +227,7 @@ raw × direction → winsorize(1%,99%) → 行业+log市值中性 → z-score �
 
 ## 6. 组合层（L2）参数与计算
 
-实现：`quant/portfolio2/target.py`（`TargetPortfolio`）。
+实现：`quant/portfolio/target.py`（`TargetPortfolio`）。
 
 | 参数 | 默认 | 含义 | 用法 |
 |---|---|---|---|
@@ -276,7 +276,7 @@ raw × direction → winsorize(1%,99%) → 行业+log市值中性 → z-score �
 ### 8.2 回测
 
 - 入口：`scripts/backtest/run.py`  
-- 引擎：`quant/backtest2/engine.py` + `SimBroker`  
+- 引擎：`quant/backtest/engine.py` + `SimBroker`  
 - 默认同样 strict + `TargetPortfolio` + `ExitConfig`
 
 | 执行相关量 | 含义 | 计算 |
@@ -305,7 +305,7 @@ raw × direction → winsorize(1%,99%) → 行业+log市值中性 → z-score �
 | 胜率 / 盈亏比 | 交易质量 | 按卖出笔 pnl |
 | 出场归因 | 哪类止损在亏 | 按 `Trade.reason` 分组 |
 
-回测报告：`quant/backtest2/metrics.py`、`report.py` → `$QUANT_HOME/reports/bt/`。
+回测报告：`quant/backtest/metrics.py`、`report.py` → `$QUANT_HOME/reports/bt/`。
 
 ---
 
@@ -351,9 +351,9 @@ python -m scripts.factors.ic_report --panel ...
 |---|---|
 | 日决策 | `scripts/decision/daily.py` |
 | 纸面撮合 | `quant/decision/paper_execute.py` |
-| 目标组合 | `quant/portfolio2/target.py` |
+| 目标组合 | `quant/portfolio/target.py` |
 | 出场 | `quant/exit/rules.py` |
-| 回测引擎 | `quant/backtest2/engine.py` |
+| 回测引擎 | `quant/backtest/engine.py` |
 | 因子面板 | `quant/factors/panel_builder.py` |
 | 运维推送 | `quant/ops/` |
 

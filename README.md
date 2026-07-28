@@ -23,7 +23,7 @@ A 股日频波段量化辅助系统：**FastAPI 数据聚合服务** + **IC 因�
 └───────────────────────────┬─────────────────────────────────┘
                             │ 离线
 ┌───────────────────────────▼─────────────────────────────────┐
-│  research2/  walk-forward / DSR / 敏感性（参数治理）          │
+│  research/  walk-forward / DSR / 敏感性（参数治理）          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -51,15 +51,15 @@ GoldQuant/
 │   ├── data/                   # L0 离线库、日历、复权、宇宙、行业 PIT
 │   ├── store/                  # state/paths/snapshot/views + 自选/观察池
 │   ├── factors/                # L1 因子库、中性化、合成 alpha、面板
-│   ├── portfolio2/             # L2 目标组合（buffer/约束/vol target）
+│   ├── portfolio/             # L2 目标组合（buffer/约束/vol target）
 │   ├── execution/              # L3 成本规则、滑点、撮合器
 │   ├── decision/               # 日决策卡 + 纸面撮合入口
-│   ├── backtest2/              # L3 回测引擎（broker/metrics/report）
+│   ├── backtest/              # L3 回测引擎（broker/metrics/report）
 │   ├── exit/                   # L4 时序出场（ATR/硬止损/趋势/时间）
 │   ├── ops/                    # 日运维：新闻/盘前/盯盘/复盘 + 推送
 │   ├── push/                   # 飞书推送
 │   ├── journal/                # 漏斗统计 + 偏离日志（辅助决策闭环）
-│   ├── research2/              # walk-forward / DSR / 敏感性（参数治理）
+│   ├── research/              # walk-forward / DSR / 敏感性（参数治理）
 │   ├── market/                 # 资金流 + 市场状态（regime）
 │   ├── data/quote.py           # 盘口/历史行情纯价工具（从 scoring 迁出）
 │   ├── pool/                   # 候选池（被 factors/app 引）
@@ -84,10 +84,10 @@ GoldQuant/
 
 ```text
 ~/.quant/
-├── state/          # optional.jsonl、holding.jsonl、account.json（程序读写）
-├── views/          # optional.md、holding.md（自动生成，勿手改）
+├── state/          # holding.jsonl、account.json（程序读写）
+├── views/          # holding.md（自动生成，勿手改）
 ├── daily/{date}/   # raw/ derived/ trades/ review/
-├── config/         # quant.yml（含 gates）、ml_calibration.yml（ML 覆盖）
+├── config/         # quant.yml（含 gates）、factor_weights.yml（IC 驱动权重）
 ├── paper_account/  # 纸面账户 state/ + equity.jsonl（与人工仓隔离）
 └── memory/         # 新闻摘要、经验教训
 ```
@@ -187,7 +187,7 @@ T+1 盘中 during_market（择时层，每 7 分钟）
 - **双层分工**：日频因子 `compose_alpha` 解决"**买什么**"（选作战池）；盘中因子 `compose_intraday_alpha` 解决"**何时买**"（择时触发）。两层都是多因子 z-score 加权，非技术分析画线。
 - **卖出仍日频**：T 晚 `evaluate_exits`（ATR 跟踪 / 硬止损 / 趋势破 MA20 / 时间止损）撮合；盘中不卖（P2 加盘中止损）。
 - **作战池**：`paper_account/battle_pool/{T+1}.json`，T 晚选 T+1 盘中择时；错过则次日重生。
-- **回测口径**：`backtest2` 仍用日频 strict 口径（独立），盘中择时是实盘纸面增强，不影响回测一致性。
+- **回测口径**：`backtest` 仍用日频 strict 口径（独立），盘中择时是实盘纸面增强，不影响回测一致性。
 - **决策卡**：T 晚产出"明日作战池 + 卖出指令"，人可参考；纸面账户自动撮合卖出，次日盘中自动择时买入。
 
 ### 3.2 五时段运维推送（`quant/ops/`）
@@ -212,7 +212,7 @@ T+1 盘中 during_market（择时层，每 7 分钟）
 raw × direction → winsorize(1%,99%) → 行业+log市值中性 → z-score → Σ w_i z_i = alpha
 ```
 
-`compose_alpha`（`quant/factors/compose.py`）= 加权 z-score 均值。13 个因子（动量 mom_20/60/120_20/accel、效率比 eff_ratio_60、波动 vol_60/downside_vol_60、距高 dist_high_252、均线 ma_spread/ma_slope_20、放量 vol_ratio_5_20、换手 turnover_z_60、量价 vol_price_corr_20、资金 flow_ratio_5、主题 theme_mom、人气 hot_rank_z）的默认权重与方向见 [R3_ARCHITECTURE.md §5](docs/R3_ARCHITECTURE.md#5-因子层l1指标含义与计算)。
+`compose_alpha`（`quant/factors/compose.py`）= 加权 z-score 均值。16 个因子（动量 mom_20/60/120_20、效率比 eff_ratio_60、方向反转 flip_rate_60、波动 vol_60、距高 dist_high_252、均线 ma_spread/spread_accel_5/ma_slope_20、放量 vol_ratio_5_20、换手 turnover_z_60、量价 vol_price_corr_20、资金 flow_ratio_5、主题 theme_mom、人气 hot_rank_z）的默认权重与方向见 [R3_ARCHITECTURE.md §5](docs/R3_ARCHITECTURE.md#5-因子层l1指标含义与计算)。
 
 #### 3.3b 盘中因子层（择时，`quant/factors/library/intraday.py`）
 
@@ -228,7 +228,7 @@ raw × direction → winsorize(1%,99%) → 行业+log市值中性 → z-score �
 
 触发：作战池内 `α_z ≥ 1.0`（强于池内均值 1 个标准差）。参数为经验初值，待 IC/ML 校准（P2）。
 
-### 3.4 目标组合（L2，`quant/portfolio2/target.py`）
+### 3.4 目标组合（L2，`quant/portfolio/target.py`）
 
 > **注意**：实盘买入已改「作战池 + 盘中择时」（§3.1）；本节目标组合框架（差额交易）保留供**回测 strict 口径**与持仓排名 buffer 参考，不再用于实盘买入撮合。
 
@@ -271,7 +271,7 @@ raw × direction → winsorize(1%,99%) → 行业+log市值中性 → z-score �
 - 佣金万一（最低 5 元）、卖出印花税、沪市过户费、滑点；
 - 整手股数：`⌊amount/price/100⌋×100`；单日成交额 ≤ 当日 `amount×5%`（ADV）。
 
-纸面账户隔离：`paper_home_context` 把 state 根切到 `{quant_home}/paper_account/`，与人工主账户互不污染。回测（`backtest2`）与实盘纸面共享同一撮合内核与 `TargetPortfolio`/`evaluate_exits`。
+纸面账户隔离：`paper_home_context` 把 state 根切到 `{quant_home}/paper_account/`，与人工主账户互不污染。回测（`backtest`）与实盘纸面共享同一撮合内核与 `TargetPortfolio`/`evaluate_exits`。
 
 ### 3.7 决策与叙述分工
 
@@ -400,7 +400,7 @@ r3 决策链改用 IC 驱动权重（`~/.quant/config/factor_weights.yml`，由 
 }
 ```
 
-自选股 / 持仓从 `~/.quant/state/optional.jsonl`、`holding.jsonl` 读取并 enrich。`data/` 目录下为各接口样例 fixture。
+持仓从 `~/.quant/state/holding.jsonl` 读取并 enrich（r1 自选池 `optional.jsonl` 已退役）。`data/` 目录下为各接口样例 fixture。
 
 ### 其他行情 API
 
