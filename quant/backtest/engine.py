@@ -221,7 +221,17 @@ def run_backtest(
 
         # 信号日：strict 模式用 T-1，否则用 T
         signal_date = iso_dates[i - 1] if (strict_signals and i > 0) else d
-        alpha = alpha_fn(signal_date, rows_by_code)
+        if strict_signals and i > 0:
+            # strict: alpha_fn 拿 signal_date(T-1) 当日 rows，从结构上防误用 T 日收盘
+            # （此前传 T 日 rows 靠调用方自觉用 signal_date 查面板，框架不防误用）
+            prev_rows = daily[daily["date"] == signal_date]
+            alpha_rows = (
+                {str(r["code"]): r.to_dict() for _, r in prev_rows.iterrows()}
+                if not prev_rows.empty else {}
+            )
+        else:
+            alpha_rows = rows_by_code
+        alpha = alpha_fn(signal_date, alpha_rows)
         if not alpha:
             broker.suspended_codes = set(broker.mark_suspended(rows_by_code))
             broker.record_equity(d, prices, prev_closes)

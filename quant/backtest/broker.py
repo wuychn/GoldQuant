@@ -108,7 +108,7 @@ class SimBroker:
         return SlippageContext(
             volatility_pct=vol,
             amount=notional,
-            day_change_pct=change_pct,
+            day_change_pct=None,  # PIT: 不喂 T 日 close（strict T 开盘成交，T close 前视）；microstructure 退化到 vol/ADV 档
             limit_pct=limit_pct(code, cfg) if code else 9.9,
             adv_amount=adv,
             participation=part,
@@ -147,7 +147,8 @@ class SimBroker:
         # ADV 封顶：优先用历史日均成交额（PIT），缺失才回退当日额
         adv = adv_amount if adv_amount and adv_amount > 0 else day_amt
         shares = shares_for_amount(price, target_amount)
-        shares = cap_shares_by_adv(shares, price=price, day_amount=adv, max_pct=0.05)
+        _part_rate = float(getattr(self.costs._sim(), "participation_rate", 0.1) or 0.1)
+        shares = cap_shares_by_adv(shares, price=price, day_amount=adv, max_pct=_part_rate)
         if shares <= 0:
             return
         change_pct = self._change_pct(row, prev_close)
