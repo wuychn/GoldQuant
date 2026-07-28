@@ -341,6 +341,7 @@ def execute_intraday_buys(
     today: str,
     single_weight: float = 0.10,
     dry_run: bool = False,
+    target_weights: dict[str, float] | None = None,
 ) -> dict:
     """盘中择时买入：对触发的作战池票按最新价撮合，仓位=分档(5%-10%)，标记当日已买。
 
@@ -357,14 +358,27 @@ def execute_intraday_buys(
 
         signals: list[TradeSignal] = []
         quote_rows: list[dict] = []
+        pre_rejected: dict[str, str] = {}
         for r in buys:
             if r.code in held or r.code in bought:
                 continue
             strength = max(0.0, min(1.0, alpha_z.get(r.code, 0.0) / 2.0))
-            weight = single_weight * (0.5 + 0.5 * strength)
+            tier_w = single_weight * (0.5 + 0.5 * strength)
+            if target_weights is not None:
+                # 受 TargetPortfolio 目标权重约束（目标权重已过 sector/concept cap），
+                # 新建仓不超过 target_w——让组合层约束在盘中执行真正生效（修复 P0：
+                # 旧版扁平 5%-10% 分档完全无视 max_weight/sector_cap/target_vol/cov）
+                tw = float(target_weights.get(r.code, 0.0))
+                if tw <= 0:
+                    pre_rejected[r.code] = "not_in_target"
+                    continue
+                weight = min(tier_w, tw)
+            else:
+                weight = tier_w
             amount = weight * assets
             qty = shares_for_amount(r.last, amount)
             if qty <= 0:
+                pre_rejected[r.code] = "lot_too_small"
                 continue
             name = name_map.get(r.code) or r.code
             pre = r.pre_close if r.pre_close > 0 else r.last
@@ -400,7 +414,7 @@ def execute_intraday_buys(
                 "n_signals": len(signals),
                 "n_executed": 0,
                 "executed": [],
-                "rejected": {},
+                "rejected": dict(pre_rejected),
                 "bought": [],
             }
         payload = {"自选股": quote_rows, "持仓股": []}
@@ -428,7 +442,7 @@ def execute_intraday_buys(
                 }
                 for e in executed
             ],
-            "rejected": rejected,
+            "rejected": {**pre_rejected, **rejected},
             "bought": bought_codes,
         }
 

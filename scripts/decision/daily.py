@@ -271,8 +271,15 @@ def main() -> None:
 
     # 作战池：alpha top N → 落盘供 T+1 盘中择时买入（T 晚不撮合买入）
     alpha_ranked = sorted(_alpha.items(), key=lambda kv: -kv[1])
+    _tgt = card.target_weights or {}
     battle_pool = [
-        {"code": c, "name": names.get(c) or c, "alpha": round(float(a), 4), "rank": i + 1}
+        {
+            "code": c,
+            "name": names.get(c) or c,
+            "alpha": round(float(a), 4),
+            "rank": i + 1,
+            "target_weight": round(float(_tgt.get(c, 0.0)), 4),
+        }
         for i, (c, a) in enumerate(alpha_ranked[: args.battle_pool_size])
     ]
     nxt = next_trading_day(date.fromisoformat(as_of))

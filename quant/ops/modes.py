@@ -186,7 +186,10 @@ def _intraday_buy_block(*, theta: float = 1.0) -> str:
             return icon_section(
                 ICON_WATCH, "盘中择时", [f"作战池{len(rows)}只 无触发(θ={theta})；最强 {top_s}"]
             )
-        result = execute_intraday_buys(buys, alpha_z, name_map=name_map, today=today_s)
+        target_weights = {str(p.get("code")): float(p.get("target_weight") or 0.0) for p in pool}
+        result = execute_intraday_buys(
+            buys, alpha_z, name_map=name_map, today=today_s, target_weights=target_weights
+        )
     lines = [f"触发{len(buys)}只 → 买入{result.get('n_executed', 0)}笔"]
     for e in result.get("executed", [])[:8]:
         lines.append(f"🛒 {e['code']} x{e['qty']} @{e['fill']} {e.get('reason', '')}")
