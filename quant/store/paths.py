@@ -20,7 +20,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterator
 
-from quant.timeutil import cn_now
+from common.timeutil import cn_now
 
 # 进程内临时覆盖（纸面账户 / 测试）；优先级高于 settings 与环境变量
 _quant_home_override: Path | None = None
@@ -56,7 +56,7 @@ def quant_home() -> Path:
         return _quant_home_override
     raw = ""
     try:
-        from app.core.config import get_settings
+        from common.config import get_settings
 
         raw = (get_settings().QUANT_HOME_DIR or "").strip()
     except Exception:

@@ -1,7 +1,7 @@
 import akshare as ak
 
-from app.utils.common_util import today
-from app.utils.dataframe import dataframe_to_records
+from common.utils.common_util import today
+from common.utils.dataframe import dataframe_to_records
 
 
 def all_stock():

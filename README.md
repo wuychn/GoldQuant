@@ -12,20 +12,26 @@ A 股日频波段量化辅助系统：**FastAPI 数据聚合服务** + **IC 因�
 
 ```text
 ┌─────────────────────────────────────────────────────────────┐
-│  app/   数据 API（FastAPI，默认 :8085）                        │
-│         五时段聚合接口 + 候选池 enrich                          │
+│  common/  公共基础设施（最底层；只依赖标准库/三方）             │
+│           config(Settings) / timeutil / progress_log / utils │
 └───────────────────────────┬─────────────────────────────────┘
-                            │ HTTP
-┌───────────────────────────▼─────────────────────────────────┐
-│  quant/  决策与运维（python -m quant <mode>）                  │
-│  L0 数据 → L1 因子 → L2 目标组合 → L3 纸面撮合 → 飞书推送       │
-│  L4 时序出场（优先于再平衡）                                    │
-└───────────────────────────┬─────────────────────────────────┘
-                            │ 离线
-┌───────────────────────────▼─────────────────────────────────┐
-│  research/  walk-forward / DSR / 敏感性（参数治理）          │
-└─────────────────────────────────────────────────────────────┘
+                            ▲
+          ┌─────────────────┴─────────────────┐
+          │                                    │
+┌──────────▼──────────────┐   ┌───────────────▼──────────────────┐
+│  app/   数据 API（FastAPI，│   │  quant/  决策与运维               │
+│  默认 :8085）五时段聚合接口 │   │  （python -m quant <mode>）        │
+│  + 调度器（APScheduler）   │   │  L0→L1→L2→L3 纸面撮合→飞书推送    │
+└───────────────────────────┘   │  L4 时序出场（优先于再平衡）       │
+                                └───────────────┬──────────────────┘
+                                                │ 离线
+                                ┌───────────────▼──────────────────┐
+                                │  research/  walk-forward / DSR    │
+                                │  / 敏感性（参数治理）              │
+                                └──────────────────────────────────┘
 ```
+
+**依赖方向（硬约束）**：`common ← quant ← {app, scripts}`。`quant/` 不 import `app/`（r3 前经 HTTP、r3 起直调 service，均不经 app 包）；`common/` 不依赖 app/quant。运维五时段（news/pre/during 等）由 `quant/services/market/payload` 直调 service 构建 payload（不经 HTTP）；`daily_decision` 用离线库。**单次 `python -m quant <mode>` 无需启动 app**；仅内置调度器自动跑五时段时需 `python -m app`（调度器在 app 进程内）。
 
 **职责划分**
 
@@ -42,6 +48,7 @@ A 股日频波段量化辅助系统：**FastAPI 数据聚合服务** + **IC 因�
 
 ```text
 GoldQuant/
+├── common/                    # 公共基础设施层（最底；config/timeutil/progress_log/utils）
 ├── app/                        # FastAPI 数据服务
 │   ├── main.py
 │   └── api/v1/endpoints/
@@ -159,7 +166,7 @@ chmod +x run.sh
 ./run.sh start
 ```
 
-> **注意**：量化机器人通过 `http://localhost:8085` 拉数据，**须先启动 API**，再跑 `python -m quant`。`QUANT_USE_LOCAL_FIXTURE=true` 时可改读 `data/*.json` fixture，不请求 API。
+> **注意**：`python -m quant <mode>` 直调 service 构建 payload（不经 HTTP），单次运行无需先启动 API。仅当用内置调度器自动跑五时段时才需 `python -m app`（调度器在 app 进程内）。`QUANT_USE_LOCAL_FIXTURE=true` 时改读 `data/*.json` fixture，连 service 也不调。
 
 ---
 
@@ -355,7 +362,7 @@ python -m scripts.backtest.run --start 2026-06-17 --end 2026-06-26 --cash 100000
 
 ### 5.1 组合参数
 
-默认：`quant/config/quant.yml`（包内）；用户覆盖：`~/.quant/config/quant.yml`（deep merge）。详见 [CONFIG.md](docs/CONFIG.md)。
+默认：`quant/config/quant.yml`（包内）；用户覆盖：`~/.quant/config/quant.yml`（deep merge）。环境/敏感项在 `.env`。**所有配置项及说明见 [docs/CONFIG.md](docs/CONFIG.md)。**
 
 ### 5.2 硬门禁与撮合规则
 
@@ -414,8 +421,8 @@ r3 决策链改用 IC 驱动权重（`~/.quant/config/factor_weights.yml`，由 
 
 ## 八、常见问题
 
-**Q：quant 报连接失败？**
-A：先确认 `python -m app` 已启动，且 `quant/config.py` 中 `BASE_URL` 与 API 端口一致（默认 `http://localhost:8085`）。或设 `QUANT_USE_LOCAL_FIXTURE=true` 读 `data/*.json`。
+**Q：quant 运行报错？**
+A：`python -m quant <mode>` 直调 service（不经 HTTP），无需先启动 API。若提示缺第三方依赖（如 akshare/py_mini_racer），`pip install -r requirements.txt`。只想离线验证可设 `QUANT_USE_LOCAL_FIXTURE=true` 读 `data/*.json`。
 
 **Q：ML 提示样本不足？**
 A：多运行若干交易日，确保每天晚间复盘产生 `daily/{date}/derived/` 评分。

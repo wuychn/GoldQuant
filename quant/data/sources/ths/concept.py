@@ -10,7 +10,7 @@ import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 
-from app.utils.dataframe import dataframe_to_records
+from common.utils.dataframe import dataframe_to_records
 from quant.data.sources.rate_limit import with_limit
 
 logger = logging.getLogger(__name__)

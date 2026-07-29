@@ -33,6 +33,7 @@
 
 ```text
 GoldQuant/
+├── common/                    # 公共基础设施（最底；config/timeutil/progress_log/utils）
 ├── app/                        # FastAPI 数据服务（默认 :8085）
 │   ├── main.py                 # 启动 + APScheduler 调度 quant 任务
 │   ├── api/v1/endpoints/       # 行情/热度/量化 payload 等 API
@@ -64,6 +65,16 @@ GoldQuant/
 ---
 
 ## 3. 分层架构
+
+**包依赖方向（硬约束）**：`common ← quant ← {app, scripts}`。
+
+- `common/` 最底层，只依赖标准库/第三方（`config`/`timeutil`/`progress_log`/`utils`/`testing`）。
+- `quant/` 中间层，只 import `common`，**禁止 import `app`**（r3 前经 HTTP、r3 起直调 service，均不经 app 包）。
+- `app/` 与 `scripts/` 最上层，可 import `quant` 与 `common`。
+
+运维五时段（news/pre/during/lunch/evening）payload 由 `quant/services/market/payload` 直调 service 构建（不经 HTTP）；`daily_decision` 用离线库。内置调度器（APScheduler）在 `app.main` 进程内，故自动跑五时段需 `python -m app`；单次 `python -m quant <mode>` 无需 app。
+
+quant 内部 L0→L4：
 
 ```mermaid
 flowchart TB

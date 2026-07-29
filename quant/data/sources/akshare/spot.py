@@ -11,7 +11,7 @@ class AkshareSpotSource:
     def fetch_all(self) -> list[dict[str, Any]]:
         import akshare as ak
 
-        from app.utils.dataframe import dataframe_to_records
+        from common.utils.dataframe import dataframe_to_records
         from quant.data.fetch import _normalize_spot
 
         def _call():

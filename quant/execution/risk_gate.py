@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from quant.store.paths import state_file
-from quant.timeutil import cn_today
+from common.timeutil import cn_today
 
 
 @dataclass

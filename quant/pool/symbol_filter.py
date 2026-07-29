@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.utils.common_util import extract_stock_code, filter_symbol_pool_rows, is_allowed_symbol_pool_code
+from common.utils.common_util import extract_stock_code, filter_symbol_pool_rows, is_allowed_symbol_pool_code
 from quant.config import load_gates_config
 
 

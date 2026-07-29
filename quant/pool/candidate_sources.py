@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.core.config import Settings
+from common.config import Settings
 from quant.data.sources.eastmoney import ztgc
-from app.utils.ths_rank_fetch import fetch_with_retry
+from common.utils.ths_rank_fetch import fetch_with_retry
 from quant.data.sources.ths import cxfl, cxg, hot_stock, ljqs, lxsz
 from quant.pool.candidate_config import (
     PAYLOAD_KEY_CXFL,
@@ -30,8 +30,8 @@ from quant.pool.sources import (
     prefilter_zt_pool,
 )
 from quant.pool.ths_rank_util import split_enriched_ths_rank_payload
-from quant.progress_log import log_progress, log_progress_done
-from app.utils.quant_test_trim import truncate_list_for_test_phase
+from common.progress_log import log_progress, log_progress_done
+from common.testing.trim import truncate_list_for_test_phase
 
 
 async def _prefilter_popularity(settings: Settings, cfg: dict) -> list[dict]:

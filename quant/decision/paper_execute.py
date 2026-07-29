@@ -26,7 +26,7 @@ from quant.store.paths import (
     sell_watch_file,
     state_file,
 )
-from quant.timeutil import cn_datetime_str
+from common.timeutil import cn_datetime_str
 from quant.store.state import (
     get_account,
     get_holdings,

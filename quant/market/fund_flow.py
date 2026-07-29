@@ -15,7 +15,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from quant.timeutil import cn_today
+from common.timeutil import cn_today
 
 
 def amount_to_yuan(v: object) -> float | None:

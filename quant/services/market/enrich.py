@@ -7,7 +7,7 @@ from typing import Any
 from fastapi.concurrency import run_in_threadpool
 
 from quant.data.tools.market import async_holding_rows, log_tool_error
-from quant.progress_log import log_progress
+from common.progress_log import log_progress
 from quant.store.state import merge_holding_meta
 
 
@@ -22,8 +22,8 @@ async def enrich_optional_and_holding_from_rows(
     skip_jbxx: bool = False,
     extra_rows: list | None = None,
 ) -> tuple[list, list, list]:
-    from app.services.stock_enrich import enrich_stock_rows
-    from quant.testing.trim import truncate_list_for_test_phase
+    from quant.services.enrich import enrich_stock_rows
+    from common.testing.trim import truncate_list_for_test_phase
 
     optional = optional if isinstance(optional, list) else []
     holding = holding if isinstance(holding, list) else []

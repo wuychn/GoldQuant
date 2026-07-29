@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 
-from app.utils.common_util import list_to_dict_v2, round_half_up
-from app.utils.http_util import get_api
+from common.utils.common_util import list_to_dict_v2, round_half_up
+from common.utils.http_util import get_api
 
 
 def _fmt_turnover_yi(amount: float) -> str:

@@ -27,7 +27,7 @@ from quant.data.store import (
     write_daily_raw,
     write_index_daily,
 )
-from quant.timeutil import cn_now
+from common.timeutil import cn_now
 
 # 代码表来源：spot_em 当日快照（含沪深京全A）
 def _all_codes() -> list[str]:

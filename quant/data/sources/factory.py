@@ -6,7 +6,7 @@ from quant.data.sources.protocols import IndexSource, NewsSource, SpotSource
 
 
 def fixture_mode() -> bool:
-    from app.core.config import get_settings
+    from common.config import get_settings
 
     return bool(get_settings().QUANT_USE_LOCAL_FIXTURE)
 

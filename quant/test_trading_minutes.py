@@ -6,7 +6,7 @@ import unittest
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from quant.timeutil import trading_minutes_between
+from common.timeutil import trading_minutes_between
 
 _TZ = ZoneInfo("Asia/Shanghai")
 

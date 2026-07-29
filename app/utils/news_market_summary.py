@@ -8,8 +8,8 @@ from pathlib import Path
 
 import httpx
 
-from app.core.config import Settings
-from app.utils.error_log import log_caught_error, color_red
+from common.config import Settings
+from common.utils.error_log import log_caught_error, color_red
 
 logger = logging.getLogger(__name__)
 

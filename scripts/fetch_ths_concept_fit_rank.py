@@ -14,7 +14,7 @@ import sys
 
 import httpx
 
-from app.utils.ths_concept_fit_rank import get_concept_fit_rank_list, normalize_symbol
+from quant.data.sources.ths.concept_fit_rank import get_concept_fit_rank_list, normalize_symbol
 
 
 def main(argv: list[str] | None = None) -> int:

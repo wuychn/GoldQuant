@@ -6,7 +6,7 @@ import json
 import logging
 from pathlib import Path
 
-from quant.progress_log import log_progress, log_progress_done
+from common.progress_log import log_progress, log_progress_done
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def fixture_mode() -> bool:
-    from app.core.config import get_settings
+    from common.config import get_settings
 
     return bool(get_settings().QUANT_USE_LOCAL_FIXTURE)
 
@@ -54,7 +54,7 @@ def fetch_mode(mode: str) -> dict:
         log_progress(mode, "读取本地 fixture", detail=str(path))
         return load_mode_fixture(mode)
 
-    from app.core.config import get_settings
+    from common.config import get_settings
     from quant.services.market.payload import build_mode_payload_async
 
     log_progress(mode, "直调 service 构建 payload")
@@ -68,7 +68,7 @@ def fetch_mode(mode: str) -> dict:
 
 
 def unwrap_payload(raw: dict) -> dict:
-    from quant.testing.trim import trim_quant_payload
+    from common.testing.trim import trim_quant_payload
 
     data = raw.get("data")
     if isinstance(data, dict):

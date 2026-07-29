@@ -32,7 +32,7 @@ from quant.store.state import (
     save_account,
     save_holdings,
 )
-from quant.timeutil import cn_date_str, cn_datetime_str, cn_time_str
+from common.timeutil import cn_date_str, cn_datetime_str, cn_time_str
 from quant.signals.sell_policy import sell_requires_late_session
 from quant.trading_hours import is_a_share_continuous_auction_window, is_late_session_for_trend_sell
 

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.core.config import Settings
-from app.services.stock_enrich import attach_concepts_to_rows, enrich_stock_rows
-from quant.progress_log import log_progress, log_progress_done
+from common.config import Settings
+from quant.services.enrich import attach_concepts_to_rows, enrich_stock_rows
+from common.progress_log import log_progress, log_progress_done
 
 
 async def run_candidate_pipeline(

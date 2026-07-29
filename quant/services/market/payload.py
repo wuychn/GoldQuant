@@ -37,7 +37,7 @@ from quant.pool.ths_rank_util import (
     enrich_list_with_ths_rank_tags,
     enrich_zt_stats_with_ths_rank,
 )
-from quant.progress_log import log_progress, log_progress_done
+from common.progress_log import log_progress, log_progress_done
 from quant.services.market.intraday import IntradaySession, run_intraday_session
 
 

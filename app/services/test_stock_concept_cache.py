@@ -8,8 +8,8 @@ import unittest
 from datetime import timedelta
 from pathlib import Path
 
-from app.services.stock_concept_cache import StockConceptCache
-from quant.timeutil import cn_datetime_str, cn_now
+from quant.services.concept_cache import StockConceptCache
+from common.timeutil import cn_datetime_str, cn_now
 
 
 class StockConceptCacheTests(unittest.TestCase):

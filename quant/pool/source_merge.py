@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.utils.common_util import extract_stock_code
+from common.utils.common_util import extract_stock_code
 
 
 def _code(row: dict) -> str:
@@ -55,7 +55,7 @@ def merge_prefiltered_sources(
                 item["代码"] = code
                 merged[code] = item
 
-    from app.utils.quant_test_trim import truncate_list_for_test_phase
+    from common.testing.trim import truncate_list_for_test_phase
 
     merged_rows = truncate_list_for_test_phase(list(merged.values()))
     allowed = {_code(r) for r in merged_rows if _code(r)}

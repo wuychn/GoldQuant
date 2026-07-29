@@ -8,13 +8,13 @@ from datetime import timedelta
 from pathlib import Path
 from unittest.mock import patch
 
-from app.services.stock_jbxx_cache import (
+from quant.services.jbxx_cache import (
     StockJbxxCache,
     fetch_jbxx_cached,
     fetch_stock_industry,
     industry_from_jbxx,
 )
-from quant.timeutil import cn_datetime_str, cn_now
+from common.timeutil import cn_datetime_str, cn_now
 
 
 class StockJbxxCacheTests(unittest.TestCase):
@@ -78,7 +78,7 @@ class StockJbxxCacheTests(unittest.TestCase):
                     }
                 }
             }
-            with patch("app.services.stock_jbxx_cache._fetch_jbxx_live", return_value=None):
+            with patch("quant.services.jbxx_cache._fetch_jbxx_live", return_value=None):
                 out = fetch_jbxx_cached("000636", file_cache=cache)
             self.assertEqual(out, {"行业": "元件"})
 
@@ -95,7 +95,7 @@ class StockJbxxCacheTests(unittest.TestCase):
                     }
                 }
             }
-            with patch("app.services.stock_jbxx_cache._fetch_jbxx_live", return_value=None):
+            with patch("quant.services.jbxx_cache._fetch_jbxx_live", return_value=None):
                 ind = fetch_stock_industry("603078", file_cache=cache)
             self.assertEqual(ind, "电子化学品")
 

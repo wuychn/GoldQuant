@@ -9,7 +9,7 @@ from quant.pool.source_merge import merge_prefiltered_sources
 
 
 class SourceMergeTestPhaseTests(unittest.TestCase):
-    @patch("app.utils.quant_test_trim.truncate_list_for_test_phase")
+    @patch("common.testing.trim.truncate_list_for_test_phase")
     def test_merge_respects_test_phase_cap(self, mock_truncate) -> None:
         rows_a = [{"股票代码": "600001", "候选来源": "人气榜"}]
         rows_b = [{"股票代码": "600002", "候选来源": "涨停池"}]

@@ -121,7 +121,7 @@ async def fetch_stock_funds_cached(
     max_failure_penalty_sec: float = 300.0,
 ) -> dict[str, Any]:
     """拉取同花顺个股实时资金流（带缓存与退避重试）。"""
-    from app.core.config import get_settings
+    from common.config import get_settings
 
     settings = get_settings()
     sym = str(symbol).strip()

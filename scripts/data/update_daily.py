@@ -17,7 +17,7 @@ from quant.data.adjust import detect_ex_dividend_codes, refresh_adj_for_codes
 from quant.data.calendar import is_trading_day
 from quant.data.fetch import fetch_index, fetch_spot_em, fetch_trade_calendar
 from quant.data.store import read_daily_raw, write_calendar, write_daily_raw, write_index_daily
-from quant.timeutil import cn_now
+from common.timeutil import cn_now
 
 
 def _latest_date(daily: pd.DataFrame) -> str | None:

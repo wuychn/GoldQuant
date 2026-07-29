@@ -7,7 +7,7 @@ from pathlib import Path
 from quant.push.feishu import get_token, send_msg
 from quant.push.format import format_push_message
 from quant.store.paths import daily_dir, reports_dir
-from quant.timeutil import cn_datetime_str
+from common.timeutil import cn_datetime_str
 
 
 def save_review(mode: str, text: str, *, date_str: str | None = None) -> Path:

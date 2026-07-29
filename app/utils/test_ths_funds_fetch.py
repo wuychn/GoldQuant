@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from app.services.stock_enrich import _resolve_enrich_runtime
-from app.utils.error_log import format_error_detail, http_status_from_exception
+from quant.services.enrich import _resolve_enrich_runtime
+from common.utils.error_log import format_error_detail, http_status_from_exception
 from quant.data.sources.ths.funds import (
     ThsFundsFetchError,
     _retry_delay_sec,
@@ -71,7 +71,7 @@ def test_fetch_uses_cache_within_ttl() -> None:
         payload = {"flash": [], "title": {"zlr": 1, "zlc": 2, "je": 3}}
         with patch("quant.data.sources.ths.funds._fetch_once", new_callable=AsyncMock) as mock_fetch:
             mock_fetch.return_value = payload
-            with patch("app.core.config.get_settings", return_value=_SettingsStub()):
+            with patch("common.config.get_settings", return_value=_SettingsStub()):
                 a = await fetch_stock_funds_cached("600519", ttl_sec=60)
                 b = await fetch_stock_funds_cached("600519", ttl_sec=60)
         assert a == b == payload
@@ -88,7 +88,7 @@ def test_fetch_retries_then_raises_with_status() -> None:
 
         with patch("quant.data.sources.ths.funds._fetch_once", new_callable=AsyncMock) as mock_fetch:
             mock_fetch.side_effect = err
-            with patch("app.core.config.get_settings", return_value=_SettingsStub()):
+            with patch("common.config.get_settings", return_value=_SettingsStub()):
                 with patch("quant.data.sources.ths.funds.asyncio.sleep", new_callable=AsyncMock):
                     with pytest.raises(ThsFundsFetchError) as ei:
                         await fetch_stock_funds_cached("600192", ttl_sec=0, max_retries=2)

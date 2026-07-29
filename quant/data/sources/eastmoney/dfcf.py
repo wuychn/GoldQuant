@@ -6,9 +6,9 @@ except ImportError:  # 测试/CI 无 akshare 时仍可 import；调用 ak 接口
     ak = None
 import requests
 
-from app.utils.common_util import sort_by_field_and_limit, today, get_val, set_field_value, list_to_dict, \
+from common.utils.common_util import sort_by_field_and_limit, today, get_val, set_field_value, list_to_dict, \
     get_n_workdays_ago
-from app.utils.dataframe import dataframe_to_records
+from common.utils.dataframe import dataframe_to_records
 from quant.data.sources.eastmoney.industry import fetch_em_industry_board
 
 _JBXX_EM_URL = "https://push2.eastmoney.com/api/qt/stock/get"

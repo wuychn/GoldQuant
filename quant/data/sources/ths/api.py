@@ -7,13 +7,11 @@ from typing import Any
 from urllib.parse import quote, urlparse
 
 import httpx
-from fastapi import HTTPException
 from fastapi.concurrency import run_in_threadpool
 
-from app.api.deps import SettingsDep
-from app.utils.common_util import filter_exclude_by_key, format_percent, sort_by_field_and_limit, round_half_up
-from app.utils.dataframe import dataframe_to_records
-from app.utils.iwencai_hexin_util import get_iwencai_hexin_v
+from common.utils.common_util import filter_exclude_by_key, format_percent, sort_by_field_and_limit, round_half_up
+from common.utils.dataframe import dataframe_to_records
+from common.utils.iwencai_hexin_util import get_iwencai_hexin_v
 from quant.data.sources.ths.concept import fetch_ths_concept_fund_flow
 from quant.data.sources.ths.hexin import (
     A_SHARE_PREFIXES,
@@ -133,7 +131,7 @@ async def _request_json(
             response.raise_for_status()
             return response.json()
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        raise RuntimeError(f"THS 请求失败（502）: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -290,10 +288,7 @@ def _extract_stock_concepts(wencai_response: dict[str, Any]) -> list[str]:
 def _ensure_wencai_ok(resp: dict[str, Any]) -> None:
     if resp.get("status_code") == 0:
         return
-    raise HTTPException(
-        status_code=502,
-        detail=resp.get("status_msg") or "问财接口返回异常",
-    )
+    raise RuntimeError(resp.get("status_msg") or "问财接口返回异常")
 
 
 async def wcxg(question: str) -> list[str]:

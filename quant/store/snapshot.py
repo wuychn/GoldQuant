@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from quant.timeutil import cn_now
+from common.timeutil import cn_now
 from quant.store.paths import daily_derived, daily_raw, daily_review, daily_trades, ensure_layout, today_str
 
 

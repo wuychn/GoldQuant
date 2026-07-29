@@ -24,7 +24,7 @@ from pathlib import Path
 
 from quant.data.calendar import is_trading_day
 from quant.data.store import read_calendar, read_daily_raw
-from quant.timeutil import cn_now
+from common.timeutil import cn_now
 
 DEFAULT_START = "2021-01-01"
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]

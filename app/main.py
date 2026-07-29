@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.v1.router import api_router
-from app.core.config import Settings, get_settings
+from common.config import Settings, get_settings
 from app.scheduling.quant_scheduler import build_quant_scheduler, shutdown_quant_scheduler
 from app.core.exception_handlers import (
     http_exception_handler,
@@ -20,8 +20,8 @@ from app.core.exception_handlers import (
 )
 from app.core.eastmoney_headers import apply_eastmoney_requests_patch
 from app.core.proxy import apply_process_proxy
-from app.utils.error_log import configure_app_logging, log_caught_error
-from quant.progress_log import configure_progress_logging, log_progress
+from common.utils.error_log import configure_app_logging, log_caught_error
+from common.progress_log import configure_progress_logging, log_progress
 
 
 logger = logging.getLogger(__name__)

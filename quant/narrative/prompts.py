@@ -9,7 +9,15 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from quant.config import LLM_OUTPUT_FORMAT
+
+LLM_OUTPUT_FORMAT = (
+    "\n【输出格式要求】纯文本，禁止使用 markdown 的 #、*、- 等排版符号；"
+    "禁止出现「程序结论」「程序确认」「规则引擎」「全局门禁」「门禁」「标的池」"
+    "「研判要点」「研判中的」「接口数据」「JSON 字段」"
+    "「市场环境」「市场档位」「市场状态」「交易环境」「可参与交易」等系统或内部用语；"
+    "行情强弱用「赚钱效应强/一般/差」，仓位用「仓位控制」及具体比例；"
+    "概念与榜单用「当日涨幅」「资金流入」等自然说法。\n"
+)
 
 
 def prompt_news() -> str:

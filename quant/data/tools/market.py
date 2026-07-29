@@ -15,8 +15,8 @@ from quant.data.sources.rate_limit import alimit
 from quant.data.tools.payload_utils import merge_concept_boards, merge_industry_boards, zt_height
 from quant.pool.sources import prefilter_popularity
 from quant.pool.symbol_filter import apply_symbol_pool_filter
-from quant.progress_log import log_progress
-from quant.timeutil import cn_now
+from common.progress_log import log_progress
+from common.timeutil import cn_now
 
 logger = logging.getLogger(__name__)
 

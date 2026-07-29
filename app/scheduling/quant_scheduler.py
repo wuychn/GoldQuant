@@ -12,8 +12,8 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from app.utils.common_util import is_real_workday_cn
-from app.utils.error_log import log_caught_error, color_red
+from common.utils.common_util import is_real_workday_cn
+from common.utils.error_log import log_caught_error, color_red
 from quant.scheduler.config import load_scheduler_config
 
 logger = logging.getLogger(__name__)

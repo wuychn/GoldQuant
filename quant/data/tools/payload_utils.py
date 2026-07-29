@@ -20,7 +20,7 @@ from quant.data.tools.datetime_norm import (
 )
 from quant.pool.board_normalize import normalize_industry_board_rows
 from quant.store.paths import quant_home
-from quant.testing.trim import maybe_trim_for_test_phase, test_phase_list_limit
+from common.testing.trim import maybe_trim_for_test_phase, test_phase_list_limit
 
 _SH_TZ = ZoneInfo("Asia/Shanghai")
 

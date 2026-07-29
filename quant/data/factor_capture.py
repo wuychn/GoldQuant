@@ -165,7 +165,7 @@ def capture_theme_mom(as_of: str, spot: pd.DataFrame | None = None) -> int:
 
 
 def _stock_concepts(code: str) -> list[str]:
-    from app.services.stock_concept_cache import get_stock_concept_cache
+    from quant.services.concept_cache import get_stock_concept_cache
 
     try:
         cache = get_stock_concept_cache()

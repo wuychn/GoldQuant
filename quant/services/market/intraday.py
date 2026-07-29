@@ -44,7 +44,7 @@ def _intraday_buy_block_with_stats(*, theta: float = 1.0) -> tuple[str, dict[str
     )
     from quant.factors.compose import compose_intraday_alpha
     from quant.factors.library.intraday import spot_row_from_dict
-    from quant.timeutil import cn_now, intraday_minutes_since_open
+    from common.timeutil import cn_now, intraday_minutes_since_open
 
     stats: dict[str, Any] = {"n_executed": 0, "rejected": {}}
     today = cn_now().date()
@@ -113,7 +113,7 @@ def _intraday_sell_block() -> str:
         paper_home_context,
         read_sell_watch,
     )
-    from quant.timeutil import cn_now
+    from common.timeutil import cn_now
 
     today = cn_now().date()
     if not is_trading_day(today):

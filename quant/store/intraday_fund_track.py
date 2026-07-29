@@ -10,7 +10,7 @@ from typing import Any
 
 from quant.market.fund_flow import intraday_main_net_wan
 from quant.store.paths import state_file
-from quant.timeutil import cn_date_str, cn_now
+from common.timeutil import cn_date_str, cn_now
 
 _FILE = "intraday_fund_snapshots.json"
 

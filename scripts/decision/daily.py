@@ -39,7 +39,7 @@ from quant.ops.push import push_text
 from quant.portfolio.target import TargetPortfolio
 from quant.store.paths import reports_dir
 from quant.store.state import get_account, get_holdings, update_holding_exit_meta
-from quant.timeutil import cn_now
+from common.timeutil import cn_now
 
 
 def _prev_trading_day(d: date) -> date | None:

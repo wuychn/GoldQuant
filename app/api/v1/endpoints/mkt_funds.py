@@ -9,7 +9,7 @@ from fastapi.concurrency import run_in_threadpool
 from app.schemas.ak_table import AkTableOut
 from app.schemas.response import Response
 from app.utils.ak_response import wrap_ak_table
-from app.utils.dataframe import dataframe_to_records
+from common.utils.dataframe import dataframe_to_records
 
 router = APIRouter(tags=["资金面"])
 

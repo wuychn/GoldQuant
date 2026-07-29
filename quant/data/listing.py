@@ -35,7 +35,7 @@ def merge_jbxx_listing(mapping: dict[str, str]) -> dict[str, str]:
     """用 jbxx 缓存中的 ``上市时间`` 覆盖/补充 mapping（更接近真实 IPO 日）。"""
     out = dict(mapping)
     try:
-        from app.services.stock_jbxx_cache import get_stock_jbxx_cache
+        from quant.services.jbxx_cache import get_stock_jbxx_cache
 
         cache = get_stock_jbxx_cache()
         data = cache._load()

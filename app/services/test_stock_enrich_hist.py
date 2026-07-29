@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import MagicMock
 
-from app.services.stock_enrich import _hist_max_bars, _rows_last_n_trade_days
+from quant.services.enrich import _hist_max_bars, _rows_last_n_trade_days
 
 
 class HistMaxBarsTests(unittest.TestCase):

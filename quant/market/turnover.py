@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from quant.store.paths import daily_raw
-from quant.timeutil import cn_today
+from common.timeutil import cn_today
 
 _TURNOVER_YI_RE = re.compile(r"([\d.]+)")
 

@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from quant.jobs.market_jobs import run_market_job
-from quant.progress_log import log_progress, log_progress_done, log_progress_error
+from common.progress_log import log_progress, log_progress_done, log_progress_error
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 

@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 import time
+import re
 
 import requests
 
-from app.core.config import get_settings
-from app.utils.llm_client import (
+from common.config import get_settings
+from common.utils.llm_client import (
     extract_text_from_llm_response,
     format_llm_request_error,
     post_llm_chat,
 )
-from quant.config import _RE_THINKING
+_RE_THINKING = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL)
 
 
 def call_llm(

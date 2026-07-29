@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.utils.ths_rank_fetch import (
+from common.utils.ths_rank_fetch import (
     _retry_delay_sec,
     fetch_with_retry,
     reset_ths_rank_fetch_state_for_tests,
@@ -34,7 +34,7 @@ def test_retry_delay_grows_with_failures() -> None:
 def test_fetch_returns_default_after_retries_exhausted() -> None:
     async def _run() -> None:
         fn = AsyncMock(side_effect=ConnectionError("connection aborted"))
-        with patch("app.core.config.get_settings", return_value=_SettingsStub()):
+        with patch("common.config.get_settings", return_value=_SettingsStub()):
             result = await fetch_with_retry("量价齐升", fn, default=[], progress_scope="test")
         assert result == []
         assert fn.await_count == 3
@@ -45,7 +45,7 @@ def test_fetch_returns_default_after_retries_exhausted() -> None:
 def test_fetch_succeeds_on_second_attempt() -> None:
     async def _run() -> None:
         fn = AsyncMock(side_effect=[ConnectionError("fail"), [{"code": "600519"}]])
-        with patch("app.core.config.get_settings", return_value=_SettingsStub()):
+        with patch("common.config.get_settings", return_value=_SettingsStub()):
             result = await fetch_with_retry("持续上涨", fn, default=[], progress_scope="test")
         assert result == [{"code": "600519"}]
         assert fn.await_count == 2

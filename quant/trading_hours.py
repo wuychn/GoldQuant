@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from quant.timeutil import CN_TZ, cn_now, ensure_cn_tz
+from common.timeutil import CN_TZ, cn_now, ensure_cn_tz
 from quant.config import trading_time_checks_enabled
 _AM_START = (9, 30)
 _AM_END = (11, 30)
@@ -81,6 +81,6 @@ def is_a_share_continuous_auction_window(now: datetime | None = None) -> bool:
     )
     if not in_window:
         return False
-    from app.utils.common_util import _is_real_workday_single_day_api
+    from common.utils.common_util import _is_real_workday_single_day_api
 
     return _is_real_workday_single_day_api(now.date())

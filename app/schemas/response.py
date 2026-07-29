@@ -20,6 +20,6 @@ class Response(BaseModel):
         value = handler(value)
         if value is None:
             return value
-        from app.utils.quant_test_trim import maybe_trim_for_test_phase
+        from common.testing.trim import maybe_trim_for_test_phase
 
         return maybe_trim_for_test_phase(value)

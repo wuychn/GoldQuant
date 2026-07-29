@@ -63,7 +63,7 @@ def main() -> int:
     parser.add_argument("--fixture", action="store_true", help="对比 service vs data/*.json")
     args = parser.parse_args()
 
-    from app.core.config import get_settings
+    from common.config import get_settings
     from quant.data_fetch import load_mode_fixture
     from quant.services.market.payload import build_mode_payload
 

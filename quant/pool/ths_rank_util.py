@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.utils.common_util import (
+from common.utils.common_util import (
     extract_stock_code,
     filter_symbol_pool_rows,
     is_allowed_symbol_pool_code,

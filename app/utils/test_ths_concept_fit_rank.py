@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.utils.ths_concept_fit_rank import parse_concept_fit_ranks
+from quant.data.sources.ths.concept_fit_rank import parse_concept_fit_ranks
 
 _SAMPLE_HTML = """
 <div class="f14 newconcept">

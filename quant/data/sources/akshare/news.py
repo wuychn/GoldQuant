@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.utils.common_util import get_val
-from app.utils.dataframe import dataframe_to_records
+from common.utils.common_util import get_val
+from common.utils.dataframe import dataframe_to_records
 from quant.data.sources.rate_limit import with_limit
 
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.core.config import Settings
+from common.config import Settings
 from quant.pool import candidate_sources
 
 

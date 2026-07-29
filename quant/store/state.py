@@ -17,7 +17,7 @@ import os
 import tempfile
 from datetime import date, datetime
 
-from quant.timeutil import cn_date_str, cn_datetime_str, cn_now, cn_today
+from common.timeutil import cn_date_str, cn_datetime_str, cn_now, cn_today
 from pathlib import Path
 from typing import Any
 

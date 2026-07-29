@@ -13,7 +13,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from quant.store.paths import quant_home
-from quant.timeutil import cn_now
+from common.timeutil import cn_now
 
 
 def _legacy_calendar_path() -> Path:
@@ -116,7 +116,7 @@ def _is_workday_fallback(d: date) -> bool:
     if d.weekday() >= 5:
         return False
     try:
-        from app.utils.common_util import is_real_workday_cn
+        from common.utils.common_util import is_real_workday_cn
 
         return bool(is_real_workday_cn(d))
     except Exception:

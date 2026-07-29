@@ -3,28 +3,15 @@
 from __future__ import annotations
 
 import copy
-import re
 from functools import lru_cache
 from pathlib import Path
 
 import yaml
 
-from app.core.config import get_settings
+from common.config import get_settings
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
 _PACKAGE_QUANT_YML = _PACKAGE_DIR / "config" / "quant.yml"
-STRATEGY_FILE = _PACKAGE_DIR / "strategy.md"
-BASE_URL = "http://localhost:8085"
-
-LLM_OUTPUT_FORMAT = (
-    "\n【输出格式要求】纯文本，禁止使用 markdown 的 #、*、- 等排版符号；"
-    "禁止出现「程序结论」「程序确认」「规则引擎」「全局门禁」「门禁」「标的池」"
-    "「研判要点」「研判中的」「接口数据」「JSON 字段」"
-    "「市场环境」「市场档位」「市场状态」「交易环境」「可参与交易」等系统或内部用语；"
-    "行情强弱用「赚钱效应强/一般/差」，仓位用「仓位控制」及具体比例；"
-    "概念与榜单用「当日涨幅」「资金流入」等自然说法。\n"
-)
-_RE_THINKING = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL)
 
 
 def get_feishu_config() -> tuple[str, str, str]:

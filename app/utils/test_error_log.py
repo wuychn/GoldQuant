@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unittest
 
-from app.utils.error_log import format_error_detail, format_http_response_body
+from common.utils.error_log import format_error_detail, format_http_response_body
 
 
 class ErrorLogTests(unittest.TestCase):

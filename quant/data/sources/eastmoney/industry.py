@@ -97,7 +97,7 @@ def _fetch_em_industry_board_impl(*, timeout: float = 20, retries: int = 3) -> l
     try:
         import akshare as ak
 
-        from app.utils.dataframe import dataframe_to_records
+        from common.utils.dataframe import dataframe_to_records
 
         logger.warning("东财直连失败，回退 akshare.stock_board_industry_name_em")
         return dataframe_to_records(ak.stock_board_industry_name_em())

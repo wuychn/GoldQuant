@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from app.core.config import Settings
+from common.config import Settings
 
 
 def apply_process_proxy(settings: Settings) -> None:
