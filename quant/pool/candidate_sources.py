@@ -5,9 +5,9 @@ from __future__ import annotations
 from typing import Any
 
 from app.core.config import Settings
-from app.utils.dfcf_util import ztgc
+from quant.data.sources.eastmoney import ztgc
 from app.utils.ths_rank_fetch import fetch_with_retry
-from app.utils.ths_util import cxfl, cxg, hot_stock, ljqs, lxsz
+from quant.data.sources.ths import cxfl, cxg, hot_stock, ljqs, lxsz
 from quant.pool.candidate_config import (
     PAYLOAD_KEY_CXFL,
     PAYLOAD_KEY_CXG,

@@ -63,7 +63,7 @@ def read_industry_snapshot(as_of: str) -> dict[str, str]:
 def fetch_current_industry_map() -> dict[str, str]:
     """拉取当前东财一级行业（供 update_daily 当日落库）。"""
     try:
-        from app.utils.industry_board_fetch import fetch_em_industry_board
+        from quant.data.sources.eastmoney.industry import fetch_em_industry_board
 
         rows = fetch_em_industry_board()
         out: dict[str, str] = {}

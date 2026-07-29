@@ -9,15 +9,14 @@ from typing import Any, Literal
 
 from app.core.config import Settings
 from app.utils.common_util import get_n_workdays_ago, list_to_dict_v2
-from app.utils.dfcf_util import hist, pk
+from quant.data.sources.eastmoney import hist, pk, zj
 from app.utils.quant_archive import (
     daily_hist_fetch_start_date,
     load_computed_metrics_zh,
     load_merge_write_daily_bars,
 )
 from app.utils.quant_market_enrich import stock_intraday_minute_zh
-from app.utils.ths_util import ggzjl, wcxg
-from app.utils.ths_funds_fetch import ThsFundsFetchError
+from quant.data.sources.ths import ThsFundsFetchError, ggzjl, wcxg
 from app.utils.error_log import log_caught_error
 from quant.progress_log import log_progress, log_progress_count
 
@@ -431,7 +430,7 @@ async def _ggzjl(symbol: str) -> dict | None:
 
 async def _fund_flow_daily(symbol: str, *, days: int = 10) -> list[dict] | None:
     try:
-        from app.utils.dfcf_util import zj
+        from quant.data.sources.eastmoney import zj
 
         rows = await asyncio.to_thread(zj, symbol)
         if not isinstance(rows, list) or not rows:

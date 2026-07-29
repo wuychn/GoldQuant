@@ -1,7 +1,4 @@
-"""量化流水线定时任务：触发 r3 CLI（ops + 日决策）。
-
-子进程调用 ``python -m quant <mode>``，避免拖垮 Web worker。
-"""
+"""量化流水线定时任务：轻推送 in-process，日决策/maintain 仍子进程。"""
 
 from __future__ import annotations
 
@@ -10,7 +7,6 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -18,9 +14,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.utils.common_util import is_real_workday_cn
 from app.utils.error_log import log_caught_error, color_red
-
-if TYPE_CHECKING:
-    from app.core.config import Settings
+from quant.scheduler.config import load_scheduler_config
 
 logger = logging.getLogger(__name__)
 
@@ -92,41 +86,58 @@ def _invoke_quant_cli(mode: str, *extra: str) -> None:
     _run_cmd([sys.executable, "-m", "quant", mode, *extra], f"quant {mode}")
 
 
+def _invoke_market_in_process(mode: str) -> None:
+    try:
+        from quant.jobs.market_jobs import run_market_job
+
+        run_market_job(mode, push=True)
+    except Exception as e:
+        log_caught_error(logger, f"[quant-scheduler] in-process {mode}", e)
+
+
+def _run_market_mode(mode: str) -> None:
+    sched_cfg = load_scheduler_config()
+    if mode in sched_cfg.get("in_process_modes", []):
+        _invoke_market_in_process(mode)
+    else:
+        _invoke_quant_cli(mode)
+
+
 def _invoke_python_module(module: str) -> None:
     """跑 ``python -m <module>``（如 scripts.data.update_daily）。"""
     _run_cmd([sys.executable, "-m", module], module)
 
 
-def _job_news(_settings: Settings) -> None:
-    _invoke_quant_cli("news")
+def _job_news() -> None:
+    _run_market_mode("news")
 
 
-def _job_pre_market(_settings: Settings) -> None:
+def _job_pre_market() -> None:
     if not is_real_workday_cn():
         return
-    _invoke_quant_cli("pre_market")
+    _run_market_mode("pre_market")
 
 
-def _job_during_market(_settings: Settings) -> None:
+def _job_during_market() -> None:
     if not is_real_workday_cn():
         return
-    _invoke_quant_cli("during_market")
+    _run_market_mode("during_market")
 
 
-def _job_post_market_lunch(_settings: Settings) -> None:
+def _job_post_market_lunch() -> None:
     if not is_real_workday_cn():
         return
-    _invoke_quant_cli("post_market_lunch")
+    _run_market_mode("post_market_lunch")
 
 
-def _job_daily_decision(_settings: Settings) -> None:
+def _job_daily_decision() -> None:
     """晚间选股 + 制定明日计划（作战池/卖出监控），不撮合；买卖在 T+1 盘中。"""
     if not is_real_workday_cn():
         return
     _invoke_quant_cli("daily_decision")
 
 
-def _job_maintain_daily(_settings: Settings) -> None:
+def _job_maintain_daily() -> None:
     """收盘后数据维护（无库建库 / 查漏补漏 / 当日增量），仅交易日。
 
     见 ``scripts/data/maintain.py``；须早于 ``daily_decision``，日决策依赖当日数据。
@@ -136,99 +147,91 @@ def _job_maintain_daily(_settings: Settings) -> None:
     _invoke_python_module("scripts.data.maintain")
 
 
-def _job_prefetch_stock_concepts(_settings: Settings) -> None:
-    if not _settings.QUANT_SCHED_PREFETCH_CONCEPTS_ENABLED:
+def _job_prefetch_stock_concepts(sched_cfg: dict) -> None:
+    if not sched_cfg.get("prefetch_concepts_enabled"):
         return
     _invoke_quant_cli("prefetch_concepts")
 
 
-def build_quant_scheduler(settings: Settings) -> BackgroundScheduler | None:
-    if not settings.QUANT_SCHEDULER_ENABLED:
+def build_quant_scheduler() -> BackgroundScheduler | None:
+    sched_cfg = load_scheduler_config()
+    if not sched_cfg.get("enabled", True):
         logger.debug("[quant-scheduler] 已禁用")
         return None
+    tz_name = str(sched_cfg.get("timezone") or "Asia/Shanghai")
     try:
-        tz = ZoneInfo(settings.QUANT_SCHED_TIMEZONE)
+        tz = ZoneInfo(tz_name)
     except ZoneInfoNotFoundError as e:
-        raise ValueError(f"无效的 IANA 时区: {settings.QUANT_SCHED_TIMEZONE}") from e
+        raise ValueError(f"无效的 IANA 时区: {tz_name}") from e
 
     sched = BackgroundScheduler(timezone=tz)
     defaults = dict(
         max_instances=1,
         coalesce=True,
-        misfire_grace_time=max(120, settings.QUANT_SCHED_MISFIRE_GRACE_SEC),
+        misfire_grace_time=max(120, int(sched_cfg.get("misfire_grace_sec", 600))),
     )
 
-    hours = _parse_int_hours_csv(settings.QUANT_SCHED_NEWS_HOURS)
+    hours = _parse_int_hours_csv(str(sched_cfg.get("news_hours") or ""))
     hour_spec = ",".join(str(h) for h in hours)
     sched.add_job(
         _job_news,
-        CronTrigger(timezone=tz, hour=hour_spec, minute=settings.QUANT_SCHED_NEWS_MINUTE),
-        args=[settings],
+        CronTrigger(timezone=tz, hour=hour_spec, minute=int(sched_cfg.get("news_minute", 0))),
         id="quant_news",
         **defaults,
     )
 
-    ph, pm = _parse_hh_mm(settings.QUANT_SCHED_PRE_MARKET_TIME)
+    ph, pm = _parse_hh_mm(str(sched_cfg.get("pre_market_time") or "09:25"))
     sched.add_job(
         _job_pre_market,
         CronTrigger(timezone=tz, hour=ph, minute=pm),
-        args=[settings],
         id="quant_pre_market",
         **defaults,
     )
 
-    during_times = _parse_time_list_csv(settings.QUANT_SCHED_DURING_MARKET_TIMES)
+    during_times = _parse_time_list_csv(str(sched_cfg.get("during_market_times") or ""))
     for i, (h, m) in enumerate(during_times):
         sched.add_job(
             _job_during_market,
             CronTrigger(timezone=tz, hour=h, minute=m),
-            args=[settings],
             id=f"quant_during_{i:03d}_{h:02d}{m:02d}",
             **defaults,
         )
 
-    lh, lm = _parse_hh_mm(settings.QUANT_SCHED_POST_MARKET_LUNCH_TIME)
+    lh, lm = _parse_hh_mm(str(sched_cfg.get("post_market_lunch_time") or "11:50"))
     sched.add_job(
         _job_post_market_lunch,
         CronTrigger(timezone=tz, hour=lh, minute=lm),
-        args=[settings],
         id="quant_post_market_lunch",
         **defaults,
     )
 
-    # 收盘后数据维护（默认 16:00）：无库建库 / 查漏补漏 / 当日增量；须早于日决策
-    uph, upm = _parse_hh_mm(settings.QUANT_SCHED_MAINTAIN_DAILY_TIME)
+    uph, upm = _parse_hh_mm(str(sched_cfg.get("maintain_daily_time") or "16:00"))
     sched.add_job(
         _job_maintain_daily,
         CronTrigger(timezone=tz, hour=uph, minute=upm),
-        args=[settings],
         id="quant_maintain_daily",
         **defaults,
     )
 
-    # 晚间选股 + 明日计划（post_market_evening 已并入此任务）：作战池 + 卖出监控，不撮合
-    dh, dm = _parse_hh_mm(settings.QUANT_SCHED_DAILY_DECISION_TIME)
+    dh, dm = _parse_hh_mm(str(sched_cfg.get("daily_decision_time") or "20:10"))
     sched.add_job(
         _job_daily_decision,
         CronTrigger(timezone=tz, hour=dh, minute=dm),
-        args=[settings],
         id="quant_daily_decision",
         **defaults,
     )
 
-    if settings.QUANT_SCHED_PREFETCH_CONCEPTS_ENABLED:
-        ch, cm = _parse_hh_mm(settings.QUANT_SCHED_PREFETCH_CONCEPTS_TIME)
+    if sched_cfg.get("prefetch_concepts_enabled"):
+        ch, cm = _parse_hh_mm(str(sched_cfg.get("prefetch_concepts_time") or "05:00"))
         sched.add_job(
-            _job_prefetch_stock_concepts,
+            lambda: _job_prefetch_stock_concepts(sched_cfg),
             CronTrigger(timezone=tz, hour=ch, minute=cm),
-            args=[settings],
             id="quant_prefetch_stock_concepts",
             **defaults,
         )
 
-    # 旧 weekly ML / 旧 backtest 已退役（改用 scripts/research + scripts/backtest）
     logger.info(
-        "[quant-scheduler] r3 已注册: news / pre / during×%d / lunch / evening / maintain_daily / daily_decision",
+        "[quant-scheduler] r3 已注册: news / pre / during×%d / lunch / maintain_daily / daily_decision",
         len(during_times),
     )
     return sched

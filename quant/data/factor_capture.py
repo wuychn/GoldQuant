@@ -90,7 +90,7 @@ def capture_fund_flow(as_of: str, spot: pd.DataFrame, universe_codes: list[str] 
 
 def _fetch_flow_5d(code: str) -> float | None:
     try:
-        from app.utils.dfcf_util import zj
+        from quant.data.sources.eastmoney import zj
 
         recs = zj(code) or []
         if len(recs) < 5:

@@ -172,7 +172,7 @@ def _fetch_jbxx_live(symbol: str) -> dict[str, Any] | None:
     if not key:
         return None
     try:
-        from app.utils.dfcf_util import jbxx
+        from quant.data.sources.eastmoney import jbxx
 
         raw = jbxx(key)
         return raw if isinstance(raw, dict) and raw else None

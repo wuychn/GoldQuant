@@ -1,4 +1,4 @@
-"""r3 运维入口：拉取 → 生成正文 → 推送。"""
+"""r3 运维入口：直调 service → 生成正文 → 推送。"""
 
 from __future__ import annotations
 
@@ -7,53 +7,19 @@ import subprocess
 import sys
 from pathlib import Path
 
-from quant.data_fetch import fetch_mode
-from quant.ops.modes import (
-    build_during_body,
-    build_evening_body,
-    build_lunch_body,
-    build_news_body,
-    build_pre_market_body,
-)
-from quant.ops.push import push_text
+from quant.jobs.market_jobs import run_market_job
 from quant.progress_log import log_progress, log_progress_done, log_progress_error
-
-_LABELS = {
-    "news": "新闻聚焦",
-    "pre_market": "开盘啦",
-    "during_market": "智能盯盘",
-    "post_market_lunch": "午间复盘",
-    "post_market_evening": "收盘复盘",
-}
-
-_BUILDERS = {
-    "news": build_news_body,
-    "pre_market": build_pre_market_body,
-    "during_market": build_during_body,
-    "post_market_lunch": build_lunch_body,
-    "post_market_evening": build_evening_body,
-}
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def run_mode(mode: str, timestamp: str = "", *, push: bool = True) -> str:
-    if mode not in _BUILDERS:
-        raise SystemExit(f"未知模式: {mode}；可用: {', '.join(_BUILDERS)}")
-    label = _LABELS[mode]
-    log_progress(mode, f"开始 {label}")
+    log_progress(mode, f"开始 job {mode}")
     try:
-        raw = fetch_mode(mode)
+        msg = run_market_job(mode, push=push)
     except Exception as e:
-        log_progress_error(mode, "数据拉取失败", detail=str(e))
+        log_progress_error(mode, "job 失败", detail=str(e))
         raise
-    try:
-        body = _BUILDERS[mode](raw)
-    except Exception as e:
-        log_progress_error(mode, "正文生成失败", detail=str(e))
-        raise
-    msg = push_text(label, body, mode=mode, push=push)
-    log_progress_done(mode, f"{label} 完成")
     print(msg)
     return msg
 
@@ -88,4 +54,3 @@ def run_daily_decision(*, push: bool = True, dry_run: bool = False) -> str:
         raise SystemExit(proc.returncode)
     log_progress_done("daily_decision", "日决策完成")
     return proc.stdout or ""
-

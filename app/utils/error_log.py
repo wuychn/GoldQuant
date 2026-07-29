@@ -105,7 +105,7 @@ def _origin(exc: BaseException) -> tuple[str, int, str]:
 def http_status_from_exception(exc: BaseException) -> int | None:
     """从异常链提取远端 HTTP 状态码。"""
     try:
-        from app.utils.ths_funds_fetch import ThsFundsFetchError
+        from quant.data.sources.ths.funds import ThsFundsFetchError
 
         if isinstance(exc, ThsFundsFetchError) and exc.http_status is not None:
             return exc.http_status

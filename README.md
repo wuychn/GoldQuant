@@ -4,7 +4,7 @@ A 股日频波段量化辅助系统：**FastAPI 数据聚合服务** + **IC 因�
 
 > 本仓库仅做数据聚合与纸面模拟交易辅助，**不构成投资建议**。行情来自 AKShare / 东财 / 同花顺等第三方，存在延迟、字段变更或访问失败的可能。
 
-> 架构、因子/组合/出场指标与交易闭环见 **[docs/R3_ARCHITECTURE.md](docs/R3_ARCHITECTURE.md)**；运维 CLI / 落盘 / 飞书见 **[docs/R3_OPS.md](docs/R3_OPS.md)**。
+> 完整文档见 **[docs/README.md](docs/README.md)**（架构、因子、运维、配置、API）。
 
 ---
 
@@ -67,8 +67,7 @@ GoldQuant/
 │   ├── narrative/{llm,prompts} # LLM 叙述（仅 news 摘要，运维推送活依赖）
 │   └── config.py / timeutil.py / trading_hours.py / data_fetch.py
 ├── scripts/{decision,backtest,data,factors,research}/
-├── docs/R3_ARCHITECTURE.md     # 架构 / 指标 / 交易闭环（主文档）
-├── docs/R3_OPS.md              # 运维 CLI / 落盘 / 飞书
+├── docs/                       # 文档（见 docs/README.md）
 └── requirements.txt
 ```
 
@@ -212,7 +211,7 @@ T+1 盘中 during_market（择时层，每 7 分钟）
 raw × direction → winsorize(1%,99%) → 行业+log市值中性 → z-score → Σ w_i z_i = alpha
 ```
 
-`compose_alpha`（`quant/factors/compose.py`）= 加权 z-score 均值。16 个因子（动量 mom_20/60/120_20、效率比 eff_ratio_60、方向反转 flip_rate_60、波动 vol_60、距高 dist_high_252、均线 ma_spread/spread_accel_5/ma_slope_20、放量 vol_ratio_5_20、换手 turnover_z_60、量价 vol_price_corr_20、资金 flow_ratio_5、主题 theme_mom、人气 hot_rank_z）的默认权重与方向见 [R3_ARCHITECTURE.md §5](docs/R3_ARCHITECTURE.md#5-因子层l1指标含义与计算)。
+`compose_alpha`（`quant/factors/compose.py`）= 加权 z-score 均值。20 个日频因子 + 5 个盘中因子的含义、公式与权重见 [FACTORS.md](docs/FACTORS.md)。
 
 #### 3.3b 盘中因子层（择时，`quant/factors/library/intraday.py`）
 
@@ -246,7 +245,7 @@ raw × direction → winsorize(1%,99%) → 行业+log市值中性 → z-score �
 | `concept_cap` | 0.40 | 单概念上限 |
 | `buffer_abs`/`min_trade` | ~1% | 压换手（偏差过小不调仓） |
 
-排名 buffer：`n_enter < rank ≤ n_exit` 的已持仓不因排名抖动频繁进出。完整说明见 [§6](docs/R3_ARCHITECTURE.md#6-组合层l2参数与计算)。
+排名 buffer：`n_enter < rank ≤ n_exit` 的已持仓不因排名抖动频繁进出。完整说明见 [ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
 ### 3.5 时序出场（L4，`quant/exit/rules.py`）
 
@@ -260,7 +259,7 @@ raw × direction → winsorize(1%,99%) → 行业+log市值中性 → z-score �
 | 时间止损 | `time_stop` | 持有 > 20 交易日**且浮盈 < 0** |
 | 排名出场 | 经 L2 | 排名 > `n_exit` → 目标权重 0 |
 
-完整说明见 [§7](docs/R3_ARCHITECTURE.md#7-出场层l4规则与计算)。
+完整说明见 [ARCHITECTURE.md §7](docs/ARCHITECTURE.md#7-l4-出场规则)。
 
 ### 3.6 纸面撮合（L3，`quant/execution/executor.py` + `decision/paper_execute.py`）
 
@@ -309,7 +308,7 @@ python -m quant prefetch_concepts
 
 ### 4.2 建议调度
 
-与内置调度器默认一致（工作日，`QUANT_SCHEDULER_ENABLED=true`，`app/scheduling/quant_scheduler.py`）：
+与内置调度器默认一致（工作日，`scheduler.enabled=true`，见 `quant/config/quant.yml` → `app/scheduling/quant_scheduler.py`）：
 
 | 时间 | 模式 |
 |------|------|
@@ -319,10 +318,9 @@ python -m quant prefetch_concepts
 | 09:37–15:00 每 7 分钟 | `during_market` |
 | 11:50 | `post_market_lunch` |
 | 16:00 | `maintain`（数据维护：无库建库 / 查漏补漏 / 当日增量） |
-| 20:10 | `post_market_evening` |
-| 20:45 | `daily_decision` |
+| 20:10 | `daily_decision`（含原 post_market_evening 职责） |
 
-时点可在 `.env` 覆盖（如 `GOLDQUANT_QUANT_SCHED_DURING_MARKET_TIMES`、`GOLDQUANT_QUANT_SCHED_MAINTAIN_DAILY_TIME`）。也可用 cron / 任务计划调用 `python -m quant <mode>`；工作目录为项目根并激活 venv。
+时点请在 `quant/config/quant.yml` 或 `~/.quant/config/quant.yml` 的 `scheduler` 段修改（如 `during_market_times`、`maintain_daily_time`）。也可用 cron / 任务计划调用 `python -m quant <mode>`；工作目录为项目根并激活 venv。
 
 **数据维护任务（16:00 `maintain`）**：`scripts/data/maintain.py` 自愈离线库——无库则全量 `build_daily`，有库则扫描交易日历缺口并用 `build_daily --ignore-existing` 回补，最后跑 `update_daily` 当日增量；拉取全程指数退避 + 限流加倍兜底（`quant/data/fetch.py:_retry`）。**首次建议手动** `python -m scripts.data.build_daily --start 2021-01-01 --workers 3`（夜间，数千只历史耗时数小时），之后 `maintain` 只做增量/补漏。手动补历史缺口：`python -m scripts.data.build_daily --start <起> --end <止> --ignore-existing`。
 
@@ -357,11 +355,11 @@ python -m scripts.backtest.run --start 2026-06-17 --end 2026-06-26 --cash 100000
 
 ### 5.1 组合参数
 
-默认：`quant/config/quant.yml`（包内）；用户覆盖：`~/.quant/config/quant.yml`（deep merge）。组合参数见 §3.4，因子权重见 [R3_ARCHITECTURE.md §5](docs/R3_ARCHITECTURE.md#5-因子层l1指标含义与计算)。
+默认：`quant/config/quant.yml`（包内）；用户覆盖：`~/.quant/config/quant.yml`（deep merge）。详见 [CONFIG.md](docs/CONFIG.md)。
 
 ### 5.2 硬门禁与撮合规则
 
-`quant.yml` 的 `gates:` 段含：标的池、极端熔断、每日亏损限额、止损冷却、分档仓位上限、佣金/印花税/过户费/滑点、涨跌停、T+1 等（`quant/execution/sim_rules.py` 读取）。
+`quant.yml` 的 `gates:` 段含：标的池、极端熔断、日内亏损限额、止损冷却、佣金/印花税/过户费/滑点、T+1 等（`sim_rules.py` / `risk_gate.py` 读取）。涨跌停幅度由代码按板块/ST 自动判定，不在 yml 配置。完整键说明见 [CONFIG.md](docs/CONFIG.md)。
 
 `trading.time_validation_enabled: false` 时任意时刻可模拟成交（联调用）；实盘请改为 `true`。
 

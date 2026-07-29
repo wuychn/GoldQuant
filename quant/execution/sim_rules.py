@@ -21,8 +21,6 @@ class TradeSimConfig:
     slippage_sqrt_max_pct: float = 0.02
     partial_fill_enabled: bool = False
     participation_rate: float = 0.1
-    main_limit_pct: float = 9.9
-    gem_limit_pct: float = 19.9
 
 
 def load_trade_sim_config() -> TradeSimConfig:
@@ -45,8 +43,6 @@ def load_trade_sim_config() -> TradeSimConfig:
         slippage_sqrt_max_pct=float(raw.get("slippage_sqrt_max_pct", 0.02)),
         partial_fill_enabled=bool(raw.get("partial_fill_enabled", False)),
         participation_rate=float(raw.get("participation_rate", 0.1)),
-        main_limit_pct=float(raw.get("main_limit_pct", 9.9)),
-        gem_limit_pct=float(raw.get("gem_limit_pct", 19.9)),
     )
 
 

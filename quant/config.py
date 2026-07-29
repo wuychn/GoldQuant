@@ -62,27 +62,16 @@ def load_quant_config() -> dict:
 
 
 def _validate_config_quiet(cfg: dict) -> None:
-    try:
-        from quant.research.config_schema import validate_quant_config
+    from quant.yml_schema import validate_quant_config
 
-        errors = validate_quant_config(cfg)
-        if errors:
-            import logging
-
-            logging.getLogger("quant.config").warning("quant.yml 校验: %s", "; ".join(errors))
-    except Exception:
-        pass
+    errors = validate_quant_config(cfg)
+    if errors:
+        raise ValueError(f"quant.yml 校验失败: {'; '.join(errors)}")
 
 
 @lru_cache(maxsize=1)
 def load_gates_config() -> dict:
     return copy.deepcopy(load_quant_config().get("gates") or {})
-
-
-@lru_cache(maxsize=1)
-def load_push_config() -> dict:
-    """推送展示过滤配置（如自选价格区间）。仅影响推送展示，不影响决策。"""
-    return copy.deepcopy(load_quant_config().get("push") or {})
 
 
 def load_factor_weights(as_of: str | None = None) -> dict[str, float] | None:
@@ -148,7 +137,6 @@ def load_factor_weights_info(as_of: str | None = None) -> dict | None:
 def reload_config_cache() -> None:
     load_quant_config.cache_clear()
     load_gates_config.cache_clear()
-    load_push_config.cache_clear()
 
 
 def trading_time_checks_enabled() -> bool:

@@ -10,7 +10,7 @@ import pytest
 
 from app.services.stock_enrich import _resolve_enrich_runtime
 from app.utils.error_log import format_error_detail, http_status_from_exception
-from app.utils.ths_funds_fetch import (
+from quant.data.sources.ths.funds import (
     ThsFundsFetchError,
     _retry_delay_sec,
     fetch_stock_funds_cached,
@@ -69,7 +69,7 @@ def test_http_status_from_httpx() -> None:
 def test_fetch_uses_cache_within_ttl() -> None:
     async def _run() -> None:
         payload = {"flash": [], "title": {"zlr": 1, "zlc": 2, "je": 3}}
-        with patch("app.utils.ths_funds_fetch._fetch_once", new_callable=AsyncMock) as mock_fetch:
+        with patch("quant.data.sources.ths.funds._fetch_once", new_callable=AsyncMock) as mock_fetch:
             mock_fetch.return_value = payload
             with patch("app.core.config.get_settings", return_value=_SettingsStub()):
                 a = await fetch_stock_funds_cached("600519", ttl_sec=60)
@@ -86,10 +86,10 @@ def test_fetch_retries_then_raises_with_status() -> None:
         resp = httpx.Response(503, request=req, text="busy")
         err = httpx.HTTPStatusError("503", request=req, response=resp)
 
-        with patch("app.utils.ths_funds_fetch._fetch_once", new_callable=AsyncMock) as mock_fetch:
+        with patch("quant.data.sources.ths.funds._fetch_once", new_callable=AsyncMock) as mock_fetch:
             mock_fetch.side_effect = err
             with patch("app.core.config.get_settings", return_value=_SettingsStub()):
-                with patch("app.utils.ths_funds_fetch.asyncio.sleep", new_callable=AsyncMock):
+                with patch("quant.data.sources.ths.funds.asyncio.sleep", new_callable=AsyncMock):
                     with pytest.raises(ThsFundsFetchError) as ei:
                         await fetch_stock_funds_cached("600192", ttl_sec=0, max_retries=2)
         assert ei.value.http_status == 503

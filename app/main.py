@@ -41,7 +41,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         apply_process_proxy(settings)
         sched = None
         try:
-            sched = build_quant_scheduler(settings)
+            sched = build_quant_scheduler()
         except Exception as e:
             log_caught_error(logger, "量化定时任务构建失败，服务继续运行但不会自动跑 quant 流水线", e)
         if sched is not None:

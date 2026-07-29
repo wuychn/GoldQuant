@@ -1,6 +1,9 @@
 gates:
   trading:
     time_validation_enabled: true
+    daily_loss_limit_pct: -3.0
+    stoploss_cooldown_days: 3
+    block_same_day_rebuy_after_sell: true
     simulation:
       commission_rate: 0.0001
       min_commission: 5.0
@@ -12,57 +15,14 @@ gates:
       slippage_max_pct: 0.008
       partial_fill_enabled: true
       participation_rate: 0.1
-      main_limit_pct: 9.9
-      gem_limit_pct: 19.9
   symbol_pool:
     prefixes:
     - '60'
     - '00'
     - '30'
     exclude_st: true
-    # [僵尸 r1] 候选池过滤未读此键；universe 默认 min_list_days=120（schema.py）
-    min_listing_days: 60
   circuit_breaker:
     index_drop_pct: -2.0
-  daily_loss_limit_pct: -3.0
-  stoploss_cooldown_days: 3
-  block_same_day_rebuy_after_sell: true
-  # [僵尸 r1] regime 分档总仓位；r3 TargetPortfolio 用 target_vol + MVO，不读此段
-  position:
-    强势:
-      total_pct: 80
-      max_stocks: 5
-    震荡:
-      total_pct: 50
-      max_stocks: 3
-    弱势:
-      total_pct: 20
-      max_stocks: 2
-  buy:
-    pre_market:
-      max_change_pct: 8.0
-    during_market:
-      max_change_pct: 8.0
-      max_change_by_kind:
-        回调企稳: 8.0
-        上升途中: 9.5
-      intraday:
-        # [僵尸 r1] 盘中买入门禁；r3 用 compose_intraday_alpha（见 ops/modes._intraday_buy_block）
-        enabled: true
-        require_above_avg: true
-        avg_margin_pct: 0.0
-        skip_strength_min_day_chg: 5.0
-        fund_improve_min_delta_wan: 50
-        min_day_change_pct: -1.5
-        hard_net_outflow_wan: 8000
-        drawdown_from_high:
-          default_pct: 3.0
-          by_buy_kind:
-            回调企稳: 3.0
-            上升途中: 4.0
-          strong_day_chg_pct: 5.0
-          strong_day_pct: 5.0
-          require_below_avg: true
   sell:
     limit_up_exempt_margin_pct: 0.5
     limit_down_approach_margin_pct: 1.0
@@ -71,59 +31,21 @@ gates:
     late_session_kinds:
     - 破5日线
     - 趋势衰竭
-    time_stop:
-      enabled: false
-      min_hold_trading_days: 5
-      min_pnl_pct: -3.0
-      max_pnl_pct: 5.0
-      sideways_lookback_days: 5
-      max_range_pct: 5.5
-      max_net_move_pct: 3.0
-push:
-  watchlist_price_range:
-    enabled: true
-    min: 5
-    max: 150
 research:
-  regime_v2_enabled: true
-  min_oos_sharpe: 0.5
-  bootstrap_samples: 1000
-  ml_objective: sharpe
-  fdr_alpha: 0.05
   factors:
-    holding_horizon_days: 5
-    min_cross_section: 5
     strict_oos_weights: true
-    ic_horizons: [5, 10, 20]
-  promote:
-    min_samples: 80
-    min_total_ic_mean: 0.02
-    min_total_icir: 0.3
-    min_oos_sharpe: 0.5
 portfolio:
-  allocator_v2_enabled: true
   optimizer: mvo
   optimizer_mvo:
     risk_aversion: 2.0
   covariance:
     method: ewma
-  # [僵尸 r1] TargetPortfolio 无 continuous_position 字段
-  continuous_position:
-    enabled: true
-    min_pct: 20
-    max_pct: 80
   risk_budget:
-    enabled: true
-    score_vol_blend: 0.5
     vol_lookback: 14
-    vol_floor_pct: 1.0
-    participation_cap_enabled: true
   constraints:
-    enabled: true
     max_concept_pct: 40
     max_industry_pct: 40
   style_exposure:
-    # alpha_weighted 在 optimizer=mvo 且协方差可用时不生效（MVO 分支优先）
     alpha_weighted: true
     alpha_shrink: 0.4
     max_small_cap_pct: 50
@@ -132,7 +54,6 @@ portfolio:
     max_drawdown_halt_enabled: true
     max_drawdown_pct: 15
     halt_days: 5
-    force_reduce_daily_loss_pct: -5.0
 candidate:
   popularity_limit: 20
   zt_min_boards: 3
@@ -143,11 +64,34 @@ candidate:
   - 历史新高
   include_zt_pool: false
   include_ths_rank_pool: true
-  watchlist_retain_days: 7
-  watchlist_observe_max_days: 30
   universe:
-    enabled: true
     min_adv_yi: 1.0
     adv_lookback: 20
     max_crowding_rank: null
     participation_rate: 0.1
+data:
+  default_max_concurrent: 1
+  akshare_max_concurrent: 1
+  ths_max_concurrent: 1
+  eastmoney_max_concurrent: 1
+  sources:
+    spot: akshare
+scheduler:
+  enabled: true
+  timezone: Asia/Shanghai
+  news_hours: "8,9,10,11,12,13,14,15,16,17,18,19,20,21,22"
+  news_minute: 0
+  pre_market_time: "09:25"
+  during_market_times: "09:37,09:44,09:51,09:58,10:05,10:12,10:19,10:26,10:33,10:40,10:47,10:54,11:01,11:08,11:15,11:22,11:29,13:00,13:07,13:14,13:21,13:28,13:35,13:42,13:49,13:56,14:03,14:10,14:17,14:24,14:31,14:38,14:45,14:52,14:59"
+  post_market_lunch_time: "11:50"
+  maintain_daily_time: "16:00"
+  daily_decision_time: "20:10"
+  prefetch_concepts_enabled: true
+  prefetch_concepts_time: "05:00"
+  misfire_grace_sec: 600
+  in_process_modes:
+  - news
+  - pre_market
+  - during_market
+  - post_market_lunch
+  - post_market_evening

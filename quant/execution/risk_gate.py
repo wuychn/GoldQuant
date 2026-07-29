@@ -249,11 +249,17 @@ def fetch_index_change_pct() -> float | None:
 
 def build_risk_context(*, total_assets: float, cooldown_days: int | None = None) -> RiskDecision:
     """从状态 + 配置汇聚风控上下文，返回买入判定。executor 在买入阶段前调用。"""
+    from quant.config import load_gates_config
     from quant.store.state import codes_sold_today, stoploss_cooldown_codes
 
+    gates = load_gates_config() or {}
     trading, risk, cb = _risk_config()
-    daily_loss_limit = float(trading.get("daily_loss_limit_pct", -3.0))
-    block_rebuy = bool(trading.get("block_same_day_rebuy_after_sell", True))
+    daily_loss_limit = float(
+        trading.get("daily_loss_limit_pct", gates.get("daily_loss_limit_pct", -3.0))
+    )
+    block_rebuy = bool(
+        trading.get("block_same_day_rebuy_after_sell", gates.get("block_same_day_rebuy_after_sell", True))
+    )
     circuit_pct = cb.get("index_drop_pct")
     circuit_pct = float(circuit_pct) if circuit_pct is not None else None
 
@@ -275,7 +281,9 @@ def build_risk_context(*, total_assets: float, cooldown_days: int | None = None)
         trigger_halt(halt_days=halt_days, drawdown_pct=dd_pct)
         halt_active = True
 
-    days = cooldown_days if cooldown_days is not None else int(trading.get("stoploss_cooldown_days", 3))
+    days = cooldown_days if cooldown_days is not None else int(
+        trading.get("stoploss_cooldown_days", gates.get("stoploss_cooldown_days", 3))
+    )
     cooldown = stoploss_cooldown_codes(days)
     sold = codes_sold_today()
     day_start = get_day_start_equity()  # 只读：基准由盘前/前一日决策显式写，防盘中首调劫持

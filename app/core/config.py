@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 
@@ -12,33 +11,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # `app/core/config.py` → 上两级为项目根（含 `.env`），避免依赖进程 cwd
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _ENV_FILE = _PROJECT_ROOT / ".env"
-
-
-def build_during_market_schedule(
-    *,
-    interval_minutes: int = 7,
-    morning: tuple[int, int, int, int] = (9, 37, 11, 30),
-    afternoon: tuple[int, int, int, int] = (13, 0, 15, 0),
-) -> str:
-    """生成盘中智能盯盘 Cron 时点：连续竞价时段内每 ``interval_minutes`` 分钟一次。"""
-
-    def _session_times(start_h: int, start_m: int, end_h: int, end_m: int) -> list[str]:
-        start = datetime(2000, 1, 1, start_h, start_m)
-        end = datetime(2000, 1, 1, end_h, end_m)
-        step = timedelta(minutes=interval_minutes)
-        t = start
-        out: list[str] = []
-        while t <= end:
-            out.append(t.strftime("%H:%M"))
-            t += step
-        return out
-
-    times = _session_times(*morning) + _session_times(*afternoon)
-    return ",".join(times)
-
-
-# 量化定时任务默认「盘中」触发时点（comma HH:MM，可通过 `GOLDQUANT_QUANT_SCHED_DURING_MARKET_TIMES` 覆盖）
-_QUANT_SCHED_DEFAULT_DURING_TIMES = build_during_market_schedule()
 
 
 def _dotenv_get(env_path: Path, key: str) -> str | None:
@@ -117,45 +89,6 @@ class Settings(BaseSettings):
     HOST: str = "0.0.0.0"
     PORT: int = 8085
     UVICORN_RELOAD: bool = True
-
-    #: 是否在启动 FastAPI 时挂载量化流水线定时任务（APScheduler，上海时区等见下项）。
-    #: 注意：勿在多 worker（`uvicorn --workers N`）下每台进程启用，否则会重复执行任务。
-    QUANT_SCHEDULER_ENABLED: bool = True
-    #: IANA 时区名，决定 Cron 触发本地钟点（A 股建议 `Asia/Shanghai`）。
-    QUANT_SCHED_TIMEZONE: str = "Asia/Shanghai"
-    #: 新闻任务：在哪些「整点小时」执行（逗号分隔 0–23），配合 `QUANT_SCHED_NEWS_MINUTE`。
-    QUANT_SCHED_NEWS_HOURS: str = "8,9,10,11,12,13,14,15,16,17,18,19,20,21,22"
-    QUANT_SCHED_NEWS_MINUTE: int = Field(default=0, ge=0, le=59)
-    #: 盘前（`pre_market`），仅工作日历命中时才会真正拉起子进程。
-    QUANT_SCHED_PRE_MARKET_TIME: str = "09:25"
-    #: 盘中（`during_market` / 智能盯盘）：默认 9:37–11:30、13:00–15:00 每 7 分钟，`HH:MM` 逗号分隔。
-    QUANT_SCHED_DURING_MARKET_TIMES: str = _QUANT_SCHED_DEFAULT_DURING_TIMES
-    #: 午间复盘（`post_market_lunch`），仅交易日（`is_real_workday_cn`）执行。
-    QUANT_SCHED_POST_MARKET_LUNCH_TIME: str = "11:50"
-    #: （已退役）`post_market_evening` 已并入 `daily_decision`；字段保留避免破坏旧 .env。
-    QUANT_SCHED_POST_MARKET_EVENING_TIME: str = "20:10"
-    #: 晚间选股 + 明日计划（作战池 / 卖出监控，**不撮合**），仅交易日；买卖在 T+1 盘中执行。
-    QUANT_SCHED_DAILY_DECISION_TIME: str = "20:10"
-    #: 收盘后数据维护（`scripts.data.maintain`：无库建库 / 查漏补漏 / 当日增量），仅交易日。
-    #: 须早于 `daily_decision`（默认 20:45），日决策依赖当日数据。
-    QUANT_SCHED_MAINTAIN_DAILY_TIME: str = "16:00"
-    #: 每日预取自选/持仓问财所属概念（减轻盘中 enrich 耗时）。
-    QUANT_SCHED_PREFETCH_CONCEPTS_ENABLED: bool = True
-    QUANT_SCHED_PREFETCH_CONCEPTS_TIME: str = "05:00"
-    #: 错过触发窗口后的仍可执行宽限（秒）。
-    QUANT_SCHED_MISFIRE_GRACE_SEC: int = Field(default=600, ge=60, le=86400)
-    #: 每周六定时回测并推送飞书（须配置 FEISHU_*）。
-    QUANT_SCHED_WEEKLY_BACKTEST_ENABLED: bool = True
-    QUANT_SCHED_WEEKLY_BACKTEST_TIME: str = "08:00"
-    QUANT_SCHED_WEEKLY_BACKTEST_LOOKBACK_WEEKS: int = Field(default=12, ge=1, le=104)
-    QUANT_SCHED_WEEKLY_BACKTEST_INITIAL_CASH: float = Field(default=100_000.0, gt=0)
-    #: 每周日定时 ML 校准并推送飞书；默认不自动 apply，仅报告建议值。
-    QUANT_SCHED_WEEKLY_ML_ENABLED: bool = True
-    QUANT_SCHED_WEEKLY_ML_TIME: str = "08:00"
-    QUANT_SCHED_WEEKLY_ML_METHOD: str = "auto"
-    QUANT_SCHED_WEEKLY_ML_MIN_SAMPLES: int = Field(default=100, ge=20, le=10_000)
-    QUANT_SCHED_WEEKLY_ML_LIGHTGBM_MIN_SAMPLES: int = Field(default=300, ge=50, le=10_000)
-    QUANT_SCHED_WEEKLY_ML_APPLY: bool = False
 
     # CORS：逗号分隔的源列表，或单独一个 `*` 表示全部（此时不可与凭证共用）
     CORS_ORIGINS: str = "*"

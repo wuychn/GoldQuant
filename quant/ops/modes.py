@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from quant.data_fetch import fetch_mode, unwrap_payload
+from quant.data_fetch import unwrap_payload
 from quant.ops.paper_view import paper_account_lines, paper_block, paper_holdings_lines
 from quant.push.format import (
     ICON_ACCOUNT,
@@ -13,7 +13,6 @@ from quant.push.format import (
     ICON_HOLD,
     ICON_MARKET,
     ICON_NEWS,
-    ICON_ORDER,
     ICON_TIP,
     ICON_WATCH,
     INDEX_LABELS,
@@ -136,118 +135,14 @@ def build_pre_market_body(raw: dict) -> str:
     return "\n\n".join(p for p in parts if p)
 
 
-def _intraday_buy_block(*, theta: float = 1.0) -> str:
-    """盘中择时：读作战池 → spot_em → compose_intraday_alpha → α_z≥θ 触发买入 → 撮合。
-
-    返回推送段字符串；非交易日/无作战池/无触发返回 ""。
-    """
-    from quant.data.calendar import is_trading_day
-    from quant.data.fetch import fetch_spot_em
-    from quant.decision.paper_execute import (
-        execute_intraday_buys,
-        paper_home_context,
-        read_battle_pool,
-    )
-    from quant.factors.compose import compose_intraday_alpha
-    from quant.factors.library.intraday import spot_row_from_dict
-    from quant.timeutil import cn_now, intraday_minutes_since_open
-
-    today = cn_now().date()
-    if not is_trading_day(today):
-        return ""
-    today_s = today.isoformat()
-    with paper_home_context():
-        pool = read_battle_pool(today_s)
-        if not pool:
-            return ""
-        try:
-            spot = fetch_spot_em()
-        except Exception as e:  # noqa: BLE001
-            return icon_section(ICON_TIP, "盘中择时", [f"取价失败: {e}"])
-        spot_by_code = {str(r.get("code")): r for r in spot.to_dict("records")}
-        rows = []
-        name_map: dict[str, str] = {}
-        for p in pool:
-            code = str(p.get("code"))
-            sd = spot_by_code.get(code)
-            if not sd:
-                continue
-            sr = spot_row_from_dict(sd)
-            if sr:
-                rows.append(sr)
-                name_map[code] = p.get("name") or code
-        if not rows:
-            return ""
-        # 开盘 10 分钟内 intraday_strength 噪声主导（集合竞价 open 在 9:30-9:35 浮动极大），
-        # α_z 易瞬间穿越阈值触发假买；待开盘稳定后再触发
-        try:
-            mins_open = intraday_minutes_since_open()
-        except Exception:
-            mins_open = None
-        if mins_open is not None and mins_open < 10:
-            return icon_section(ICON_TIP, "盘中择时", [f"开盘 {mins_open} 分钟，跳过（噪声主导）"])
-        alpha_z = compose_intraday_alpha(rows)
-        buys = [r for r in rows if alpha_z.get(r.code, 0.0) >= theta]
-        if not buys:
-            top = sorted(alpha_z.items(), key=lambda kv: -kv[1])[:3]
-            top_s = ", ".join(f"{name_map.get(c,c)}:{v:.2f}" for c, v in top)
-            return icon_section(
-                ICON_WATCH, "盘中择时", [f"作战池{len(rows)}只 无触发(θ={theta})；最强 {top_s}"]
-            )
-        target_weights = {str(p.get("code")): float(p.get("target_weight") or 0.0) for p in pool}
-        result = execute_intraday_buys(
-            buys, alpha_z, name_map=name_map, today=today_s, target_weights=target_weights
-        )
-    lines = [f"触发{len(buys)}只 → 买入{result.get('n_executed', 0)}笔"]
-    for e in result.get("executed", [])[:8]:
-        lines.append(f"🛒 {e['code']} x{e['qty']} @{e['fill']} {e.get('reason', '')}")
-    for c, why in (result.get("rejected") or {}).items():
-        lines.append(f"拒 {c}: {why}")
-    return icon_section(ICON_ORDER, "盘中择时买入", lines)
-
-
-def _intraday_sell_block() -> str:
-    """盘中卖出择时：读 sell_watch → spot_em → force_sell 或 价破 stop → 全平卖出。
-
-    返回推送段字符串；非交易日/无监控/无触发返回 ""。
-    """
-    from quant.data.calendar import is_trading_day
-    from quant.data.fetch import fetch_spot_em
-    from quant.decision.paper_execute import (
-        execute_intraday_sells,
-        paper_home_context,
-        read_sell_watch,
-    )
-    from quant.timeutil import cn_now
-
-    today = cn_now().date()
-    if not is_trading_day(today):
-        return ""
-    today_s = today.isoformat()
-    with paper_home_context():
-        sells = read_sell_watch(today_s)
-        if not sells:
-            return ""
-        try:
-            spot = fetch_spot_em()
-        except Exception as e:  # noqa: BLE001
-            return icon_section(ICON_TIP, "盘中卖出", [f"取价失败: {e}"])
-        spot_by_code = {str(r.get("code")): r for r in spot.to_dict("records")}
-        result = execute_intraday_sells(sells, spot_by_code, today=today_s)
-    if not result.get("n_signals"):
-        return icon_section(ICON_WATCH, "盘中卖出", [f"监控{len(sells)}只 无触发"])
-    lines = [f"触发{result.get('n_signals')} 卖出{result.get('n_executed')}笔"]
-    for e in result.get("executed", [])[:8]:
-        lines.append(f"🛒 {e['code']} x{e['qty']} @{e['fill']} {e.get('reason', '')}")
-    for c, why in (result.get("rejected") or {}).items():
-        lines.append(f"拒 {c}: {why}")
-    return icon_section(ICON_ORDER, "盘中卖出", lines)
-
-
 def build_during_body(raw: dict) -> str:
     payload = unwrap_payload(raw) if isinstance(raw, dict) else {}
     if not isinstance(payload, dict):
         payload = {}
+    session = payload.pop("_session", None)
+    if session is None:
+        raise ValueError("during_market payload 缺少 _session（须先 run_intraday_session）")
+    degraded = payload.get("_degraded") or []
     parts = [
         icon_section(ICON_MARKET, "指数", _index_lines(payload)),
         paper_block("纸面持仓"),
@@ -257,10 +152,12 @@ def build_during_body(raw: dict) -> str:
             _top_movers(payload, key_candidates=("涨幅榜", "自选股", "持仓股"), limit=6),
         ),
     ]
-    sell_block = _intraday_sell_block()
+    if degraded:
+        parts.append(icon_section(ICON_TIP, "数据缺失", [f"⚠️ {', '.join(degraded)} 缺失"]))
+    sell_block = session.get("sell_block") or ""
     if sell_block:
         parts.append(sell_block)
-    buy_block = _intraday_buy_block()
+    buy_block = session.get("buy_block") or ""
     if buy_block:
         parts.append(buy_block)
     return "\n\n".join(p for p in parts if p)
