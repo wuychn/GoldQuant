@@ -1,6 +1,7 @@
 # GoldQuant r3 架构与指标说明
 
 > 面向后期维护：说明 r3 **做什么、怎么算、数据落哪、和旧专家系统差在哪**。  
+> **流程闭环与因子详解**见 [系统框架与流程闭环.md](./系统框架与流程闭环.md)。  
 > 运维命令与飞书约定见 [R3_OPS.md](./R3_OPS.md)；历史重构计划见 [REBUILD_PLAN.md](./REBUILD_PLAN.md)。
 
 ---
@@ -143,7 +144,7 @@ T 晚 `evaluate_exits`（ATR 跟踪 / 硬止损 / 趋势破 MA20 / 时间止损�
 | 规则 | 含义 | 计算要点 |
 |---|---|---|
 | 剔 ST/退 | 避免特殊风险 | 当日名称匹配 |
-| 上市天数 | 过滤次新 | 首条日线起 ≥ 约 120 交易日 |
+| 上市天数 | 过滤次新 | `universe.build_universe_snapshot` 默认 **120** 交易日（`schema.DEFAULT_MIN_LIST_DAYS`）；`gates.symbol_pool.min_listing_days=60` 为 r1 残留，**r3 决策链未读** |
 | 停牌 | 不可交易 | 如 `volume==0` |
 | 流动性 | 避免死票 | 20 日 ADV ≥ 阈值 |
 
@@ -195,9 +196,13 @@ raw × direction → winsorize(1%,99%) → 行业+log市值中性 → z-score �
 | `flow_ratio_5` | 资金流入 | 5 日主力净流入/流通市值 | 正 | 0.6（常空） |
 | `theme_mom` | 主题强度 | 同行业 `mom_20` 均值的截面分位（代理） | 正 | 0.6 |
 | `hot_rank_z` | 人气 | 人气榜排名 z | 正 | 0.4（回测空） |
+| `ep_ttm` | 盈利收益率 | \(1/PE_{TTM}\)（亏损带符号） | 正 | 0.8 |
+| `bp` | 账面市值比 | \(1/PB\) | 正 | 0.6 |
+| `roe` | 净资产收益率 | 披露 ROE | 正 | 1.0 |
+| `rev_yoy` | 营收同比 | 披露 rev_yoy | 正 | 0.8 |
 
 **方向**：`direction=-1` 表示原始值越大越看空，入库前乘以方向再中性化。  
-**合成**：\(\alpha=\sum_i w_i\,z_i\)（\(w_i\) 为上表默认权重）。
+**合成**：\(\alpha=\sum_i w_i\,z_i\)（\(w_i\) 默认见上表；live 优先 `factor_weights_ts.yml` walk-forward 权重，缺失时回退上表默认）。
 
 代码：`quant/factors/library/*`、`neutralize.py`、`compose.py`、`panel_builder.py`。
 
@@ -227,23 +232,30 @@ raw × direction → winsorize(1%,99%) → 行业+log市值中性 → z-score �
 
 ## 6. 组合层（L2）参数与计算
 
-实现：`quant/portfolio/target.py`（`TargetPortfolio`）。
+实现：`quant/portfolio/target.py`（`TargetPortfolio`）。**实盘以 `quant/config/quant.yml` 的 `portfolio` 段为准**；dataclass 默认值仅作未配 yml 时的回退。
 
-| 参数 | 默认 | 含义 | 用法 |
-|---|---|---|---|
-| `n_enter` | 8 | 新进门槛 | 排名 ≤ 8 才允许新建仓 |
-| `n_exit` | 15 | 保留门槛 | 已持仓排名 ≤ 15 才保留，否则目标权重 0 |
-| `max_stocks` | 10 | 最大持股数 | 截断 |
-| `full_invest` | 0.95 | 目标总仓位 | 等权时单票 ≈ \(0.95/n\) |
-| `target_vol` | 0.15 | 组合年化波动目标 | \(w \leftarrow w\cdot\mathrm{clip}(target/\sigma_{20},\,0,\,max)\) |
-| `max_weight` | 0.25 | 单票上限 | 超限削减 |
-| `sector_cap` | 0.40 | 单行业上限 | 行业权重和 |
-| `concept_cap` | 0.40 | 单概念上限 | 多概念分别累加暴露 |
-| `min_trade` / buffer | ~1% | 压换手 | 偏差过小不调仓 |
-| `vol_lookback` | 20 | 已实现波动窗口 | 估计 \(\sigma_{20}\) |
-| `equal_weight` | True | 默认等权 | False 时逆波动加权 |
+| 参数 | dataclass 默认 | 实盘 quant.yml | 含义 | 用法 |
+|---|---|---|---|---|
+| `n_enter` | 8 | 8（可 CLI 覆盖） | 新进门槛 | 排名 ≤ 8 才允许新建仓 |
+| `n_exit` | 15 | 15 | 保留门槛 | 已持仓排名 ≤ 15 才保留，否则目标权重 0 |
+| `max_stocks` | 10 | 10 | 最大持股数 | 截断 |
+| `full_invest` | 0.95 | 0.95 | 目标总仓位 | MVO/等权归一化上限 |
+| `target_vol` | 0.15 | 0.15 | 组合年化波动目标 | \(w \leftarrow w\cdot\mathrm{clip}(target/\sigma,\,0,\,max)\) |
+| `max_weight` | 0.25 | 0.25 | 单票上限 | 超限削减 |
+| `sector_cap` | 0.40 | **0.40**（`constraints.max_industry_pct`） | 单行业上限 | 行业权重和 |
+| `concept_cap` | 0.40 | **0.40**（`constraints.max_concept_pct`） | 单概念上限 | 多概念分别累加暴露 |
+| `min_trade` / buffer | ~1% | ~1% | 压换手 | 偏差过小不调仓 |
+| `vol_lookback` | 60 | **14**（`risk_budget.vol_lookback`） | 已实现波动/协方差窗口 | 估计 \(\sigma\) 与 EWMA 协方差 |
+| `optimizer` | rank_vol | **mvo** | 配权方式 | MVO 优先；`rank_vol` 为逆波动/等权路径 |
+| `covariance.method` | shrink | **ewma** | 协方差估计 | MVO 输入 |
+| `alpha_weighted` | False | **true**（yml） | alpha 强度配权 | **MVO 分支优先时此项不生效**；仅 `optimizer!=mvo` 或协方差缺失时走 alpha 配权 |
+| `max_small_cap_pct` | 0 | **50%** | 小市值桶暴露上限 | 风格约束（较松） |
+| `max_high_mom_pct` | 0 | **60%** | 高动量桶暴露上限 | 风格约束（较松） |
+| `equal_weight` | True | True | 非 MVO 默认等权 | False 时逆波动加权 |
 
 **排名 buffer**：中间地带（`n_enter < rank ≤ n_exit`）的已持仓不因排名抖动频繁进出。
+
+配置键完整映射见 [CONFIG_MAP.md](./CONFIG_MAP.md)。
 
 ---
 

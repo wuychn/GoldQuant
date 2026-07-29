@@ -63,14 +63,21 @@ def _holding_qty(holdings: list[dict], code: str) -> int:
     return 0
 
 
-def _detail_reason(a, *, alpha_map: dict[str, float], rank_map: dict[str, int]) -> str:
+def _alpha_label(alpha: float, *, weights_source: str) -> str:
+    """未 walk-forward 校准时标注，避免 push 假精度。"""
+    if weights_source in ("walk_forward", "static"):
+        return f"α={alpha:.3f}"
+    return f"α={alpha:.3f}(默认权重，未校准)"
+
+
+def _detail_reason(a, *, alpha_map: dict[str, float], rank_map: dict[str, int], weights_source: str) -> str:
     """细化买入/调仓原因：动作|排名|alpha|目标权重|权重差|业务原因。"""
     rk = rank_map.get(a.code)
     al = alpha_map.get(a.code)
     parts = [
         a.side,
         f"rank={rk}" if rk else None,
-        f"α={al:.3f}" if al is not None else None,
+        _alpha_label(al, weights_source=weights_source) if al is not None else None,
         f"tw={a.target_weight:.1%}",
         f"Δw={a.delta_weight:+.1%}",
         a.reason or None,
@@ -103,7 +110,9 @@ def actions_to_signals(
             continue
         name = names.get(a.code) or a.code
         held_q = _holding_qty(holdings, a.code)
-        detail = _detail_reason(a, alpha_map=alpha_map, rank_map=rank_map)
+        detail = _detail_reason(
+            a, alpha_map=alpha_map, rank_map=rank_map, weights_source=card.weights_source
+        )
 
         # 出场信号：全平
         if a.code in exit_codes and held_q > 0:

@@ -74,16 +74,20 @@ def main() -> None:
         def _sens_run(params: dict[str, float]) -> float:
             ne = int(params.get("n_enter", args.n_enter))
             tv = float(params.get("target_vol", args.target_vol))
+            ba = float(params.get("buffer_abs", 0.01))
+            sc = float(params.get("sector_cap", 0.40))
             pol = TargetPortfolio.from_config(
                 n_enter=ne,
                 n_exit=max(ne + 5, args.n_exit),
                 max_stocks=args.max_positions,
                 target_vol=tv,
+                buffer_abs=ba,
+                sector_cap=sc,
                 daily=daily,
             )
             b = run_backtest(
                 daily=daily,
-                dates=dates[-min(252, len(dates)) :],
+                dates=dates,
                 alpha_fn=alpha_fn,
                 policy=pol,
                 max_positions=args.max_positions,

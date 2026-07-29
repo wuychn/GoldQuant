@@ -33,17 +33,33 @@ def _style_factor_returns(
     size_rets: list[float] = []
     val_rets: list[float] = []
     mom_rets: list[float] = []
-    from quant.data.fundamentals import read_fundamentals_snapshot
+    from quant.data.fundamental_pit import PitIndex, metrics_as_of, read_fundamental_pit_table
 
-    fund_cache: dict[str, dict[str, dict[str, float]]] = {}
+    pit_table = read_fundamental_pit_table()
+    pit_index = PitIndex.from_table(pit_table) if not pit_table.empty else PitIndex()
     by_code = {c: g.sort_values("date").reset_index(drop=True) for c, g in d.groupby("code")}
     for dt in dates:
-        if dt not in fund_cache:
-            fund_cache[dt] = read_fundamentals_snapshot(dt)
-        ep_map = {
-            c: (1.0 / v["pe_ttm"] if v.get("pe_ttm") and v["pe_ttm"] > 0 else v.get("bp"))
-            for c, v in fund_cache[dt].items()
-        }
+        ep_map: dict[str, float] = {}
+        for code, g in by_code.items():
+            sub = g[g["date"] <= dt]
+            if sub.empty:
+                continue
+            cur = sub.iloc[-1]
+            try:
+                px = float(cur["close"])
+            except (TypeError, ValueError):
+                continue
+            mv = float(cur.get("float_mv") or cur.get("total_mv") or 0)
+            m = metrics_as_of(
+                code, dt, close=px if px > 0 else None, float_mv=mv if mv > 0 else None, index=pit_index
+            )
+            ep = m.get("ep_ttm")
+            if ep is None and m.get("pe_ttm"):
+                ep = 1.0 / float(m["pe_ttm"])
+            if ep is None and m.get("bp"):
+                ep = float(m["bp"])
+            if ep is not None and np.isfinite(ep):
+                ep_map[code] = float(ep)
         rows: list[tuple[float, float, float, float]] = []
         for code, g in by_code.items():
             sub = g[g["date"] <= dt]
@@ -72,7 +88,7 @@ def _style_factor_returns(
                     mom60 = c1 / c_old - 1.0
             ep = ep_map.get(code)
             if ep is None or not np.isfinite(ep):
-                ep = 1.0 / mv * 1e10  # 无基本面时用市值倒数作弱代理
+                continue
             if mom60 == mom60:
                 rows.append((mv, ret, float(mom60), float(ep)))
         if len(rows) < 20:

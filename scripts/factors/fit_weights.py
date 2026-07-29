@@ -49,15 +49,19 @@ def fit_walk_forward_weights(
     for r in panel:
         by_date[r.date].append(r)
     sorted_dates = sorted(by_date.keys())
+    label_horizon = max(horizons) if horizons else horizon
     ts: dict[str, dict] = {}
     for i, td in enumerate(sorted_dates):
         if i < train_window or i % step:
             continue
         train_start_idx = max(0, i - train_window)
+        train_end_idx = i - label_horizon  # 按 max(horizons) 丢弃，避免 10/20 日 IC 标签泄漏
+        if train_end_idx <= train_start_idx:
+            continue
         train_start = sorted_dates[train_start_idx]
-        train_end = sorted_dates[i - 1]
+        train_end = sorted_dates[train_end_idx - 1]
         train_rows: list = []
-        for sd in sorted_dates[train_start_idx:i]:
+        for sd in sorted_dates[train_start_idx:train_end_idx]:
             train_rows.extend(by_date[sd])
         if len(train_rows) < 200:
             continue
@@ -72,6 +76,7 @@ def fit_walk_forward_weights(
             "train_end": train_end,
             "horizon": horizon,
             "horizons": list(horizons),
+            "label_horizon": label_horizon,
         }
     return ts
 

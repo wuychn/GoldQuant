@@ -64,7 +64,10 @@ def icir_weights(
     min_ic_mean: float = 0.0,
     min_tstat: float = 2.0,
 ) -> dict[str, float]:
-    """从 IC 报告产出 {factor: weight}（通过 ICIR/IC 均值/t 阈值的因子）。"""
+    """从 IC 报告产出 {factor: weight}（通过 ICIR/IC 均值/t 阈值的因子）。
+
+    注意：ICIR 比例权重未做因子间去相关；共线诊断见 ``factor_correlation_matrix``。
+    """
     out: dict[str, float] = {}
     for name, m in (ic_report or {}).items():
         if not isinstance(m, dict):

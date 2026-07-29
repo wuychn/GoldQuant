@@ -16,6 +16,8 @@ def run_backtest_sensitivity(
     grids = grids or {
         "n_enter": [6.0, 8.0, 10.0, 12.0],
         "target_vol": [0.12, 0.15, 0.18],
+        "buffer_abs": [0.005, 0.01, 0.02],
+        "sector_cap": [0.30, 0.40, 0.50],
     }
     out: dict[str, Any] = {}
     for param, grid in grids.items():

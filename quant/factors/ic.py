@@ -166,6 +166,68 @@ def quintile_spread(rows: list[FactorRow], factor_name: str) -> dict[str, Any]:
     }
 
 
+def factor_correlation_matrix(
+    rows: list[FactorRow],
+    factor_names: list[str],
+    *,
+    min_cross_section: int = 10,
+) -> dict[str, Any]:
+    """按日截面 z 对齐后，对有效样本池化计算 Pearson 相关（共线诊断）。"""
+    by_date: dict[str, list[FactorRow]] = defaultdict(list)
+    for r in rows:
+        by_date[r.date].append(r)
+
+    def _val(r: FactorRow, f: str) -> float | None:
+        v = r.neutral.get(f) if r.neutral else None
+        if v is None:
+            v = r.raw.get(f)
+        return float(v) if v is not None and np.isfinite(v) else None
+
+    acc = np.zeros((len(factor_names), len(factor_names)), dtype=float)
+    n_days = 0
+    for grp in by_date.values():
+        if len(grp) < min_cross_section:
+            continue
+        mat: list[list[float]] = []
+        for r in grp:
+            row = [_val(r, f) for f in factor_names]
+            if all(v is not None for v in row):
+                mat.append([float(v) for v in row])  # type: ignore[arg-type]
+        if len(mat) < min_cross_section:
+            continue
+        c = np.corrcoef(np.array(mat, dtype=float), rowvar=False)
+        if c.shape != acc.shape:
+            continue
+        acc += np.nan_to_num(c, nan=0.0)
+        n_days += 1
+    if n_days == 0:
+        return {"factors": factor_names, "matrix": [], "n_days": 0, "high_pairs": []}
+    avg = acc / n_days
+    matrix = [
+        [round(float(avg[i, j]), 3) for j in range(len(factor_names))]
+        for i in range(len(factor_names))
+    ]
+    high_pairs: list[dict[str, Any]] = []
+    for i in range(len(factor_names)):
+        for j in range(i + 1, len(factor_names)):
+            corr = float(avg[i, j])
+            if abs(corr) >= 0.7:
+                high_pairs.append(
+                    {
+                        "a": factor_names[i],
+                        "b": factor_names[j],
+                        "corr": round(corr, 3),
+                    }
+                )
+    high_pairs.sort(key=lambda x: -abs(float(x["corr"])))
+    return {
+        "factors": factor_names,
+        "matrix": matrix,
+        "n_days": n_days,
+        "high_pairs": high_pairs,
+    }
+
+
 def factor_ic_report(
     rows: list[FactorRow],
     factor_names: list[str],

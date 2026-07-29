@@ -85,16 +85,8 @@ def load_push_config() -> dict:
     return copy.deepcopy(load_quant_config().get("push") or {})
 
 
-@lru_cache(maxsize=1)
 def load_factor_weights(as_of: str | None = None) -> dict[str, float] | None:
-    """IC 驱动的因子权重。
-
-    - ``as_of`` 给定：优先读 walk-forward 时变权重表 ``factor_weights_ts.yml``，
-      取 ≤as_of 最近一组（严格 OOS，权重只用 t-1 及更早数据拟合）。
-    - ``research.factors.strict_oos_weights=true`` 时禁止回退静态全样本 yml（live 防前视）。
-    - 否则或时变表缺失：回退静态 ``factor_weights.yml``（须 ``meta.fit_end <= as_of``）。
-    - 无文件或 ``apply=False`` 返回 None → 调用方回退 ``registry.weights()``。
-    """
+    """IC 驱动的因子权重（无 lru_cache：as_of 逐日变化，缓存 key 无效）。"""
     info = load_factor_weights_info(as_of)
     return info.get("weights") if info else None
 
@@ -157,7 +149,6 @@ def reload_config_cache() -> None:
     load_quant_config.cache_clear()
     load_gates_config.cache_clear()
     load_push_config.cache_clear()
-    load_factor_weights.cache_clear()
 
 
 def trading_time_checks_enabled() -> bool:

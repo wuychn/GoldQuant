@@ -1,15 +1,13 @@
-"""因子 PIT 快照采集：hot / flow / fundamentals / theme。"""
+"""因子 PIT 快照采集：hot / flow / theme（基本面见 fundamental_pit）。"""
 
 from __future__ import annotations
 
 import sys
-from typing import Any
 
 import numpy as np
 import pandas as pd
 
 from quant.data.factor_snapshots import write_fund_flow_snapshot, write_hot_rank_snapshot, write_theme_snapshot
-from quant.data.fundamentals import write_fundamentals_snapshot
 
 
 def _num(v: object) -> float | None:
@@ -50,42 +48,6 @@ def capture_hot_rank(as_of: str) -> int:
     mu, sd = float(ranks.mean()), float(ranks.std(ddof=1) or 1.0)
     rows = [{"code": c, "hot_rank_z": round(-(rk - mu) / max(sd, 1e-6), 4)} for c, rk in rows_raw]
     write_hot_rank_snapshot(as_of, rows)
-    return len(rows)
-
-
-def capture_fundamentals(as_of: str, spot: pd.DataFrame | None = None) -> int:
-    """从 spot_em 提取 PE/PB/ROE/营收同比。"""
-    if spot is None or spot.empty:
-        try:
-            from quant.data.fetch import fetch_spot_em
-
-            spot = fetch_spot_em()
-        except Exception as e:
-            print(f"[WARN] fundamentals spot 失败: {e}", file=sys.stderr)
-            return 0
-    pe_col = next((c for c in spot.columns if "市盈" in str(c)), None)
-    pb_col = next((c for c in spot.columns if "市净" in str(c)), None)
-    roe_col = next((c for c in spot.columns if "净资产收益率" in str(c) or c == "ROE"), None)
-    rev_col = next((c for c in spot.columns if "营业收入" in str(c) and "同比" in str(c)), None)
-    code_col = "code" if "code" in spot.columns else "代码"
-    rows: list[dict] = []
-    for _, r in spot.iterrows():
-        code = str(r.get(code_col, "")).strip()
-        if not code:
-            continue
-        row: dict[str, Any] = {"code": code}
-        if pe_col:
-            row["pe_ttm"] = _num(r.get(pe_col))
-        if pb_col:
-            row["pb"] = _num(r.get(pb_col))
-        if roe_col:
-            row["roe"] = _num(r.get(roe_col))
-        if rev_col:
-            row["rev_yoy"] = _num(r.get(rev_col))
-        if len(row) > 1:
-            rows.append(row)
-    if rows:
-        write_fundamentals_snapshot(as_of, rows)
     return len(rows)
 
 
@@ -215,8 +177,10 @@ def _stock_concepts(code: str) -> list[str]:
     return []
 
 
-def capture_all_factor_snapshots(as_of: str, spot: pd.DataFrame | None = None, universe_codes: list[str] | None = None) -> dict[str, int]:
-    """一次性采集全部因子快照。"""
+def capture_all_factor_snapshots(
+    as_of: str, spot: pd.DataFrame | None = None, universe_codes: list[str] | None = None
+) -> dict[str, int]:
+    """一次性采集 hot/flow/theme 快照（基本面统一走 fundamental_pit）。"""
     if spot is None:
         try:
             import akshare as ak
@@ -226,7 +190,6 @@ def capture_all_factor_snapshots(as_of: str, spot: pd.DataFrame | None = None, u
         except Exception:
             spot = pd.DataFrame()
     n_hot = capture_hot_rank(as_of)
-    n_fund = capture_fundamentals(as_of, spot if isinstance(spot, pd.DataFrame) else None)
     n_flow = capture_fund_flow(as_of, spot if isinstance(spot, pd.DataFrame) else pd.DataFrame(), universe_codes)
     n_theme = capture_theme_mom(as_of, spot if isinstance(spot, pd.DataFrame) else None)
-    return {"hot": n_hot, "fundamentals": n_fund, "flow": n_flow, "theme": n_theme}
+    return {"hot": n_hot, "flow": n_flow, "theme": n_theme}

@@ -22,5 +22,6 @@ def build_alpha_by_date(
     default_w = REGISTRY.weights()
     for d, rows in rows_by.items():
         w = load_factor_weights(as_of=d) if use_ic_weights else None
+        # strict OOS 且无 factor_weights_ts 时回退 REGISTRY 默认（非 IC 权重）
         by_date[d] = compose_alpha(rows, weights=w or default_w)
     return by_date

@@ -56,6 +56,30 @@ def merge_jbxx_listing(mapping: dict[str, str]) -> dict[str, str]:
     return out
 
 
+def merge_akshare_listing(mapping: dict[str, str]) -> dict[str, str]:
+    """AKShare IPO 表补充/覆盖上市日。"""
+    out = dict(mapping)
+    try:
+        from quant.data.fundamental_pit import fetch_listing_map_akshare
+
+        for c, d in fetch_listing_map_akshare().items():
+            if d:
+                out[str(c).strip()] = to_iso(d)
+    except Exception:
+        pass
+    return out
+
+
+def build_listing_map(daily: pd.DataFrame | None = None) -> dict[str, str]:
+    """daily 首条 → AKShare IPO → jbxx（优先级递增）。"""
+    mp: dict[str, str] = {}
+    if daily is not None and not daily.empty:
+        mp = build_listing_map_from_daily(daily)
+    mp = merge_akshare_listing(mp)
+    mp = merge_jbxx_listing(mp)
+    return mp
+
+
 def write_listing_table(mapping: dict[str, str]) -> None:
     """写入/合并上市日表。"""
     if not mapping:
@@ -97,6 +121,16 @@ def read_listing_map() -> dict[str, str]:
         return {}
 
 
+def resolve_listing_map(
+    daily: pd.DataFrame | None = None,
+    base: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """parquet 基底 + AKShare IPO + jbxx + daily 首条（后者优先级递增）。"""
+    mp = dict(base if base is not None else read_listing_map())
+    built = build_listing_map(daily)
+    return {**mp, **built}
+
+
 def listing_days_as_of(
     code: str,
     as_of: str,
@@ -106,11 +140,8 @@ def listing_days_as_of(
 ) -> int:
     """截至 as_of 的上市交易日数（含 as_of 当日若其为交易日且有数据）。"""
     as_of = to_iso(as_of)
-    mp = listing_map if listing_map is not None else read_listing_map()
+    mp = resolve_listing_map(daily, listing_map)
     ld = mp.get(code)
-    if not ld and daily is not None and not daily.empty:
-        fb = build_listing_map_from_daily(daily)
-        ld = fb.get(code)
     if not ld:
         return 0
     try:
@@ -127,9 +158,7 @@ def listing_days_map(
 ) -> dict[str, int]:
     """批量：{code: listing_days}。"""
     as_of = to_iso(as_of)
-    mp = listing_map if listing_map is not None else read_listing_map()
-    if not mp and daily is not None and not daily.empty:
-        mp = build_listing_map_from_daily(daily)
+    mp = resolve_listing_map(daily, listing_map)
     codes = set()
     if daily is not None and not daily.empty:
         d = daily[daily["date"] <= as_of]

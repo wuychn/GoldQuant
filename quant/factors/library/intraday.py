@@ -118,9 +118,8 @@ def spot_row_from_daily(
 
     忠实还原：last=close、open=今开、pre_close=昨收、pct、volume、amount、turnover；
     ``vol_ratio`` 由调用方从历史算（今日量 / 近 5 日均量）后传入。
-    **不可得项**：``speed``（盘中涨速）日频无法还原 → 置 0（compose 截面 z-score 退化为
-    中性，不污染其余因子）。即本代理验证的是 intraday_strength/volume_ratio/day_change/
-    turnover 的择时能力，非 tick 级涨速。
+    **speed 代理**：tick 级涨速日频不可得，用 ``(close-open)/open*100``（%）近似
+    收盘相对开盘的日内加速，与 live ``spot_em.speed`` 同向但不等价。
     """
     last = _to_float(row.get("close"))
     if last is None or last <= 0:
@@ -128,6 +127,7 @@ def spot_row_from_daily(
     open_ = _to_float(row.get("open")) or last
     pre = prev_close if (prev_close and prev_close > 0) else (_to_float(row.get("pre_close")) or last)
     pct = (last / pre - 1.0) * 100.0 if pre > 0 else 0.0
+    speed_proxy = ((last - open_) / open_ * 100.0) if open_ > 0 else 0.0
     return SpotRow(
         code=str(code),
         last=last,
@@ -138,5 +138,5 @@ def spot_row_from_daily(
         amount=_to_float(row.get("amount")) or 0.0,
         vol_ratio=float(vol_ratio or 0.0),
         turnover=_to_float(row.get("turnover_rate")) or 0.0,
-        speed=0.0,  # 日频不可得；见 docstring
+        speed=speed_proxy,
     )

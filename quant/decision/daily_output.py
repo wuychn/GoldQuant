@@ -26,6 +26,7 @@ class DecisionCard:
     actions: list[Action] = field(default_factory=list)
     exit_signals: list[dict] = field(default_factory=list)  # [{code, reason, price}]
     alpha_top: list[tuple[str, float]] = field(default_factory=list)  # [(code, alpha)]
+    weights_source: str = "registry_default"  # walk_forward | static | registry_default
 
 
 def build_decision_card(

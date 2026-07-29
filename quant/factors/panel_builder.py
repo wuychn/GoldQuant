@@ -105,6 +105,11 @@ def build_panel(
     # 预先按 (code, date) 排序：下面用 searchsorted 定位评估日，依赖 date 升序
     daily = daily.sort_values(["code", "date"], kind="stable")
 
+    from quant.data.fundamental_pit import PitIndex, read_fundamental_pit_table
+
+    pit_table = read_fundamental_pit_table()
+    pit_index = PitIndex.from_table(pit_table)
+
     rows: list[FactorRow] = []
     for code, code_df in daily.groupby("code", sort=False):
         if code_df.empty:
@@ -123,6 +128,11 @@ def build_panel(
 
         # 预取按 date 升序的数组，评估日用 searchsorted 定位「<= d 的最后一行」
         date_arr = code_df["date"].to_numpy(dtype=object)
+        close_arr = (
+            pd.to_numeric(code_df["close"], errors="coerce").to_numpy(dtype=float)
+            if "close" in code_df.columns
+            else None
+        )
         mv_arr = (
             pd.to_numeric(code_df["float_mv"], errors="coerce").to_numpy(dtype=float)
             if "float_mv" in code_df.columns
@@ -131,6 +141,14 @@ def build_panel(
         name_arr = code_df["name"].to_numpy(dtype=object) if "name" in code_df.columns else None
 
         for d in universe_needed:
+            pos = int(np.searchsorted(date_arr, d, side="right")) - 1
+            from quant.data.fundamental_pit import metrics_as_of
+
+            px = float(close_arr[pos]) if close_arr is not None and pos >= 0 else None
+            fm = float(mv_arr[pos]) if mv_arr is not None and pos >= 0 and np.isfinite(mv_arr[pos]) else None
+            pit_extras = metrics_as_of(code, d, close=px, float_mv=fm, index=pit_index)
+            bars.extras = dict(pit_extras)
+
             raw: dict[str, float] = {}
             for f in factors:
                 try:
@@ -142,7 +160,6 @@ def build_panel(
             if not raw:
                 continue
             # 「<= d」的最后一行位置（date_arr 已升序）
-            pos = int(np.searchsorted(date_arr, d, side="right")) - 1
             lm = None
             if mv_arr is not None and pos >= 0:
                 val = mv_arr[pos]
@@ -159,7 +176,7 @@ def build_panel(
             )
             rows.append(fr)
 
-    # PIT 快照 → flow / hot / theme / fundamentals
+    # PIT 快照 → flow / hot / theme（基本面见 build_panel fundamental_pit 循环）
     _inject_snapshot_factors(rows, iso_dates)
     # 行业动量代理 → theme_mom（快照缺失时回退）
     _fill_theme_mom(rows, overwrite=False)
@@ -209,8 +226,8 @@ def _fill_theme_mom(rows: list[FactorRow], *, overwrite: bool = True) -> None:
 
 
 def _inject_snapshot_factors(rows: list[FactorRow], iso_dates: list[str]) -> None:
+    """hot/flow/theme 快照注入；基本面仅来自 fundamental_pit（见 build_panel 循环）。"""
     from quant.data.factor_snapshots import read_fund_flow_snapshot, read_hot_rank_snapshot, read_theme_snapshot
-    from quant.data.fundamentals import read_fundamentals_snapshot
 
     snap_cache: dict[str, tuple] = {}
     for r in rows:
@@ -220,9 +237,8 @@ def _inject_snapshot_factors(rows: list[FactorRow], iso_dates: list[str]) -> Non
                 read_fund_flow_snapshot(d),
                 read_hot_rank_snapshot(d),
                 read_theme_snapshot(d),
-                read_fundamentals_snapshot(d),
             )
-        flow_snap, hot_snap, theme_snap, fund_snap = snap_cache[d]
+        flow_snap, hot_snap, theme_snap = snap_cache[d]
         if "flow_ratio_5" not in r.raw:
             v = flow_snap.get(r.code)
             if v is not None:
@@ -235,21 +251,6 @@ def _inject_snapshot_factors(rows: list[FactorRow], iso_dates: list[str]) -> Non
             tv = theme_snap.get(r.code)
             if tv is not None:
                 r.raw["theme_mom"] = float(tv)
-        fb = fund_snap.get(r.code) or {}
-        if fb.get("pe_ttm") is not None:
-            pe = float(fb["pe_ttm"])
-            r.raw.setdefault("pe_ttm", pe)
-            if pe > 0:
-                r.raw.setdefault("ep_ttm", 1.0 / pe)
-        if fb.get("pb") is not None:
-            pb = float(fb["pb"])
-            r.raw.setdefault("pb", pb)
-            if pb > 0:
-                r.raw.setdefault("bp", 1.0 / pb)
-        if fb.get("roe") is not None:
-            r.raw.setdefault("roe", float(fb["roe"]))
-        if fb.get("rev_yoy") is not None:
-            r.raw.setdefault("rev_yoy", float(fb["rev_yoy"]))
 
 
 def _resolve_universe(

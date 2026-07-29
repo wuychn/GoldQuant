@@ -18,6 +18,7 @@ class TradeSimConfig:
     slippage_model: str = "fixed"  # fixed | vol_scaled | microstructure | sqrt_law
     slippage_sqrt_k: float = 0.5
     slippage_max_pct: float = 0.005
+    slippage_sqrt_max_pct: float = 0.02
     partial_fill_enabled: bool = False
     participation_rate: float = 0.1
     main_limit_pct: float = 9.9
@@ -41,6 +42,7 @@ def load_trade_sim_config() -> TradeSimConfig:
         slippage_model=str(raw.get("slippage_model", "fixed")),
         slippage_sqrt_k=float(raw.get("slippage_sqrt_k", 0.5)),
         slippage_max_pct=float(raw.get("slippage_max_pct", 0.005)),
+        slippage_sqrt_max_pct=float(raw.get("slippage_sqrt_max_pct", 0.02)),
         partial_fill_enabled=bool(raw.get("partial_fill_enabled", False)),
         participation_rate=float(raw.get("participation_rate", 0.1)),
         main_limit_pct=float(raw.get("main_limit_pct", 9.9)),

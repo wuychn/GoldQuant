@@ -330,7 +330,10 @@ def build_decision_push_body(payload: dict[str, Any]) -> str:
     from quant.narrative.exit_phrases import exit_reason_label
 
     pool_lines = [
-        f"{p.get('name')}({p.get('code')}) α={p.get('alpha')} #{p.get('rank')} {p.get('why') or ''}".rstrip()
+        (
+            f"{p.get('name')}({p.get('code')}) α={p.get('alpha')}"
+            f"{p.get('alpha_note') or ''} #{p.get('rank')} {p.get('why') or ''}"
+        ).rstrip()
         for p in pool[:8]
     ]
     sell_lines = []
@@ -362,4 +365,13 @@ def build_decision_push_body(payload: dict[str, Any]) -> str:
             ],
         ),
     ]
+    if payload.get("weights_source") == "registry_default":
+        parts.insert(
+            0,
+            icon_section(
+                ICON_TIP,
+                "因子权重",
+                ["registry 默认，未 walk-forward 校准；α 仅供参考"],
+            ),
+        )
     return "\n\n".join(p for p in parts if p)

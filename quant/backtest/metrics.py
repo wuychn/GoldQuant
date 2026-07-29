@@ -76,9 +76,17 @@ def benchmark_excess(
 
     ``benchmark`` 需含 date/close；缺省时尝试读离线指数库。
     """
+    _EMPTY_BENCH = {
+        "excess_return_pct": 0.0,
+        "info_ratio": 0.0,
+        "bench_return_pct": 0.0,
+        "beta": 0.0,
+        "tracking_error_pct": 0.0,
+        "relative_max_drawdown_pct": 0.0,
+    }
     eq = broker.equity_curve
     if len(eq) < 2:
-        return {"excess_return_pct": 0.0, "info_ratio": 0.0, "bench_return_pct": 0.0}
+        return dict(_EMPTY_BENCH)
     if benchmark is None or benchmark.empty:
         try:
             from quant.data.store import read_index_daily
@@ -88,7 +96,7 @@ def benchmark_excess(
         except Exception:
             benchmark = pd.DataFrame()
     if benchmark is None or benchmark.empty or "close" not in benchmark.columns:
-        return {"excess_return_pct": 0.0, "info_ratio": 0.0, "bench_return_pct": 0.0}
+        return dict(_EMPTY_BENCH)
 
     b = benchmark.copy()
     b["date"] = b["date"].astype(str).str.slice(0, 10)
@@ -102,8 +110,9 @@ def benchmark_excess(
             continue
         aligned_s.append(float(v))
         aligned_b.append(float(bc))
+    empty = dict(_EMPTY_BENCH)
     if len(aligned_s) < 2:
-        return {"excess_return_pct": 0.0, "info_ratio": 0.0, "bench_return_pct": 0.0}
+        return empty
     s = np.array(aligned_s)
     bb = np.array(aligned_b)
     strat_ret = s[-1] / s[0] - 1.0
@@ -112,14 +121,25 @@ def benchmark_excess(
     b_rets = bb[1:] / bb[:-1] - 1.0
     excess = s_rets - b_rets
     ir = 0.0
+    te = 0.0
+    beta = 0.0
     if len(excess) > 1:
         sd = float(excess.std(ddof=1))
         if sd > 1e-12:
             ir = float(excess.mean() / sd * np.sqrt(252))
+            te = float(sd * np.sqrt(252) * 100)
+        b_var = float(b_rets.var(ddof=1))
+        if b_var > 1e-12:
+            beta = float(np.cov(s_rets, b_rets)[0, 1] / b_var)
+    rel_curve = s / bb
+    rel_mdd = _max_drawdown(rel_curve) * 100
     return {
         "excess_return_pct": round((strat_ret - bench_ret) * 100, 2),
         "bench_return_pct": round(bench_ret * 100, 2),
         "info_ratio": round(ir, 3),
+        "beta": round(beta, 3),
+        "tracking_error_pct": round(te, 2),
+        "relative_max_drawdown_pct": round(rel_mdd, 2),
     }
 
 
@@ -156,6 +176,9 @@ def compute_metrics(
         "excess_return_pct": 0.0,
         "bench_return_pct": 0.0,
         "info_ratio": 0.0,
+        "beta": 0.0,
+        "tracking_error_pct": 0.0,
+        "relative_max_drawdown_pct": 0.0,
     }
     if len(eq) < 2:
         return empty

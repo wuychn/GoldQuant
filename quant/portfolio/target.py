@@ -169,11 +169,27 @@ class TargetPortfolio:
         # 2/3. 权重 + 波动率目标：用真实协方差矩阵估组合波动（替代单一 ρ=0.3）
         sigmas, covdict = self._cov(codes, date)
         if self.optimizer == "mvo" and covdict is not None:
+            size_b, mom_b = self._style_buckets(codes, date)
+            style_caps: dict[str, float] = {}
+            if self.max_size_exposure > 0:
+                style_caps["small"] = self.max_size_exposure
+            if self.max_momentum_exposure > 0:
+                style_caps["high_mom"] = self.max_momentum_exposure
+            style_buckets = {**{c: b for c, b in size_b.items()}, **{c: b for c, b in mom_b.items()}}
             w = optimize_mvo(
-                codes, alpha, covdict, sigmas,
+                codes,
+                alpha,
+                covdict,
+                sigmas,
                 risk_aversion=self.mvo_risk_aversion,
                 max_weight=self.max_weight,
                 full_invest=self.full_invest,
+                sectors=self.sectors if self.sectors else None,
+                sector_cap=self.sector_cap,
+                concepts=self.concepts if self.concepts else None,
+                concept_cap=self.concept_cap,
+                style_buckets=style_buckets if style_caps else None,
+                style_caps=style_caps or None,
             )
         elif self.alpha_weighted:
             w = alpha_strength_weights(alpha, codes, full_invest=self.full_invest, shrink=self.alpha_shrink)

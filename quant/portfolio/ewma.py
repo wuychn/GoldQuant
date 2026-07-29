@@ -33,8 +33,12 @@ def estimate_covariance_ewma(
         return None
     R = rets.to_numpy(dtype=float)
     t, n = R.shape
-    cov = np.zeros((n, n), dtype=float)
-    for i in range(t):
+    # RiskMetrics：用样本协方差预热，避免从 0 冷启动系统性偏低
+    warmup = min(max(20, n + 5), t)
+    cov = np.cov(R[:warmup].T, ddof=1) if warmup >= 2 else np.zeros((n, n), dtype=float)
+    if not np.all(np.isfinite(cov)):
+        cov = np.zeros((n, n), dtype=float)
+    for i in range(warmup, t):
         x = R[i : i + 1].T
         cov = lam * cov + (1 - lam) * (x @ x.T)
     cov *= ann

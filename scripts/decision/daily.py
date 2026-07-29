@@ -200,6 +200,7 @@ def build_today_card(
     card = build_decision_card(as_of, alpha, target, current, exit_signals)
     # 扩展 alpha_top 为全量排序前 50，供买入原因写 rank/α
     card.alpha_top = sorted(alpha.items(), key=lambda kv: -kv[1])[:50]
+    card.weights_source = w_info.get("source") if w_info else "registry_default"
     return card, daily, prices, names, uni, alpha, attribution
 
 
@@ -289,11 +290,14 @@ def main() -> None:
     # 作战池：alpha top N → 落盘供 T+1 盘中择时买入（T 晚不撮合买入）
     alpha_ranked = sorted(_alpha.items(), key=lambda kv: -kv[1])
     _tgt = card.target_weights or {}
+    _uncalibrated = card.weights_source not in ("walk_forward", "static")
+    _alpha_note = " [默认权重，未校准]" if _uncalibrated else ""
     battle_pool = [
         {
             "code": c,
             "name": names.get(c) or c,
             "alpha": round(float(a), 4),
+            "alpha_note": _alpha_note.strip() or None,
             "rank": i + 1,
             "target_weight": round(float(_tgt.get(c, 0.0)), 4),
             "why": attribution_summary(_attribution.get(c, [])),
@@ -313,6 +317,7 @@ def main() -> None:
 
     payload: dict = {
         "date": as_of,
+        "weights_source": card.weights_source,
         "target": card.target_weights,
         "actions": [
             {

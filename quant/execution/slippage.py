@@ -60,7 +60,10 @@ def effective_slippage_pct(cfg: TradeSimConfig, ctx: SlippageContext | None = No
         elif margin < 2.0:
             slip += 0.001
 
-    max_slip = float(getattr(cfg, "slippage_max_pct", 0.005) or 0.005)
+    if model == "sqrt_law":
+        max_slip = float(getattr(cfg, "slippage_sqrt_max_pct", 0.02) or 0.02)
+    else:
+        max_slip = float(getattr(cfg, "slippage_max_pct", 0.005) or 0.005)
     return min(max_slip, max(0.0, slip))
 
 

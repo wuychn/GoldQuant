@@ -41,7 +41,7 @@ def _prev_close_map(daily: pd.DataFrame, as_of: str) -> dict[str, float]:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--date", default=None, help="指定日 YYYY-MM-DD，默认今天")
-    ap.add_argument("--index", default="000300", help="基准指数代码")
+    ap.add_argument("--force-fundamental-pit", action="store_true", help="无视披露季窗口，增量刷新 fundamental_pit")
     args = ap.parse_args()
 
     today = args.date or cn_now().strftime("%Y-%m-%d")
@@ -136,16 +136,37 @@ def main() -> None:
 
     # 7. 上市日表（jbxx + daily 首条，供 universe PIT）
     try:
-        from quant.data.listing import build_listing_map_from_daily, merge_jbxx_listing, write_listing_table
+        from quant.data.listing import build_listing_map, write_listing_table
 
-        mp = merge_jbxx_listing(build_listing_map_from_daily(daily))
+        mp = build_listing_map(daily)
         write_listing_table(mp)
         print(f"listing_dates 更新: {len(mp)} 只")
     except Exception as e:
         print(f"[WARN] listing_dates 失败: {e}", file=sys.stderr)
 
 
-    # 8. 因子 PIT 快照（hot/flow/fundamentals/theme）
+    # 8. fundamental_pit 披露季增量刷新（round-robin 存量码 upsert）
+    try:
+        from quant.data.fundamental_pit import (
+            mark_refresh_done,
+            refresh_already_ran_today,
+            refresh_fundamental_pit_incremental,
+            should_refresh_fundamental_pit,
+        )
+
+        if args.force_fundamental_pit or should_refresh_fundamental_pit(today):
+            if args.force_fundamental_pit or not refresh_already_ran_today(today):
+                ok, fail = refresh_fundamental_pit_incremental(limit=300, rotate=True)
+                mark_refresh_done(today)
+                print(f"fundamental_pit 披露季刷新: ok={ok} fail={fail}")
+            else:
+                print(f"fundamental_pit: 今日已刷新，跳过")
+        else:
+            print("fundamental_pit: 非披露季窗口，跳过（可用 --force-fundamental-pit）")
+    except Exception as e:
+        print(f"[WARN] fundamental_pit 刷新失败: {e}", file=sys.stderr)
+
+    # 9. 因子 PIT 快照（hot/flow/theme；基本面见 fundamental_pit）
     try:
         from quant.data.factor_capture import capture_all_factor_snapshots
         from quant.data.universe import universe_codes
