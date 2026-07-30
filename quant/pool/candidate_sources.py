@@ -5,9 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from common.config import Settings
-from quant.data.sources.eastmoney import ztgc
+from quant.data.sources.factory import get_market_source
 from common.utils.ths_rank_fetch import fetch_with_retry
-from quant.data.sources.ths import cxfl, cxg, hot_stock, ljqs, lxsz
 from quant.pool.candidate_config import (
     PAYLOAD_KEY_CXFL,
     PAYLOAD_KEY_CXG,
@@ -42,7 +41,7 @@ async def _prefilter_popularity(settings: Settings, cfg: dict) -> list[dict]:
         if settings.QUANT_TEST_PHASE
         else popularity_limit(cfg)
     )
-    raw = await hot_stock(fetch_limit)
+    raw = await get_market_source().fetch_hot_raw(fetch_limit)
     rows = prefilter_popularity(raw if isinstance(raw, list) else [], cfg=cfg)
     return truncate_list_for_test_phase(rows, settings)
 
@@ -53,7 +52,7 @@ async def _prefilter_zt(
     *,
     zt_rows: list[dict] | None = None,
 ) -> list[dict]:
-    raw = zt_rows if zt_rows is not None else ztgc(filter_first=False)
+    raw = zt_rows if zt_rows is not None else get_market_source().fetch_ztgk_pool()
     rows = prefilter_zt_pool(raw if isinstance(raw, list) else [], cfg=cfg)
     return truncate_list_for_test_phase(rows, settings)
 
@@ -79,14 +78,19 @@ async def _prefilter_ths_rank(
             rows = rows[:batch_limit]
         return rows
 
+    src = get_market_source()
     for label in cxg_labels(cfg):
-        batches.append((label, await _fetch_batch(label, lambda l=label: cxg(l))))
-    for label, fn in (
-        ("持续上涨", lxsz),
-        ("持续放量", cxfl),
-        ("量价齐升", ljqs),
+        batches.append(
+            (label, await _fetch_batch(label, lambda l=label: src.fetch_ths_rank_screen("cxg", symbol=l)))
+        )
+    for label, kind in (
+        ("持续上涨", "lxsz"),
+        ("持续放量", "cxfl"),
+        ("量价齐升", "ljqs"),
     ):
-        batches.append((label, await _fetch_batch(label, fn)))
+        batches.append(
+            (label, await _fetch_batch(label, lambda k=kind: src.fetch_ths_rank_screen(k)))
+        )
     rows = merge_ths_rank_from_batches(batches, cfg=cfg)
     return truncate_list_for_test_phase(rows, settings)
 

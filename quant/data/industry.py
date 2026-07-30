@@ -63,9 +63,9 @@ def read_industry_snapshot(as_of: str) -> dict[str, str]:
 def fetch_current_industry_map() -> dict[str, str]:
     """拉取当前东财一级行业（供 update_daily 当日落库）。"""
     try:
-        from quant.data.sources.eastmoney.industry import fetch_em_industry_board
+        from quant.data.sources.factory import get_market_source
 
-        rows = fetch_em_industry_board()
+        rows = get_market_source().fetch_em_industry_map()
         out: dict[str, str] = {}
         for r in rows or []:
             code = str(r.get("代码") or r.get("股票代码") or "").strip()

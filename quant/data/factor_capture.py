@@ -21,11 +21,9 @@ def _num(v: object) -> float | None:
 def capture_hot_rank(as_of: str) -> int:
     """东财人气榜 → 截面 rank z-score。"""
     try:
-        import akshare as ak
-    except ImportError:
-        return 0
-    try:
-        df = ak.stock_hot_rank_em()
+        from quant.data.sources.factory import get_market_source
+
+        df = get_market_source().fetch_em_hot_rank()
     except Exception as e:
         print(f"[WARN] hot_rank 拉取失败: {e}", file=sys.stderr)
         return 0
@@ -57,7 +55,12 @@ def capture_fund_flow(as_of: str, spot: pd.DataFrame, universe_codes: list[str] 
         return 0
     code_col = "code" if "code" in spot.columns else "代码"
     mv_col = "float_mv" if "float_mv" in spot.columns else "流通市值"
-    flow_col = next((c for c in spot.columns if "主力" in str(c) and "净" in str(c)), None)
+    # 优先用归一化 spot 的 main_net_inflow；否则回退原始 ``主力净流入-净额`` 列名匹配
+    flow_col = (
+        "main_net_inflow"
+        if "main_net_inflow" in spot.columns
+        else next((c for c in spot.columns if "主力" in str(c) and "净" in str(c)), None)
+    )
     mv_map: dict[str, float] = {}
     flow_map: dict[str, float] = {}
     for _, r in spot.iterrows():
@@ -90,9 +93,11 @@ def capture_fund_flow(as_of: str, spot: pd.DataFrame, universe_codes: list[str] 
 
 def _fetch_flow_5d(code: str) -> float | None:
     try:
-        from quant.data.sources.eastmoney import zj
+        import asyncio
 
-        recs = zj(code) or []
+        from quant.data.sources.factory import get_enrich_source
+
+        recs = asyncio.run(get_enrich_source().fetch_stock_fund_flow_daily(code, days=10)) or []
         if len(recs) < 5:
             return None
         total = 0.0
@@ -114,11 +119,9 @@ def _fetch_flow_5d(code: str) -> float | None:
 def capture_theme_mom(as_of: str, spot: pd.DataFrame | None = None) -> int:
     """概念板块 5 日涨幅分位 → 个股 theme_mom（PIT 当日板块榜）。"""
     try:
-        import akshare as ak
-    except ImportError:
-        return 0
-    try:
-        boards = ak.stock_board_concept_name_em()
+        from quant.data.sources.factory import get_market_source
+
+        boards = get_market_source().fetch_em_concept_boards()
         if boards is None or boards.empty:
             return 0
         name_col = "板块名称" if "板块名称" in boards.columns else boards.columns[0]
@@ -183,10 +186,9 @@ def capture_all_factor_snapshots(
     """一次性采集 hot/flow/theme 快照（基本面统一走 fundamental_pit）。"""
     if spot is None:
         try:
-            import akshare as ak
+            from quant.data.fetch import fetch_spot_em
 
-            raw = ak.stock_zh_a_spot_em()
-            spot = raw
+            spot = fetch_spot_em()
         except Exception:
             spot = pd.DataFrame()
     n_hot = capture_hot_rank(as_of)

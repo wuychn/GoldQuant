@@ -215,7 +215,9 @@
 | `universe.max_crowding_rank` | `null` | 拥挤度排名上限（null 不限） |
 | `universe.participation_rate` | `0.1` | 候选池参与率 |
 
-### `data` — 数据源并发限流
+### `data` — 数据源并发限流与数据源选择
+
+并发限流（`quant/data/sources/rate_limit.py`，按厂商令牌桶）：
 
 | 项 | 默认 | 作用 |
 |----|------|------|
@@ -223,7 +225,18 @@
 | `akshare_max_concurrent` | `1` | AKShare 并发（过高易限流） |
 | `ths_max_concurrent` | `1` | 同花顺并发 |
 | `eastmoney_max_concurrent` | `1` | 东财并发 |
-| `sources.spot` | `akshare` | 实时快照数据源 |
+
+数据源选择（换源只改配置、不改代码；四类协议各一个 `default` 组合实现）：
+
+| 项 | 默认 | 作用 |
+|----|------|------|
+| `sources.daily` | `default` | 日线库数据源（构建/维护离线库：hist/index/calendar/code_list/delisted/spot） |
+| `sources.market` | `default` | 运维行情数据源（五时段 payload 宏观：index_spot/zqxy/ztgk/hot/concept/industry/fund_flow） |
+| `sources.enrich` | `default` | 个股 enrich 数据源（盘口/资金流/概念粘合度/问财概念/分钟K） |
+| `sources.info` | `default` | 资讯/基本信息数据源（全局新闻/个股基本信息 jbxx） |
+
+> 调用方走 facade（`get_daily_source()` / `get_market_source()` / `get_enrich_source()` /
+> `get_info_source()`），零感知后端实现。详见 `docs/ARCHITECTURE.md` 数据源章节。
 
 ### `scheduler` — APScheduler（`app/scheduling/quant_scheduler.py`）
 

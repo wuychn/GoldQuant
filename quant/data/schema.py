@@ -51,6 +51,7 @@ SPOT_EM_FIELD_MAP = {
     "涨跌幅": "pct",
     "量比": "vol_ratio",
     "涨速": "speed",
+    "主力净流入-净额": "main_net_inflow",
 }
 
 # stock_zh_a_hist 字段名 → daily_raw 字段名

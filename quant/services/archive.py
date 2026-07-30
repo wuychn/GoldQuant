@@ -322,13 +322,15 @@ def _ma_last(closes: list[float], n: int) -> float | None:
     return round(sum(closes[-n:]) / n, 4)
 
 
-def recompute_symbol_metrics(bars_path: Path) -> dict[str, Any] | None:
-    if not bars_path.is_file():
+def compute_metrics_from_bars(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """从 bar 列表（升序，键含 date/open/high/low/close）算 MA/ATR/MACD 指标。
+
+    纯函数、不读盘：供 ``services/enrich.py`` 内联算指标（读离线库 bar 后直接算），
+    也供 ``recompute_symbol_metrics`` 复用。返回不含 ``股票代码``/``computed_at``
+    （二者由调用方按上下文补）。
+    """
+    if not rows:
         return None
-    by_date = _read_bars_by_date(bars_path)
-    if not by_date:
-        return None
-    rows = [by_date[k] for k in sorted(by_date.keys())]
     closes = [float(r["close"]) for r in rows]
     highs = [float(r["high"]) for r in rows]
     lows = [float(r["low"]) for r in rows]
@@ -336,9 +338,7 @@ def recompute_symbol_metrics(bars_path: Path) -> dict[str, Any] | None:
     _, atr14 = _atr_wilder(tr, 14)
     macd = _macd_last(closes)
     last = rows[-1]
-    sym = bars_path.stem
-    out: dict[str, Any] = {
-        "股票代码": sym,
+    return {
         "bars_count": len(rows),
         "first_date": rows[0].get("date"),
         "latest_date": last.get("date"),
@@ -349,21 +349,26 @@ def recompute_symbol_metrics(bars_path: Path) -> dict[str, Any] | None:
         "MA30": _ma_last(closes, 30),
         "ATR14": round(atr14, 6) if atr14 is not None else None,
         "MACD": macd,
-        "computed_at": datetime.now().isoformat(timespec="seconds"),
     }
+
+
+def recompute_symbol_metrics(bars_path: Path) -> dict[str, Any] | None:
+    if not bars_path.is_file():
+        return None
+    by_date = _read_bars_by_date(bars_path)
+    if not by_date:
+        return None
+    rows = [by_date[k] for k in sorted(by_date.keys())]
+    out = compute_metrics_from_bars(rows)
+    if out is None:
+        return None
+    out["股票代码"] = bars_path.stem
+    out["computed_at"] = datetime.now().isoformat(timespec="seconds")
     return out
 
 
-def load_computed_metrics_zh(settings: Settings, symbol: str) -> dict[str, Any] | None:
-    """读取本地 ``computed`` 指标，转为全中文键，便于模型消费。"""
-    path = quant_archive_base(settings) / "computed" / f"{str(symbol).strip()}.json"
-    if not path.is_file():
-        return None
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as e:
-        logger.warning("读取技术指标失败 symbol=%s: %s", symbol, e)
-        return None
+def computed_raw_to_zh(raw: dict[str, Any]) -> dict[str, Any]:
+    """computed 指标 dict → 全中文键（供 LLM）+ 英文键（供 scoring 消费端）。"""
     macd = raw.get("MACD") if isinstance(raw.get("MACD"), dict) else {}
     ma5, ma10, ma20, ma30 = raw.get("MA5"), raw.get("MA10"), raw.get("MA20"), raw.get("MA30")
     latest = raw.get("latest_close")
@@ -373,7 +378,6 @@ def load_computed_metrics_zh(settings: Settings, symbol: str) -> dict[str, Any] 
         "信号线": macd.get("dea"),
         "柱": macd.get("histogram"),
     }
-    # 中文键供 LLM；英文键与 quant/scoring 消费端一致，避免只写中文导致评分读不到
     return {
         "最新收盘价": latest,
         "latest_close": latest,
@@ -390,6 +394,19 @@ def load_computed_metrics_zh(settings: Settings, symbol: str) -> dict[str, Any] 
         "MACD": macd_zh,
         "指标计算时间": raw.get("computed_at"),
     }
+
+
+def load_computed_metrics_zh(settings: Settings, symbol: str) -> dict[str, Any] | None:
+    """读取本地 ``computed`` 指标，转为全中文键，便于模型消费。"""
+    path = quant_archive_base(settings) / "computed" / f"{str(symbol).strip()}.json"
+    if not path.is_file():
+        return None
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning("读取技术指标失败 symbol=%s: %s", symbol, e)
+        return None
+    return computed_raw_to_zh(raw)
 
 
 def recompute_all_computed(base: Path) -> None:

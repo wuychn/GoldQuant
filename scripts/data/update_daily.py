@@ -172,9 +172,9 @@ def main() -> None:
         from quant.data.universe import universe_codes
 
         uni = universe_codes(today, rebuild=False)
-        import akshare as ak
+        from quant.data.fetch import fetch_spot_em
 
-        raw_spot = ak.stock_zh_a_spot_em()
+        raw_spot = fetch_spot_em()
         counts = capture_all_factor_snapshots(today, spot=raw_spot, universe_codes=uni)
         print(f"因子快照 @ {today}: {counts}")
     except Exception as e:

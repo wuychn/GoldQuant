@@ -172,9 +172,9 @@ def _fetch_jbxx_live(symbol: str) -> dict[str, Any] | None:
     if not key:
         return None
     try:
-        from quant.data.sources.eastmoney import jbxx
+        from quant.data.sources.factory import get_info_source
 
-        raw = jbxx(key)
+        raw = get_info_source().fetch_stock_info(key)
         return raw if isinstance(raw, dict) and raw else None
     except Exception as e:
         log_caught_error(logger, f"stock_jbxx_cache 拉取基本信息 symbol={key!r}", e)

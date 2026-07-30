@@ -233,6 +233,25 @@ sequenceDiagram
 3. 当日 `volume > 0`（非停牌）
 4. 20 日 ADV ≥ 1 亿元（`candidate.universe.min_adv_yi` 可配）
 
+### 5.1 数据源抽象（四类协议，换源只改配置）
+
+`quant/data/sources/` 把"取数"抽象成四类 Protocol，调用方走 facade 零感知后端；
+接入新数据源（tushare/sina/wind/自建）只改 `quant.yml` 的 `data.sources.*`、不改业务代码。
+
+| 协议 | facade | default 实现（组合最优） | 喂给 |
+|---|---|---|---|
+| `DailySource` | `get_daily_source()` | `daily/default.py`（index 直连东财 kline，其余 akshare） | L0 离线库（`fetch.py` / `build_daily`） |
+| `MarketSource` | `get_market_source()` | `market/default.py`（index_spot/zqxy 三级 fallback/ztgk 东财/hot·concept·industry ths/fund_flow akshare） | 五时段 payload（`tools/market.py`） |
+| `EnrichSource` | `get_enrich_source()` | `enrich/default.py`（盘口/资金流/概念粘合度/问财概念/分钟K） | 个股 enrich（`services/enrich.py`） |
+| `InfoSource` | `get_info_source()` | `info/default.py`（全局新闻/个股基本信息 jbxx） | 新闻 payload（`payload.py`）、`jbxx_cache` |
+
+- **职责切分**：Source 只"取数"（含归一化、单点错误兜底、多源 fallback）；业务编排（cache、
+  并发 io_tasks、payload 装配、过滤/涨停高度等）留在 facade（`fetch.py` / `tools/market.py` /
+  `services/enrich.py` / `payload.py`）。
+- **分层**：`sources` 只依赖 `common`，不引 `services`/`app`（`scripts/check_layering.py` 守卫）。
+- **HTTP 层**：akshare/东财走 `common/utils/source_headers.py` 的 curl_cffi 统一层（解决东财 clist
+  TLS 指纹反爬）；同花顺保持 httpx + Hexin-V。详见 memory `eastmoney-data-pitfalls`。
+
 ---
 
 ## 6. L2 目标组合

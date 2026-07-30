@@ -15,7 +15,7 @@ from __future__ import annotations
 import pandas as pd
 
 from quant.data.adjust import _sina_symbol
-from quant.data.fetch import _retry
+from quant.data.sources.daily._shared import _retry
 from quant.data.schema import HIST_FIELD_MAP
 
 

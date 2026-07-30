@@ -8,15 +8,13 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from common.config import Settings
-from common.utils.common_util import get_n_workdays_ago, list_to_dict_v2
-from quant.data.sources.eastmoney import hist, pk, zj
+from common.utils.common_util import get_n_workdays_ago, today
+from quant.data.sources.factory import get_daily_source, get_enrich_source
 from quant.services.archive import (
-    daily_hist_fetch_start_date,
-    load_computed_metrics_zh,
-    load_merge_write_daily_bars,
+    compute_metrics_from_bars,
+    computed_raw_to_zh,
+    normalized_full_start_date,
 )
-from quant.services.market_enrich import stock_intraday_minute_zh
-from quant.data.sources.ths import ThsFundsFetchError, ggzjl, wcxg
 from common.utils.error_log import log_caught_error
 from common.progress_log import log_progress, log_progress_count
 
@@ -123,30 +121,123 @@ def _hist_max_bars(settings: Settings, hist_max_bars: int | None) -> int:
     return max(20, int(settings.QUANT_HIST_SCORING_MAX_BARS))
 
 
-def _load_hist(settings: Settings, symbol: str, *, hist_max_bars: int | None = None) -> list:
-    if settings.QUANT_ARCHIVE_ENABLED:
-        start_d = daily_hist_fetch_start_date(settings, symbol)
-        hist_api = _sync_call_or_none(
-            f"历史行情 | ak.stock_zh_a_hist symbol={symbol!r}",
-            lambda: hist(symbol, period="daily", start_date=start_d),
-        )
-        if not isinstance(hist_api, list):
-            hist_api = []
-        hist_ = load_merge_write_daily_bars(settings, symbol, hist_api)
-    else:
-        def _hist_no_archive() -> object:
-            start = get_n_workdays_ago(None, 60)
-            if start:
-                return hist(symbol, start_date=start)
-            return hist(symbol)
+def _to_float(v: object) -> float | None:
+    try:
+        if v is None or v == "":
+            return None
+        f = float(v)
+        return f if f == f else None
+    except (TypeError, ValueError):
+        return None
 
-        hist_ = _sync_call_or_none(
-            f"历史行情 | ak.stock_zh_a_hist symbol={symbol!r}",
-            _hist_no_archive,
+
+def _df_to_bars(df) -> list[dict]:
+    """离线库 daily_raw DataFrame → bar dict 列表（升序，date=yyyymmdd，不复权）。
+
+    与 archive ``_bar_from_hist_row`` 同口径：close 缺失的行丢弃，open/high/low 缺失回退 close。
+    """
+    if df is None or getattr(df, "empty", True):
+        return []
+    out: list[dict] = []
+    for _, r in df.sort_values("date").iterrows():
+        d = str(r.get("date", "")).replace("-", "").replace("/", "")[:8]
+        c = _to_float(r.get("close"))
+        if c is None or len(d) != 8:
+            continue
+        out.append(
+            {
+                "date": d,
+                "open": _to_float(r.get("open")) or c,
+                "high": _to_float(r.get("high")) or c,
+                "low": _to_float(r.get("low")) or c,
+                "close": c,
+                "volume": _to_float(r.get("volume")) or 0.0,
+                "amount": _to_float(r.get("amount")) or 0.0,
+            }
         )
-    if not hist_:
-        hist_ = []
-    return _rows_last_n_trade_days(hist_, n=_hist_max_bars(settings, hist_max_bars))
+    return out
+
+
+def _bar_to_zh_row(bar: dict, symbol: str) -> dict:
+    """bar → 中文 OHLCV 记录（与 archive ``_bar_to_hist_row`` 同形状，``hist_rows_sorted`` 认）。"""
+    d = bar["date"]
+    ds = f"{d[:4]}-{d[4:6]}-{d[6:]}" if len(d) == 8 and d.isdigit() else str(d)
+    return {
+        "日期": ds,
+        "股票代码": symbol,
+        "开盘": bar["open"],
+        "收盘": bar["close"],
+        "最高": bar["high"],
+        "最低": bar["low"],
+        "成交量": bar["volume"],
+        "成交额": bar["amount"],
+    }
+
+
+def _fetch_today_bar(src, symbol: str) -> dict | None:
+    """经 DailySource 拉今日（盘中形成中的）日K；失败/非交易日返回 None。"""
+    t = today()
+    try:
+        bars = _df_to_bars(src.fetch_hist(symbol, start=t, end=t))
+    except Exception as e:  # noqa: BLE001
+        _log_error(f"今日K symbol={symbol!r}", e)
+        return None
+    return bars[-1] if bars else None
+
+
+def _upsert_today_bar(bars: list[dict], today_bar: dict | None) -> list[dict]:
+    """按日期 upsert 今日 bar（覆盖/补缺），保持升序。"""
+    if not today_bar:
+        return bars
+    d = today_bar["date"]
+    out = [b for b in bars if b["date"] != d]
+    out.append(today_bar)
+    out.sort(key=lambda b: b["date"])
+    return out
+
+
+def _load_hist_bars(settings: Settings, symbol: str) -> list[dict]:
+    """历史日K bar（升序，不复权）：离线库历史 + 今日实时K（经 DailySource）。
+
+    离线库空（未建库/新股）→ 全量兜底拉（经 DailySource，等价旧路径但走 source）。
+    返回全量 bar 供指标计算；``_load_hist_with_metrics`` 再截末 N 根给 ``历史行情``。
+    """
+    from quant.data.store import read_daily_raw
+
+    try:
+        bars = _df_to_bars(read_daily_raw(codes=[symbol]))
+    except Exception as e:  # noqa: BLE001  损坏 parquet 等不致命 → 视为空，走兜底
+        _log_error(f"离线库读取 symbol={symbol!r}", e)
+        bars = []
+    bars = _upsert_today_bar(bars, _fetch_today_bar(get_daily_source(), symbol))
+    if bars:
+        return bars
+    # 兜底：离线库无该股（未建库 / 新上市）→ 经 DailySource 全量拉
+    try:
+        full_start = normalized_full_start_date(settings)
+        df = _sync_call_or_none(
+            f"历史行情兜底 | fetch_hist symbol={symbol!r}",
+            lambda: get_daily_source().fetch_hist(symbol, start=full_start, end=today()),
+        )
+        bars = _df_to_bars(df)
+    except Exception as e:  # noqa: BLE001
+        _log_error(f"历史行情兜底 symbol={symbol!r}", e)
+        bars = []
+    return bars
+
+
+def _load_hist_with_metrics(
+    settings: Settings, symbol: str, *, hist_max_bars: int | None = None
+) -> tuple[list, dict | None]:
+    """一次读库，同时产出 ``历史行情``（末 N 根）与 ``技术指标``（全序列算）。"""
+    bars = _load_hist_bars(settings, symbol)
+    if not bars:
+        return [], None
+    hist_rows = [_bar_to_zh_row(b, symbol) for b in bars]
+    hist_ = _rows_last_n_trade_days(hist_rows, n=_hist_max_bars(settings, hist_max_bars))
+    raw = compute_metrics_from_bars(bars)
+    tzh = computed_raw_to_zh(raw) if raw else None
+    return hist_, tzh
 
 
 def _parse_existing_concepts(item: dict) -> list[str] | None:
@@ -185,7 +276,6 @@ async def fetch_stock_concept_fit_ths(
 ) -> ConceptFitFetchResult:
     """同花顺 F10 概念粘合度：内存 → 周文件缓存 → HTTP。"""
     from quant.services.concept_cache import get_stock_concept_cache
-    from quant.data.sources.ths.concept_fit_rank import get_concept_fit_rank_list
 
     key = str(symbol).strip()
     if not key:
@@ -219,7 +309,7 @@ async def fetch_stock_concept_fit_ths(
             return ConceptFitFetchResult(None, None)
 
         try:
-            rows = await asyncio.to_thread(get_concept_fit_rank_list, key)
+            rows = await get_enrich_source().fetch_concept_fit_rank(key)
             result = rows if rows else None
         except Exception:
             _log_error(f"同花顺F10概念粘合度 symbol={symbol!r}")
@@ -390,11 +480,8 @@ async def fetch_stock_concepts_wcxg(
             store[key] = None
             return ConceptFetchResult(None, None)
 
-        question = key
-        if name:
-            question = f"{question} {str(name).strip()}"
         try:
-            concepts = await wcxg(question)
+            concepts = await get_enrich_source().fetch_stock_concepts(key, name=name)
             result = concepts if concepts else None
         except Exception:
             _log_error(f"问财所属概念 symbol={symbol!r}")
@@ -402,43 +489,6 @@ async def fetch_stock_concepts_wcxg(
         file_cache.put(key, name=name, concepts=result)
         store[key] = result
         return ConceptFetchResult(result, "api")
-
-
-async def _ggzjl(symbol: str) -> dict | None:
-    try:
-        r = await ggzjl(symbol)
-        flash_ = r["flash"]
-        v_ = list_to_dict_v2(flash_, "name", "sr")
-        v_["大单流出"] = f"{v_['大单流出']} 万元"
-        v_["中单流出"] = f"{v_['中单流出']} 万元"
-        v_["小单流出"] = f"{v_['小单流出']} 万元"
-        v_["小单流入"] = f"{v_['小单流入']} 万元"
-        v_["中单流入"] = f"{v_['中单流入']} 万元"
-        v_["大单流入"] = f"{v_['大单流入']} 万元"
-        v_["总流入"] = f"{r['title']['zlr']} 万元"
-        v_["总流出"] = f"{r['title']['zlc']} 万元"
-        v_["净额"] = f"{r['title']['je']} 万元"
-        return v_
-    except ThsFundsFetchError as exc:
-        status = f" HTTP {exc.http_status}" if exc.http_status is not None else ""
-        log_caught_error(logger, f"stock_enrich [个股资金流 symbol={symbol!r}{status}]", exc)
-        return None
-    except Exception as exc:
-        _log_error(f"个股资金流 symbol={symbol!r}")
-        return None
-
-
-async def _fund_flow_daily(symbol: str, *, days: int = 10) -> list[dict] | None:
-    try:
-        from quant.data.sources.eastmoney import zj
-
-        rows = await asyncio.to_thread(zj, symbol)
-        if not isinstance(rows, list) or not rows:
-            return None
-        return rows[-days:]
-    except Exception:
-        _log_error(f"个股资金流日线 symbol={symbol!r}")
-        return None
 
 
 async def _attach_concepts_cache_only(
@@ -517,34 +567,33 @@ async def enrich_stock_row(
 
     await _ensure_stock_industry(item, symbol, allow_network=not skip_jbxx)
 
+    enrich_src = get_enrich_source()
     io_tasks: list[Any] = [
-        asyncio.to_thread(_sync_call_or_none, "盘口", lambda: pk(symbol)),
-        asyncio.to_thread(_load_hist, settings, symbol, hist_max_bars=hist_max_bars),
-        _ggzjl(symbol),
-        _fund_flow_daily(symbol),
+        enrich_src.fetch_stock_quote(symbol),
+        asyncio.to_thread(_load_hist_with_metrics, settings, symbol, hist_max_bars=hist_max_bars),
+        enrich_src.fetch_stock_fund_flow(symbol),
+        enrich_src.fetch_stock_fund_flow_daily(symbol),
     ]
     if include_pre_snapshot:
         io_tasks.append(
-            asyncio.to_thread(
-                stock_intraday_minute_zh,
-                "分钟行情 | ak.stock_zh_a_hist_pre_min_em",
-                symbol,
+            enrich_src.fetch_stock_minute(
+                symbol, context="分钟行情 | ak.stock_zh_a_hist_pre_min_em"
             )
         )
     io_results = await asyncio.gather(*io_tasks)
     pk_raw = io_results[0]
-    hist_ = io_results[1]
+    hist_result = io_results[1]
     zj_raw = io_results[2]
     zj_daily = io_results[3]
     pm = io_results[4] if include_pre_snapshot else None
+    hist_ = hist_result[0] if isinstance(hist_result, tuple) else []
+    tzh = hist_result[1] if isinstance(hist_result, tuple) else None
 
     item["盘口"] = pk_raw if isinstance(pk_raw, dict) else {}
     item["历史行情"] = hist_ if isinstance(hist_, list) else []
 
-    if settings.QUANT_ARCHIVE_ENABLED:
-        tzh = load_computed_metrics_zh(settings, symbol)
-        if tzh:
-            item["技术指标"] = tzh
+    if tzh:
+        item["技术指标"] = tzh
 
     if include_pre_snapshot:
         item["分钟行情"] = pm if isinstance(pm, list) else []
