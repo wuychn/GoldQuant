@@ -111,10 +111,6 @@ class Settings(BaseSettings):
     #: 不走代理的地址列表（逗号分隔），常见内网与本机
     PROXY_NO_PROXY: str = "localhost,127.0.0.1"
 
-    #: 是否将盘前/盘中/盘后聚合结果写入本地归档（快照 + 合并日线 + 指标）
-    QUANT_ARCHIVE_ENABLED: bool = True
-    #: 归档根目录；未设置时默认为用户目录下 ``~/.quant/archive``
-    QUANT_ARCHIVE_DIR: str | None = None
     #: 量化运行时数据根目录（state/views/daily/config/memory/cache 均位于其下）；
     #: 未设置时默认为用户目录下 ``~/.quant``。可在 ``.env`` 写 ``GOLDQUANT_QUANT_HOME_DIR``，
     #: 或在 shell 中 ``export QUANT_HOME=...``（无需前缀，便于临时覆盖）。

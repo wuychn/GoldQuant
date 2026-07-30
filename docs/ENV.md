@@ -46,8 +46,6 @@
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `GOLDQUANT_QUANT_HOME_DIR` | ~/.quant | 量化数据根（或 shell `QUANT_HOME`） |
-| `GOLDQUANT_QUANT_ARCHIVE_ENABLED` | true | 本地归档开关 |
-| `GOLDQUANT_QUANT_ARCHIVE_DIR` | ~/.quant/archive | 归档目录 |
 | `GOLDQUANT_QUANT_HIST_FULL_START_DATE` | 19900101 | 日线全量起点 |
 | `GOLDQUANT_QUANT_HIST_INCREMENTAL_TRADE_DAYS` | 5 | 增量重叠交易日 |
 | `GOLDQUANT_QUANT_SPOT_EM_FULL_TABLE` | false | 盘前是否拉全市场 spot |

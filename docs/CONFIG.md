@@ -65,8 +65,6 @@
 | 项 | 默认 | 作用 |
 |----|------|------|
 | `GOLDQUANT_QUANT_HOME_DIR` | 空→`~/.quant` | 量化数据根目录（state/views/daily/config/memory/cache 均在其下）。shell `export QUANT_HOME=...` 也可，但优先级**低于**此项 |
-| `GOLDQUANT_QUANT_ARCHIVE_ENABLED` | `true` | 是否写盘前/盘中/盘后归档 |
-| `GOLDQUANT_QUANT_ARCHIVE_DIR` | 空→`~/.quant/archive` | 跨日归档目录（与 HOME 相互独立） |
 
 ### 历史日线拉取
 

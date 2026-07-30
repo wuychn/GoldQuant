@@ -10,7 +10,7 @@ from typing import Any, Literal
 from common.config import Settings
 from common.utils.common_util import get_n_workdays_ago, today
 from quant.data.sources.factory import get_daily_source, get_enrich_source
-from quant.services.archive import (
+from quant.services.indicators import (
     compute_metrics_from_bars,
     computed_raw_to_zh,
     normalized_full_start_date,

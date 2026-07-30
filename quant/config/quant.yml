@@ -83,7 +83,6 @@ data:                          # 数据源并发限流
     market: default  # 运维行情数据源：default(组合最优)
     enrich: default  # 个股 enrich 数据源：default(组合最优；盘口/资金流/概念/分钟K)
     info: default    # 资讯/基本信息数据源：default(组合最优；新闻+个股基本信息)
-    spot: akshare               # 实时快照数据源
 scheduler:                     # APScheduler 定时任务（app/scheduling/quant_scheduler.py）
   enabled: true                # 总开关；false 时不启动调度器
   timezone: Asia/Shanghai

@@ -86,8 +86,6 @@ GoldQuant/
 2. `QUANT_HOME`（shell 临时覆盖，无需前缀）；
 3. 默认 `~/.quant`。
 
-> 跨日归档目录（`~/data/quant/archive`）单独由 `GOLDQUANT_QUANT_ARCHIVE_DIR` 控制，二者相互独立。
-
 ```text
 ~/.quant/
 ├── state/          # holding.jsonl、account.json（程序读写）
