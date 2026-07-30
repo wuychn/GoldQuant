@@ -73,6 +73,11 @@ def capture_fund_flow(as_of: str, spot: pd.DataFrame, universe_codes: list[str] 
             if fv is not None:
                 flow_map[code] = fv
     targets = universe_codes or list(mv_map.keys())
+    # 批量预取 spot 缺口的 5 日资金流（一次 asyncio.run 并发，非 per-call）
+    need_fetch = [
+        c for c in dict.fromkeys(targets) if mv_map.get(c) and flow_map.get(c) is None
+    ]
+    extra_flows = _fetch_flows_5d_batch(need_fetch)
     rows: list[dict] = []
     for code in targets:
         mv = mv_map.get(code)
@@ -80,7 +85,7 @@ def capture_fund_flow(as_of: str, spot: pd.DataFrame, universe_codes: list[str] 
             continue
         net = flow_map.get(code)
         if net is None:
-            net = _fetch_flow_5d(code)
+            net = extra_flows.get(code)
         if net is None:
             continue
         ratio = net / mv
@@ -91,29 +96,54 @@ def capture_fund_flow(as_of: str, spot: pd.DataFrame, universe_codes: list[str] 
     return len(rows)
 
 
-def _fetch_flow_5d(code: str) -> float | None:
+def _sum_flow_5d(recs: list) -> float | None:
+    """资金流日线近 5 根主力净流入合计（元）；不足 5 根或全 0 返回 None。"""
+    recs = recs or []
+    if len(recs) < 5:
+        return None
+    from quant.market.fund_flow import amount_to_yuan
+
+    total = 0.0
+    for r in recs[-5:]:
+        for k in ("主力净流入-净额", "净额", "净流入"):
+            v = r.get(k)
+            if v is not None:
+                yuan = amount_to_yuan(v)
+                if yuan is not None:
+                    total += yuan
+                    break
+    return total if total != 0 else None
+
+
+def _fetch_flows_5d_batch(codes: list[str]) -> dict[str, float]:
+    """批量取 5 日主力净流入：一次 ``asyncio.run`` 并发拉取，避免 per-call 起事件循环。
+
+    走 ``EnrichSource.fetch_stock_fund_flow_daily``（经 source，可换源）；东财限流
+    (eastmoney_max_concurrent) 内部已串行化。返回 {code: 净流入}（拉取失败/不足的不含）。
+    """
+    if not codes:
+        return {}
     try:
         import asyncio
 
         from quant.data.sources.factory import get_enrich_source
 
-        recs = asyncio.run(get_enrich_source().fetch_stock_fund_flow_daily(code, days=10)) or []
-        if len(recs) < 5:
-            return None
-        total = 0.0
-        for r in recs[-5:]:
-            for k in ("主力净流入-净额", "净额", "净流入"):
-                v = r.get(k)
-                if v is not None:
-                    from quant.market.fund_flow import amount_to_yuan
+        src = get_enrich_source()
 
-                    yuan = amount_to_yuan(v)
-                    if yuan is not None:
-                        total += yuan
-                        break
-        return total if total != 0 else None
+        async def _gather() -> list:
+            return await asyncio.gather(
+                *[src.fetch_stock_fund_flow_daily(c, days=10) for c in codes]
+            )
+
+        recs_list = asyncio.run(_gather())
     except Exception:
-        return None
+        return {}
+    out: dict[str, float] = {}
+    for code, recs in zip(codes, recs_list or []):
+        v = _sum_flow_5d(recs)
+        if v is not None:
+            out[code] = v
+    return out
 
 
 def capture_theme_mom(as_of: str, spot: pd.DataFrame | None = None) -> int:
