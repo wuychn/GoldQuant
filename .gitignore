@@ -33,3 +33,6 @@ htmlcov/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# 东财请求头（含 Cookie/用户标识，勿入库；各端自行通过 /api/v1/admin/eastmoney 写入）
+.eastmoney.header

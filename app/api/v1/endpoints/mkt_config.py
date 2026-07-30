@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from app.core.eastmoney_headers import eastmoney_header_file_path, save_headers_to_file
+from common.utils.source_headers import eastmoney_header_file_path, save_headers_to_file
 from app.schemas.response import Response
 
 router = APIRouter(prefix="/admin/eastmoney", tags=["admin"])

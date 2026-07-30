@@ -29,10 +29,16 @@ from quant.data.store import (
 )
 from common.timeutil import cn_now
 
-# 代码表来源：spot_em 当日快照（含沪深京全A）
+# 代码表来源：stock_info_a_code_name（stockapi 稳定，不走 clist）；失败回退 spot_em
 def _all_codes() -> list[str]:
-    from quant.data.fetch import fetch_spot_em
+    from quant.data.fetch import fetch_a_code_name, fetch_spot_em
 
+    try:
+        codes = fetch_a_code_name()
+        if codes:
+            return codes
+    except Exception as e:  # noqa: BLE001
+        print(f"[WARN] fetch_a_code_name 失败，回退 spot_em: {e}", file=sys.stderr)
     df = fetch_spot_em()
     if df.empty:
         return []
@@ -46,11 +52,12 @@ def _existing_codes() -> set[str]:
     return set(df["code"].astype(str).str.strip().unique())
 
 
-def _build_one(code: str, start: str, end: str) -> tuple[str, int]:
-    """拉单只并落库。重试/退避由 ``fetch_hist`` 内部 ``_retry`` 兜底，失败返回 0 行。
+def _build_one(code: str, start: str, end: str) -> tuple[str, int, str | None]:
+    """拉单只并落库。返回 ``(code, 行数, reason)``：reason 非 None 表示**网络失败**（可重试）。
 
-    东财 ``stock_zh_a_hist`` 对退市/早期停牌股常返回空；此时回退 Sina
-    ``stock_zh_a_daily`` 拉历史（退市股修复幸存者偏差的关键路径）。
+    重试/退避由 ``fetch_hist`` 内部 ``_retry`` 兜底；东财对退市/早期停牌股常返回空，
+    此时回退 Sina ``stock_zh_a_daily``（退市股修复幸存者偏差的关键路径）。空数据（行数 0、
+    reason None）属正常，不计入失败清单。
     """
     try:
         df = fetch_hist(code, start=start, end=end, adjust="")
@@ -58,10 +65,42 @@ def _build_one(code: str, start: str, end: str) -> tuple[str, int]:
             df = fetch_delisted_daily(code, start=start, end=end)
         if not df.empty:
             write_daily_raw(df)
-        return code, len(df)
+        return code, len(df), None
     except Exception as e:  # noqa: BLE001
         print(f"[WARN] {code} 拉取失败: {e}", file=sys.stderr)
-        return code, 0
+        return code, 0, str(e)[:200]
+
+
+def _failed_file() -> Path:
+    """失败 code 清单：``$QUANT_HOME/data/build_failed.jsonl``（JSONL，每行一个 entry）。"""
+    from quant.store.paths import quant_home
+
+    return quant_home() / "data" / "build_failed.jsonl"
+
+
+def _read_failed() -> dict[str, dict]:
+    p = _failed_file()
+    if not p.is_file():
+        return {}
+    out: dict[str, dict] = {}
+    for line in p.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            d = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(d, dict) and d.get("code") is not None:
+            out[str(d["code"])] = d
+    return out
+
+
+def _write_failed(failed: dict[str, dict]) -> None:
+    p = _failed_file()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    lines = [json.dumps(v, ensure_ascii=False) for v in failed.values()]
+    p.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
 
 
 def _refresh_adj_all(codes: list[str]) -> None:
@@ -115,70 +154,128 @@ def main() -> None:
         action="store_true",
         help="跳过后复权因子全量初始化（默认拉取，修复除权日假跳空）",
     )
+    ap.add_argument(
+        "--retry-failed",
+        action="store_true",
+        help="只重试 build_failed.jsonl 里的失败 code（成功移除；失败 retries+1；达 --dead-threshold 标 dead 不再自动重试）",
+    )
+    ap.add_argument(
+        "--dead-threshold",
+        type=int,
+        default=5,
+        help="失败重试次数达此值标 dead（默认 5）",
+    )
+    ap.add_argument(
+        "--req-interval",
+        default=None,
+        help="东财请求间隔秒（限速），格式 MIN,MAX 或 N（默认 1,3）。降频(如 3,6)避频控；升频慎用",
+    )
     args = ap.parse_args()
+
+    if args.req_interval:
+        from common.utils.source_headers import set_eastmoney_interval
+        parts = [p.strip() for p in args.req_interval.split(",") if p.strip()]
+        if len(parts) == 1:
+            lo = hi = int(parts[0])
+        else:
+            lo, hi = int(parts[0]), int(parts[1])
+        set_eastmoney_interval(lo, hi)
+        print(f"东财请求间隔: {lo},{hi}s")
 
     end = args.end or cn_now().strftime("%Y-%m-%d")
 
-    # 交易日历
-    try:
-        cal = fetch_trade_calendar()
-        write_calendar([d for d in cal if d <= end])
-        print(f"交易日历: {len(cal)} 条")
-    except Exception as e:
-        print(f"[WARN] 交易日历拉取失败: {e}", file=sys.stderr)
-
-    # 基准指数
-    for idx in ("000300", "000905", "000852"):
-        try:
-            df = fetch_index(idx, start=args.start, end=end)
-            write_index_daily(df)
-            print(f"指数 {idx}: {len(df)} 行")
-        except Exception as e:
-            print(f"[WARN] 指数 {idx} 失败: {e}", file=sys.stderr)
-
-    # 代码表
-    if args.codes:
-        codes = [c.strip() for c in args.codes.split(",") if c.strip()]
+    if args.retry_failed:
+        failed = _read_failed()
+        todo = [c for c, e in failed.items() if not e.get("dead")]
+        print(f"--retry-failed: 清单 {len(failed)} 只（dead {len(failed) - len(todo)}），重试 {len(todo)} 只")
+        if not todo:
+            print("无待重试 code，退出")
+            return
+        codes = list(todo)
     else:
+        # 交易日历
         try:
-            codes = _all_codes()
+            cal = fetch_trade_calendar()
+            write_calendar([d for d in cal if d <= end])
+            print(f"交易日历: {len(cal)} 条")
         except Exception as e:
-            print(f"[FATAL] 无法获取代码表（spot_em 失败）: {e}", file=sys.stderr)
-            sys.exit(1)
-        if not args.no_delisted:
-            # 退市股并入（修复幸存者偏差）；失败则跳过，不阻断
+            print(f"[WARN] 交易日历拉取失败: {e}", file=sys.stderr)
+
+        # 基准指数
+        for idx in ("000300", "000905", "000852"):
             try:
-                del_codes = fetch_delisted_codes()["code"].astype(str).str.strip().tolist()
-                codes = list(dict.fromkeys(codes + del_codes))  # 去重保序
-                print(f"退市股并入: +{len(del_codes)} → 代码总数 {len(codes)}")
+                df = fetch_index(idx, start=args.start, end=end)
+                write_index_daily(df)
+                print(f"指数 {idx}: {len(df)} 行")
             except Exception as e:
-                print(f"[WARN] 退市清单拉取失败（跳过）: {e}", file=sys.stderr)
-    if args.limit:
-        codes = codes[: args.limit]
-    print(f"全A 代码数: {len(codes)}")
+                print(f"[WARN] 指数 {idx} 失败: {e}", file=sys.stderr)
 
-    done = _existing_codes()
-    if args.ignore_existing:
-        todo = list(codes)
-        print(f"--ignore-existing：强制全拉 {len(todo)} 只（write 按 code+date 去重，不重复）")
-    else:
-        todo = [c for c in codes if c not in done]
-        print(f"已落库: {len(done)}，待拉: {len(todo)}")
+        # 代码表
+        if args.codes:
+            codes = [c.strip() for c in args.codes.split(",") if c.strip()]
+        else:
+            try:
+                codes = _all_codes()
+            except Exception as e:
+                print(f"[FATAL] 无法获取代码表（spot_em 失败）: {e}", file=sys.stderr)
+                sys.exit(1)
+            if not args.no_delisted:
+                # 退市股并入（修复幸存者偏差）；失败则跳过，不阻断
+                try:
+                    del_codes = fetch_delisted_codes()["code"].astype(str).str.strip().tolist()
+                    codes = list(dict.fromkeys(codes + del_codes))  # 去重保序
+                    print(f"退市股并入: +{len(del_codes)} → 代码总数 {len(codes)}")
+                except Exception as e:
+                    print(f"[WARN] 退市清单拉取失败（跳过）: {e}", file=sys.stderr)
+        if args.limit:
+            codes = codes[: args.limit]
+        print(f"全A 代码数: {len(codes)}")
 
-    ok = fail = 0
+        done = _existing_codes()
+        if args.ignore_existing:
+            todo = list(codes)
+            print(f"--ignore-existing：强制全拉 {len(todo)} 只（write 按 code+date 去重，不重复）")
+        else:
+            todo = [c for c in codes if c not in done]
+            print(f"已落库: {len(done)}，待拉: {len(todo)}")
+
+    # 拉取（两种模式共用）。reason 非 None = 网络失败（可重试）；行数 0 且 reason None = 空数据（退市/停牌，正常）
+    ok = empty = fail = 0
+    results: dict[str, tuple[int, str | None]] = {}
     t0 = time.time()
     with ThreadPoolExecutor(max_workers=args.workers) as ex:
         futs = {ex.submit(_build_one, c, args.start, end): c for c in todo}
         for i, fut in enumerate(as_completed(futs), 1):
-            code, n = fut.result()
+            code, n, reason = fut.result()
+            results[code] = (n, reason)
             if n > 0:
                 ok += 1
-            else:
+            elif reason:
                 fail += 1
+            else:
+                empty += 1
             if i % 50 == 0 or i == len(todo):
-                print(f"进度 {i}/{len(todo)}  ok={ok} fail={fail}  {time.time()-t0:.0f}s")
+                print(f"进度 {i}/{len(todo)}  ok={ok} empty={empty} fail={fail}  {time.time()-t0:.0f}s")
 
-    print(f"完成: ok={ok} fail={fail}  耗时 {time.time()-t0:.0f}s")
+    print(f"完成: ok={ok} empty={empty} fail={fail}  耗时 {time.time()-t0:.0f}s")
+
+    # 失败清单：成功的移除；失败的 retries+1（达阈值标 dead）。空数据不动。
+    failed = _read_failed()
+    for code, (n, reason) in results.items():
+        if n > 0:
+            failed.pop(code, None)
+        elif reason:
+            retries = failed.get(code, {}).get("retries", 0) + 1
+            failed[code] = {
+                "code": code,
+                "reason": reason,
+                "ts": cn_now().isoformat(timespec="seconds"),
+                "retries": retries,
+                "dead": retries >= args.dead_threshold,
+            }
+    _write_failed(failed)
+    n_dead = sum(1 for e in failed.values() if e.get("dead"))
+    print(f"失败清单: {len(failed)} 只（dead {n_dead}）→ {_failed_file()}")
 
     # 后复权因子全量初始化（默认开；--no-adj 跳过）
     if not args.no_adj:

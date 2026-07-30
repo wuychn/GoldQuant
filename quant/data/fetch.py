@@ -12,6 +12,13 @@ import pandas as pd
 
 from quant.data.schema import HIST_FIELD_MAP, INDEX_DAILY_COLUMNS, SPOT_EM_FIELD_MAP
 
+# 进程级注入东财请求头（.eastmoney.header 里的 Cookie/user-agent）。
+# build/update/maintain 与 ``python -m quant`` 直跑不经 app lifespan，故在数据拉取模块
+# 加载时统一打补丁，否则 requests 裸奔会被东财识别为爬虫断开（RemoteDisconnected）。
+from common.utils.source_headers import apply_source_header_patch
+
+apply_source_header_patch()
+
 # 限流标记（异常消息命中则退避加倍）
 _LIMIT_MARKERS = ("429", "限流", "too many", "rate limit", "ratelimit", "throttl")
 
@@ -63,6 +70,18 @@ def _normalize_spot(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def fetch_a_code_name() -> list[str]:
+    """A 股代码表（``stock_info_a_code_name``，东财 stockapi，不走 clist，稳定）。
+
+    替代 ``stock_zh_a_spot_em`` 拿代码表：后者走 ``push2/clist`` 反爬严易被断
+    （RemoteDisconnected）；stockapi 接口稳定。盘中实时快照仍用 ``fetch_spot_em``。
+    """
+    import akshare as ak
+
+    df = _retry(lambda: ak.stock_info_a_code_name(), label="a_code_name", retries=2)
+    return df["code"].astype(str).str.strip().tolist()
+
+
 def fetch_hist(code: str, *, start: str, end: str, adjust: str = "") -> pd.DataFrame:
     """单只历史日线 → daily_raw 列（含 date）。``adjust`` 默认不复权。"""
     import akshare as ak
@@ -101,32 +120,52 @@ def _normalize_hist(df: pd.DataFrame, code: str) -> pd.DataFrame:
 
 
 def fetch_index(code: str = "000300", *, start: str, end: str) -> pd.DataFrame:
-    """指数日线 → index_daily 列。"""
-    import akshare as ak
+    """指数日线 → index_daily 列。
 
-    df = _retry(
-        lambda: ak.index_zh_a_hist(
-            symbol=str(code),
-            period="daily",
-            start_date=start.replace("-", ""),
-            end_date=end.replace("-", ""),
-        ),
-        label=f"index {code}",
-    )
-    out = pd.DataFrame()
-    col_map = {
-        "日期": "date", "开盘": "open", "最高": "high", "最低": "low",
-        "收盘": "close", "成交量": "volume", "成交额": "amount",
+    直接调东财 kline 接口（push2his）拉取。akshare 的 ``index_zh_a_hist`` 先走
+    ``80.push2/clist`` 易被东财限流/断开（RemoteDisconnected）；kline 接口带
+    ``.eastmoney.header``（补丁自动注入）稳定。
+    """
+    import requests
+
+    from common.utils.source_headers import load_headers_from_file
+
+    secid = f"1.{code}"  # 沪市指数前缀（沪深300/中证500/中证1000 均为 1.）
+    url = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
+    params = {
+        "secid": secid,
+        "fields1": "f1,f2,f3,f4,f5,f6",
+        "fields2": "f51,f52,f53,f54,f55,f56,f57,f58",
+        "klt": "101",   # 日线
+        "fqt": "0",     # 不复权
+        "beg": start.replace("-", ""),
+        "end": end.replace("-", ""),
     }
-    for src, dst in col_map.items():
-        if src in df.columns:
-            out[dst] = df[src]
-    out["code"] = str(code)
-    out["date"] = pd.to_datetime(out["date"]).dt.strftime("%Y-%m-%d")
-    for c in ("open", "high", "low", "close", "volume", "amount"):
-        if c in out.columns:
+
+    def _call() -> pd.DataFrame:
+        resp = requests.get(url, params=params, headers=load_headers_from_file(), timeout=15)
+        resp.raise_for_status()
+        kls = (resp.json().get("data") or {}).get("klines") or []
+        if not kls:
+            return pd.DataFrame(columns=list(INDEX_DAILY_COLUMNS))
+        # 每行: date,open,close,high,low,volume,amount,amplitude
+        rows = [k.split(",") for k in kls]
+        raw = pd.DataFrame(rows, columns=["date", "open", "close", "high", "low", "volume", "amount", "_amp"])
+        out = pd.DataFrame()
+        out["code"] = str(code)
+        out["date"] = raw["date"]
+        out["open"] = raw["open"]
+        out["high"] = raw["high"]
+        out["low"] = raw["low"]
+        out["close"] = raw["close"]
+        out["volume"] = raw["volume"]
+        out["amount"] = raw["amount"]
+        out["date"] = pd.to_datetime(out["date"]).dt.strftime("%Y-%m-%d")
+        for c in ("open", "high", "low", "close", "volume", "amount"):
             out[c] = pd.to_numeric(out[c], errors="coerce")
-    return out[list(INDEX_DAILY_COLUMNS)]
+        return out[list(INDEX_DAILY_COLUMNS)]
+
+    return _retry(_call, label=f"index {code}")
 
 
 def fetch_trade_calendar() -> list[str]:

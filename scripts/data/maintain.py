@@ -113,6 +113,12 @@ def main() -> None:
 
     print(f"[maintain] 当日增量 update_daily --date {as_of}")
     _invoke_module("scripts.data.update_daily", ["--date", as_of])
+
+    # 重试失败清单（按 code 维度）：scan_missing_dates 按"日期缺口"补不到单只 code 的偶发失败，
+    # 这里把 build_failed.jsonl 里的失败 code 也纳入自愈（成功移除、失败 retries+1、达阈值 dead）。
+    print("[maintain] 重试失败清单 build_daily --retry-failed")
+    _invoke_module("scripts.data.build_daily", ["--retry-failed"])
+
     print("[maintain] 完成")
 
 
