@@ -124,9 +124,10 @@ def _adv_vol_for(daily_by_code: dict[str, pd.DataFrame], code: str, as_of: str) 
     if prev.empty:
         return 0.0, 0.0
     adv = 0.0
-    amt = pd.to_numeric(prev["amount"], errors="coerce").dropna().tail(20)
-    if not amt.empty:
-        adv = float(amt.mean())
+    if "amount" in prev.columns:
+        amt = pd.to_numeric(prev["amount"], errors="coerce").dropna().tail(20)
+        if not amt.empty:
+            adv = float(amt.mean())
     vol = 0.0
     closes = pd.to_numeric(prev["close"], errors="coerce").dropna().tail(15)
     if len(closes) >= 2:

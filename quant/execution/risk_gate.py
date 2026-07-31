@@ -287,7 +287,9 @@ def build_risk_context(*, total_assets: float, cooldown_days: int | None = None)
     cooldown = stoploss_cooldown_codes(days)
     sold = codes_sold_today()
     day_start = get_day_start_equity()  # 只读：基准由盘前/前一日决策显式写，防盘中首调劫持
-    idx_chg = fetch_index_change_pct()
+    # 仅在配置了大盘熔断阈值时才拉全市场 spot（ak.stock_zh_a_spot_em 走 clist，
+    # 慢且易反爬）；未配置熔断则 idx_chg 不参与任何判定，省掉网络取数。
+    idx_chg = fetch_index_change_pct() if circuit_pct is not None else None
 
     return assess_buy_gate(
         total_assets=total_assets,
