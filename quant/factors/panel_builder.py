@@ -147,7 +147,7 @@ def build_panel(
             px = float(close_arr[pos]) if close_arr is not None and pos >= 0 else None
             fm = float(mv_arr[pos]) if mv_arr is not None and pos >= 0 and np.isfinite(mv_arr[pos]) else None
             pit_extras = metrics_as_of(code, d, close=px, float_mv=fm, index=pit_index)
-            bars.extras = dict(pit_extras)
+            object.__setattr__(bars, "extras", dict(pit_extras))
 
             raw: dict[str, float] = {}
             for f in factors:

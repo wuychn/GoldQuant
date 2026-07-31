@@ -40,8 +40,11 @@ def _retry(fn, *, retries: int = 4, base: float = 1.0, label: str = ""):
 
 
 def _index_secid(code: str) -> str:
-    """沪深300/中证500/中证1000 等中证系列指数均沪市发布 → ``1.<code>``。"""
-    return f"1.{code}"
+    """东财 secid：沪市指数 ``1.<code>``；深市 399xxx 用 ``0.<code>``。"""
+    c = str(code).strip()
+    if c.startswith("399"):
+        return f"0.{c}"
+    return f"1.{c}"
 
 
 def eastmoney_index_kline(code: str, *, start: str, end: str) -> pd.DataFrame:

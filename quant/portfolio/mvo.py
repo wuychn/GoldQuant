@@ -47,6 +47,7 @@ def optimize_mvo(
     concept_cap: float = 0.0,
     style_buckets: dict[str, str] | None = None,
     style_caps: dict[str, float] | None = None,
+    style_groups: list[tuple[dict[str, str], float]] | None = None,
 ) -> dict[str, float]:
     """SLSQP 约束 MVO；无 scipy 时回退解析解 + 投影。"""
     if not codes:
@@ -84,7 +85,11 @@ def optimize_mvo(
         for name in concept_names:
             g = {c: name for c in codes if name in (concepts.get(c) or [])}
             ineq.extend(_group_caps(codes, g, concept_cap))
-    if style_buckets and style_caps:
+    if style_groups:
+        for groups, cap in style_groups:
+            if cap > 0 and groups:
+                ineq.extend(_group_caps(codes, groups, cap))
+    elif style_buckets and style_caps:
         for bucket, cap in style_caps.items():
             if cap <= 0:
                 continue

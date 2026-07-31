@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from fastapi.concurrency import run_in_threadpool
+
 from quant.data.sources.rate_limit import alimit
 from quant.data.sources.ths.concept import fetch_ths_concept_fund_flow
 from quant.data.sources.ths.funds import ThsFundsFetchError, fetch_stock_funds_cached, reset_ths_funds_cache_for_tests
@@ -35,11 +37,11 @@ def __getattr__(name: str):
 
 
 async def fetch_stock_funds(symbol: str, **kwargs):
-    return await alimit("ths", lambda: fetch_stock_funds_cached(symbol, **kwargs))
+    return await alimit("ths", lambda: run_in_threadpool(fetch_stock_funds_cached, symbol, **kwargs))
 
 
 async def fetch_concept_fund_flow(symbol: str = "即时"):
-    return await alimit("ths", lambda: fetch_ths_concept_fund_flow(symbol))
+    return await alimit("ths", lambda: run_in_threadpool(fetch_ths_concept_fund_flow, symbol))
 
 
 __all__ = [

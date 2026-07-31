@@ -219,16 +219,19 @@ def _build_sell_watch(card, daily, names, as_of, holdings) -> list[dict]:
         if not code:
             continue
         try:
-            entry = float(h.get("买入价") or 0)
+            entry_raw = float(h.get("买入价") or 0)
             qty = int(float(h.get("持仓股数") or 0))
         except (TypeError, ValueError):
             continue
-        if entry <= 0 or qty <= 0:
+        buy_date = str(h.get("买入时间") or "")[:10] or as_of
+        if entry_raw <= 0 or qty <= 0:
             continue
         hist = daily[(daily["code"] == code) & (daily["date"] <= as_of)].sort_values("date")
         if hist.empty:
             continue
-        highest = float(h.get("持仓最高价") or hist["close"].max())
+        buy_row = hist[hist["date"] == buy_date]
+        entry = float(buy_row["close"].iloc[0]) if not buy_row.empty else entry_raw
+        highest = float(h.get("持仓最高价") or entry)
         a = float(atr(hist, 14).iloc[-1]) if len(hist) >= 15 else 0.0
         hard_stop = max(entry * (1 - DEFAULT_HARD_PCT), entry - DEFAULT_ATR_MULT_STOP * a) if a > 0 else entry * (1 - DEFAULT_HARD_PCT)
         atr_stop = (max(entry, highest) - DEFAULT_ATR_MULT * a) if a > 0 else None

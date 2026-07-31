@@ -55,37 +55,22 @@ def capture_fund_flow(as_of: str, spot: pd.DataFrame, universe_codes: list[str] 
         return 0
     code_col = "code" if "code" in spot.columns else "代码"
     mv_col = "float_mv" if "float_mv" in spot.columns else "流通市值"
-    # 优先用归一化 spot 的 main_net_inflow；否则回退原始 ``主力净流入-净额`` 列名匹配
-    flow_col = (
-        "main_net_inflow"
-        if "main_net_inflow" in spot.columns
-        else next((c for c in spot.columns if "主力" in str(c) and "净" in str(c)), None)
-    )
     mv_map: dict[str, float] = {}
-    flow_map: dict[str, float] = {}
     for _, r in spot.iterrows():
         code = str(r.get(code_col, "")).strip()
         mv = _num(r.get(mv_col))
         if code and mv and mv > 0:
             mv_map[code] = mv
-        if flow_col and code:
-            fv = _num(r.get(flow_col))
-            if fv is not None:
-                flow_map[code] = fv
     targets = universe_codes or list(mv_map.keys())
-    # 批量预取 spot 缺口的 5 日资金流（一次 asyncio.run 并发，非 per-call）
-    need_fetch = [
-        c for c in dict.fromkeys(targets) if mv_map.get(c) and flow_map.get(c) is None
-    ]
+    # flow_ratio_5 必须取 5 日累加；spot 的 main_net_inflow 是当日值，不可混用
+    need_fetch = [c for c in dict.fromkeys(targets) if mv_map.get(c)]
     extra_flows = _fetch_flows_5d_batch(need_fetch)
     rows: list[dict] = []
     for code in targets:
         mv = mv_map.get(code)
         if not mv or mv <= 0:
             continue
-        net = flow_map.get(code)
-        if net is None:
-            net = extra_flows.get(code)
+        net = extra_flows.get(code)
         if net is None:
             continue
         ratio = net / mv

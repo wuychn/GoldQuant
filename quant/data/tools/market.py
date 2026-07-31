@@ -36,7 +36,7 @@ def _market_source():
 
 async def fetch_index_spot() -> list | None:
     try:
-        return _market_source().fetch_index_spot()
+        return await run_in_threadpool(_market_source().fetch_index_spot)
     except Exception as e:
         log_tool_error("大盘指数", e)
         return None

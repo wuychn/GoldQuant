@@ -170,12 +170,11 @@ class TargetPortfolio:
         sigmas, covdict = self._cov(codes, date)
         if self.optimizer == "mvo" and covdict is not None:
             size_b, mom_b = self._style_buckets(codes, date)
-            style_caps: dict[str, float] = {}
-            if self.max_size_exposure > 0:
-                style_caps["small"] = self.max_size_exposure
-            if self.max_momentum_exposure > 0:
-                style_caps["high_mom"] = self.max_momentum_exposure
-            style_buckets = {**{c: b for c, b in size_b.items()}, **{c: b for c, b in mom_b.items()}}
+            style_groups: list[tuple[dict[str, str], float]] = []
+            if self.max_size_exposure > 0 and size_b:
+                style_groups.append((size_b, self.max_size_exposure))
+            if self.max_momentum_exposure > 0 and mom_b:
+                style_groups.append((mom_b, self.max_momentum_exposure))
             w = optimize_mvo(
                 codes,
                 alpha,
@@ -188,8 +187,7 @@ class TargetPortfolio:
                 sector_cap=self.sector_cap,
                 concepts=self.concepts if self.concepts else None,
                 concept_cap=self.concept_cap,
-                style_buckets=style_buckets if style_caps else None,
-                style_caps=style_caps or None,
+                style_groups=style_groups or None,
             )
         elif self.alpha_weighted:
             w = alpha_strength_weights(alpha, codes, full_invest=self.full_invest, shrink=self.alpha_shrink)

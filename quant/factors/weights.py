@@ -22,7 +22,7 @@ def _tstat_to_pvalue(tstat: float, n_days: int) -> float:
         return 1.0
     from scipy.stats import t as tdist
 
-    return float(tdist.sf(abs(float(tstat)), max(1, n_days - 1)))
+    return float(tdist.sf(float(tstat), max(1, n_days - 1)))
 
 
 def select_factors_fdr(ic_report: dict, *, fdr_alpha: float = 0.05) -> set[str]:
