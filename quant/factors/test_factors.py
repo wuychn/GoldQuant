@@ -8,7 +8,14 @@ import pandas as pd
 from quant.factors.base import FactorRow
 from quant.factors.compose import compose_alpha, rank_alpha, top_n
 from quant.factors.ic import daily_rank_ic, quintile_spread
-from quant.factors.library import ALL_FACTORS, BarSeries
+from quant.factors.library import (
+    ALL_FACTORS,
+    FLOW_FACTORS,
+    FUNDAMENTAL_FACTORS,
+    HOT_FACTORS,
+    THEME_FACTORS,
+    BarSeries,
+)
 from quant.factors.registry import REGISTRY
 
 
@@ -38,8 +45,13 @@ def test_factor_registry_covers_families():
 def test_factors_compute_on_synthetic():
     bars = _synth_bars("000001")
     as_of = bars.df.index[-1]
-    # 回测置空：资金/主题/热度依赖 extras 或面板代理；其余应有值
-    allow_none = {"flow_ratio_5", "theme_mom", "hot_rank_z"}
+    # 依赖 extras/PIT 快照的族（资金/主题/热度/基本面）在无 extras 的合成 bar 上
+    # 合法返回 None；纯 OHLCV 因子必须有值。
+    allow_none = {
+        f.name
+        for fam in (FLOW_FACTORS, THEME_FACTORS, HOT_FACTORS, FUNDAMENTAL_FACTORS)
+        for f in fam
+    }
     for f in ALL_FACTORS:
         v = f.compute(bars, as_of)
         if f.name in allow_none:

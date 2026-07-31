@@ -52,14 +52,18 @@ def test_build_pre_market_payload_mocked():
     settings = type(
         "S",
         (),
-        {"quant_bulk_row_limit": lambda self: None, "quant_hot_list_limit": lambda self: 30},
+        {
+            "quant_bulk_row_limit": lambda self: None,
+            "quant_hot_list_limit": lambda self: 30,
+            "quant_test_list_limit": lambda self: None,
+        },
     )()
     with (
         patch("quant.services.market.payload.fetch_index_spot", new=AsyncMock(return_value=[])),
         patch("quant.services.market.payload.fetch_zqxy", new=AsyncMock(return_value={})),
         patch("quant.services.market.payload.fetch_ztgk", new=AsyncMock(return_value={})),
         patch(
-            "quant.services.market.enrich.enrich_optional_and_holding",
+            "quant.services.market.payload.enrich_optional_and_holding",
             new=AsyncMock(return_value=([], [])),
         ),
     ):

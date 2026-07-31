@@ -8,28 +8,42 @@ import unittest
 from datetime import date
 from pathlib import Path
 
+from quant.store.paths import override_quant_home
+
 # 用临时 QUANT_HOME 隔离，避免污染真实数据
 _TMP = Path(tempfile.mkdtemp(prefix="gq_test_"))
 
 
-class _QuantHomeStub:
-    @staticmethod
-    def quant_home() -> Path:
-        return _TMP
+class _QuantHomeTestCase(unittest.TestCase):
+    """每个测试方法内激活临时 QUANT_HOME，结束自动还原——不得在模块级永久
+    替换 ``quant_home`` 函数，否则会令 ``override_quant_home`` 对同 session
+    其余测试全部失效（曾导致 test_paper_execute 在套件内写入错误 home）。"""
+
+    _prev_qh_const: object
+    _oh_ctx: object
+
+    def setUp(self) -> None:
+        super().setUp()
+        import quant.store.paths as p
+
+        self._prev_qh_const = p.QUANT_HOME
+        p.QUANT_HOME = _TMP
+        self._oh_ctx = override_quant_home(_TMP)
+        self._oh_ctx.__enter__()
+        self.addCleanup(self._restore_quant_home)
+
+    def _restore_quant_home(self) -> None:
+        import quant.store.paths as p
+
+        try:
+            self._oh_ctx.__exit__(None, None, None)
+        finally:
+            p.QUANT_HOME = self._prev_qh_const
 
 
-def _install_stub():
-    import quant.store.paths as p
-
-    p.QUANT_HOME = _TMP
-    p.quant_home = _QuantHomeStub.quant_home  # type: ignore[assignment]
-
-
-_install_stub()
-
-
-class UniverseTests(unittest.TestCase):
+class UniverseTests(_QuantHomeTestCase):
     def setUp(self):
+        super().setUp()
         # 构造合成 daily_raw（不复权）
         import pandas as pd
 
@@ -122,7 +136,7 @@ class UniverseTests(unittest.TestCase):
         self.assertIn("000001", codes)
 
 
-class AdjustTests(unittest.TestCase):
+class AdjustTests(_QuantHomeTestCase):
     def test_detect_ex_dividend(self):
         import pandas as pd
 
@@ -158,7 +172,7 @@ class AdjustTests(unittest.TestCase):
         self.assertAlmostEqual(float(hfq.iloc[0]["close"]), 10.0)
 
 
-class CalendarTests(unittest.TestCase):
+class CalendarTests(_QuantHomeTestCase):
     def test_weekend_not_trading(self):
         from quant.data.calendar import is_trading_day
 

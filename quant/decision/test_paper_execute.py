@@ -62,14 +62,17 @@ def test_execute_decision_card_writes_paper_account():
     with tempfile.TemporaryDirectory(prefix="gq-paper-") as td:
         home = Path(td)
         with override_quant_home(home):
-            result = execute_decision_card(
-                card,
-                daily=daily,
-                as_of=as_of,
-                prices={"600000": 10.0, "600001": 11.0, "600002": 12.0},
-                names={"600000": "A", "600001": "B", "600002": "C"},
-                dry_run=False,
-            )
+            # 隔离网络：风控的大盘熔断会拉全市场 spot（ak.stock_zh_a_spot_em，
+            # 走 clist 慢且易反爬）。本测试关心账户写入，不关心熔断取数。
+            with patch("quant.execution.risk_gate.fetch_index_change_pct", return_value=0.0):
+                result = execute_decision_card(
+                    card,
+                    daily=daily,
+                    as_of=as_of,
+                    prices={"600000": 10.0, "600001": 11.0, "600002": 12.0},
+                    names={"600000": "A", "600001": "B", "600002": "C"},
+                    dry_run=False,
+                )
             assert result["n_executed"] >= 1
             paper_root = home / "paper_account"
             assert (paper_root / "state" / "holding.jsonl").is_file()
