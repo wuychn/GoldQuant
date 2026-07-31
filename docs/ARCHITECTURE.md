@@ -114,6 +114,9 @@ flowchart TB
 | L4 | `quant/exit/rules.py` | 时序出场规则 |
 | 盘中择时 | `quant/services/market/intraday.py` | T+1 作战池内 intraday_alpha 触发 |
 
+> L0–L4 是 quant 内部的**离线→决策数据流**；与之正交的 `quant/data/sources/` 是**可替换取数层**
+> （四类 Protocol + facade，换源只改配置），独立成 §5.1。
+
 ---
 
 ## 4. 交易闭环：选股 → 买入 → 卖出
@@ -238,19 +241,94 @@ sequenceDiagram
 `quant/data/sources/` 把"取数"抽象成四类 Protocol，调用方走 facade 零感知后端；
 接入新数据源（tushare/sina/wind/自建）只改 `quant.yml` 的 `data.sources.*`、不改业务代码。
 
+**四协议与 default 实现**：
+
 | 协议 | facade | default 实现（组合最优） | 喂给 |
 |---|---|---|---|
 | `DailySource` | `get_daily_source()` | `daily/default.py`（index 直连东财 kline，其余 akshare） | L0 离线库（`fetch.py` / `build_daily`） |
-| `MarketSource` | `get_market_source()` | `market/default.py`（index_spot/zqxy 三级 fallback/ztgk 东财/hot·concept·industry ths/fund_flow akshare） | 五时段 payload（`tools/market.py`） |
+| `MarketSource` | `get_market_source()` | `market/default.py`（index_spot/zqxy 三级 fallback/ztgk 东财/hot·concept·industry ths/fund_flow akshare/ths 形态榜/em 行业·人气·概念） | 五时段 payload（`tools/market.py`） |
 | `EnrichSource` | `get_enrich_source()` | `enrich/default.py`（盘口/资金流/概念粘合度/问财概念/分钟K） | 个股 enrich（`services/enrich.py`） |
 | `InfoSource` | `get_info_source()` | `info/default.py`（全局新闻/个股基本信息 jbxx） | 新闻 payload（`payload.py`）、`jbxx_cache` |
 
-- **职责切分**：Source 只"取数"（含归一化、单点错误兜底、多源 fallback）；业务编排（cache、
-  并发 io_tasks、payload 装配、过滤/涨停高度等）留在 facade（`fetch.py` / `tools/market.py` /
-  `services/enrich.py` / `payload.py`）。
-- **分层**：`sources` 只依赖 `common`，不引 `services`/`app`（`scripts/check_layering.py` 守卫）。
-- **HTTP 层**：akshare/东财走 `common/utils/source_headers.py` 的 curl_cffi 统一层（解决东财 clist
-  TLS 指纹反爬）；同花顺保持 httpx + Hexin-V。详见 memory `eastmoney-data-pitfalls`。
+**facade 调用链**（消费者零感知后端）：
+
+```
+消费者 ─► get_xxx_source()(factory.py) ─► _source_name(key)
+            ─► 读 quant.yml data.sources.<key>（fixture 模式/未配置 → "default"）
+            ─► REGISTRY[name]()(registry.py) ─► 实现(daily/market/.../default.py)
+```
+
+| facade（消费者） | 走 | 取数 |
+|---|---|---|
+| `data/fetch.py` | `get_daily_source()` | hist/index/calendar/code_list/delisted/spot |
+| `data/tools/market.py` | `get_market_source()` | index_spot/zqxy/ztgk/hot/concept/industry/fund_flow |
+| `services/enrich.py` | `get_enrich_source()` + `get_daily_source()`（读离线库 hist） | 盘口/资金流/概念/分钟K + 技术指标（`indicators.py` 内联） |
+| `services/market/payload.py` | `get_info_source()`（新闻）+ `get_market_source()`（ztgk） | 五时段 payload |
+| `services/jbxx_cache.py` | `get_info_source()` | 个股基本信息（周缓存） |
+| `pool/candidate_sources.py` | `get_market_source()` | 人气榜/涨停池/ths 形态榜 |
+| `data/factor_capture.py` | `get_market_source()`+`get_enrich_source()`+`fetch_spot_em` | 因子快照 hot/flow/theme |
+
+**职责切分**：Source 只"取数"（归一化 + 单点错误兜底 + 多源 fallback）；业务编排（cache、
+并发 io_tasks、payload 装配、过滤/涨停高度等）留在 facade（`fetch.py` / `tools/market.py` /
+`services/enrich.py` / `payload.py`）。
+
+**分层**：`sources` 只依赖 `common`，不引 `services`/`app`（`scripts/check_layering.py` 守卫）。
+
+**HTTP 层**：akshare/东财请求自动经 `common/utils/source_headers.py` 的 curl_cffi 统一层（解决东财
+clist TLS 指纹反爬）；同花顺保持 httpx + Hexin-V。详见 memory `eastmoney-data-pitfalls`。
+
+#### 5.1.1 怎么替换数据源
+
+**场景 A：换已注册的实现（只改配置，零代码）** — `quant.yml`：
+
+```yaml
+data:
+  sources:
+    daily: default   # default | akshare（DAILY_REGISTRY 现有键）
+    market: default  # default
+    enrich: default  # default
+    info: default    # default
+```
+
+改键值即可。例：`daily: akshare` → `get_daily_source()` 返回 `AkshareDailySource`（全 akshare，
+`fetch_index` 走 clist 易被 TLS 断，仅作回归对照）。fixture 模式（`QUANT_USE_LOCAL_FIXTURE=true`）
+或键缺失时，`_source_name` 自动回退 `default`。
+
+**场景 B：接入全新数据源（如 tushare），3 步、不动业务**（以 daily 为例）：
+
+1. **写实现**（实现 `DailySource` 协议即可）— `quant/data/sources/daily/tushare.py`：
+   ```python
+   class TushareDailySource:
+       name = "tushare"
+       def fetch_hist(self, code, *, start, end, adjust=""): ...    # 返回归一化 schema
+       def fetch_index(self, code, *, start, end): ...
+       def fetch_calendar(self): ...
+       def fetch_code_list(self): ...
+       def fetch_delisted_codes(self): ...
+       def fetch_delisted_daily(self, code, *, start, end): ...
+       def fetch_spot(self): ...
+   ```
+2. **注册** — `quant/data/sources/registry.py`：
+   ```python
+   from quant.data.sources.daily.tushare import TushareDailySource
+   DAILY_REGISTRY = {
+       "default": DefaultDailySource, "akshare": AkshareDailySource, "tushare": TushareDailySource,
+   }
+   ```
+3. **配置** — `quant.yml`：`data.sources.daily: tushare`
+
+之后 `fetch.py` / `build_daily` / `enrich._load_hist`（读离线库）全部自动走 tushare，业务代码一行不改。
+market/enrich/info 同理（实现对应协议 → 注册 → 配置）。返回值保持协议规定的归一化 schema
+（如 daily_raw 列 `code/date/open/high/low/close/volume/amount/turnover_rate`）即可无缝衔接下游。
+
+#### 5.1.2 不在可替换范围（合理边界，非缺陷）
+
+- **离线库构建脚本** `quant/data/{adjust,calendar,delist,fundamental_pit}.py` 直连 akshare — 它们是
+  "造库层"（数据源的同胞），不是消费方；离线库 `store/daily_raw` 建好后，enrich/payload 才经
+  facade 读它。
+- **`app/mkt_*` endpoint** 直连 akshare — 另一个特性（akshare-as-API 网关），不在量化数据源抽象范畴。
+
+这两类若也要统一切源，属跨域新需求，建议单独立项。
 
 ---
 
