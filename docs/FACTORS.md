@@ -134,14 +134,14 @@ load_factor_weights_info(as_of)
 
 ### 3.2 IC 拟合流程
 
-| 脚本 | 作用 |
-|---|---|
-| `scripts/factors/build_panel.py` | 构建历史因子面板 |
-| `scripts/factors/ic_report.py` | 因子 IC/ICIR 报告 |
-| `scripts/factors/fit_weights.py` | ICIR 权重 + BH-FDR 筛选 → factor_weights.yml |
-| `scripts/research/walk_forward.py` | 时变权重 → factor_weights_ts.yml |
+| 脚本 | 作用 | 产物 |
+|---|---|---|
+| `scripts/factors/build_panel.py` | 构建历史因子面板 → `data/panel.parquet` | 面板 |
+| `scripts/factors/ic_report.py` | 因子 IC/ICIR 报告（含 IC 衰减） | `$QUANT_HOME/reports/ic/` |
+| `scripts/factors/fit_weights.py` | walk-forward OOS 权重（默认）；`--static` 写静态全样本权重 | `factor_weights_ts.yml` / `factor_weights.yml` |
+| `scripts/research/walk_forward.py` | 时变权重（另一入口） | `factor_weights_ts.yml` |
 
-**ICIR 权重**（`quant/factors/weights.py`）：权重 ∝ ICIR；过滤 `ic_mean`、`icir`、`t_stat` 阈值；FDR 由 `fit_weights.py --fdr-alpha` 控制。
+**ICIR 权重**（`quant/factors/weights.py`）：权重 ∝ ICIR；过滤 `ic_mean`、`icir`、`t_stat` 阈值；FDR 由 `fit_weights.py --fdr-alpha` 控制（BH-FDR，单侧 IC>0 检验）。
 
 ### 3.3 研究参数（quant.yml）
 

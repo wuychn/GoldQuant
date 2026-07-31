@@ -275,7 +275,9 @@ sequenceDiagram
 **分层**：`sources` 只依赖 `common`，不引 `services`/`app`（`scripts/check_layering.py` 守卫）。
 
 **HTTP 层**：akshare/东财请求自动经 `common/utils/source_headers.py` 的 curl_cffi 统一层（解决东财
-clist TLS 指纹反爬）；同花顺保持 httpx + Hexin-V。详见 memory `eastmoney-data-pitfalls`。
+clist TLS 指纹反爬）；同花顺保持 httpx + Hexin-V。东财接口避坑：clist（push2 实时列表）反爬最
+严、必须 curl_cffi；kline（push2his 历史）稳定、东财直连首选；代码表用 `stock_info_a_code_name`。
+`.eastmoney.header` 的 Cookie 有时效，失效后经 `POST /api/v1/admin/eastmoney` 更新（该文件已 gitignore）。
 
 #### 5.1.1 怎么替换数据源
 

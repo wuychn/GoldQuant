@@ -7,11 +7,10 @@
 
 | 文档 | 内容 |
 |------|------|
-| [ARCHITECTURE.md](./ARCHITECTURE.md) | 系统定位、分层架构、选股→买卖闭环、数据层、候选池与 LLM 分工 |
+| [ARCHITECTURE.md](./ARCHITECTURE.md) | 系统定位、分层架构、选股→买卖闭环、数据层与数据源抽象、候选池与 LLM 分工 |
 | [FACTORS.md](./FACTORS.md) | 20 个日频因子 + 5 个盘中因子：含义、公式、方向、权重、数据来源 |
 | [OPERATIONS.md](./OPERATIONS.md) | 安装、启动 API/量化机器人、调度、离线库、回测、研究脚本 |
-| [CONFIG.md](./CONFIG.md) | `quant.yml` 配置项含义与覆盖方式；配置键→代码映射 |
-| [ENV.md](./ENV.md) | `.env` 环境变量说明 |
+| [CONFIG.md](./CONFIG.md) | `.env` 环境变量 + `quant.yml` 配置项含义与覆盖方式；配置键→代码映射 |
 | [API.md](./API.md) | FastAPI 数据服务路由概览 |
 
 ## 一句话概览
@@ -56,7 +55,7 @@ python -m quant during_market
 python -m scripts.data.maintain
 
 # 回测
-python -m scripts.backtest.run --start 2024-01-01 --end 2024-06-30 --cash 100000
+python -m scripts.backtest.run --start 2024-01-01 --end 2024-06-30 --max-positions 10
 ```
 
 详细说明见 [OPERATIONS.md](./OPERATIONS.md)。

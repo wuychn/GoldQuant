@@ -103,4 +103,4 @@ curl http://127.0.0.1:8085/health
 - CORS：`GOLDQUANT_CORS_ORIGINS`、`GOLDQUANT_CORS_ALLOW_CREDENTIALS`
 - 出站代理：`GOLDQUANT_PROXY_*`（AKShare、同花顺、东财等统一走应用代理配置）
 
-详见 [ENV.md](./ENV.md)。
+详见 [CONFIG.md](./CONFIG.md)。

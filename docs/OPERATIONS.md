@@ -19,7 +19,7 @@ pip install -r requirements.txt
 copy .env.example .env
 ```
 
-编辑 `.env`：至少配置 API 端口、飞书、LLM（见 [ENV.md](./ENV.md)）。
+编辑 `.env`：至少配置 API 端口、飞书、LLM（见 [CONFIG.md](./CONFIG.md)）。
 
 ---
 
@@ -256,7 +256,7 @@ python -m scripts.backtest.run --start 2024-01-01 --end 2024-06-30
 curl http://127.0.0.1:8085/health
 curl http://127.0.0.1:8085/api/v1/quant/market/pre_market
 python -m scripts.decision.daily --dry-run
-python -m scripts.smoke_e2e          # 端到端冒烟（若有）
+python -m scripts.smoke_e2e          # 端到端冒烟（合成数据，不碰网络）
 ```
 
 ---

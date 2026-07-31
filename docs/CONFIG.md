@@ -64,7 +64,16 @@
 
 | 项 | 默认 | 作用 |
 |----|------|------|
-| `GOLDQUANT_QUANT_HOME_DIR` | 空→`~/.quant` | 量化数据根目录（state/views/daily/config/memory/cache 均在其下）。shell `export QUANT_HOME=...` 也可，但优先级**低于**此项 |
+| `GOLDQUANT_QUANT_HOME_DIR` | 空→`~/.quant` | 量化数据根目录（state/views/daily/config/memory/cache 均在其下） |
+
+**`quant_home()` 解析优先级**（高 → 低）：
+
+1. `override_quant_home` 上下文（纸面账户 / 测试隔离）
+2. `GOLDQUANT_QUANT_HOME_DIR`
+3. `QUANT_HOME`（无 `GOLDQUANT_` 前缀，便于 shell 临时覆盖）
+4. `~/.quant`（默认）
+
+> `quant/store/paths.py` 模块级常量 `QUANT_HOME` 仅在导入时刻解析一次，不跟踪运行期 override；运行期取 home 一律调 `quant_home()`。
 
 ### 历史日线拉取
 
@@ -119,6 +128,27 @@
 | `GOLDQUANT_LLM_API_FORMAT` | `openai` | `openai`→`/chat/completions`；`anthropic`→`/v1/messages` |
 | `GOLDQUANT_LLM_VERIFY_SSL` | `false` | 内网/自签证书设 `false` |
 | `GOLDQUANT_LLM_TRUST_ENV_PROXY` | `false` | 是否读系统 `HTTP_PROXY`（干扰时设 `false`） |
+
+### 已废弃 / 已迁移
+
+| 旧变量 | 替代 |
+|---|---|
+| `QUANT_SCHEDULER_ENABLED` | `quant.yml` → `scheduler.enabled` |
+| `QUANT_SCHED_*` | `quant.yml` → `scheduler.*` |
+| 策略阈值、组合参数 | `quant.yml` → `gates` / `portfolio` |
+| weekly ML/backtest 调度 | 改手动 `scripts/research` / `scripts/backtest` |
+
+### 变量 → 代码映射
+
+| 类别 | 读取位置 |
+|---|---|
+| 应用 / API | `app/core/config.py:Settings` |
+| 量化 Home | `quant/store/paths.py:quant_home()` |
+| 代理 | `app/core/proxy.py` |
+| 飞书 | `quant/ops/push.py`、`quant/config.get_feishu_config` |
+| LLM | `app/utils/llm_client.py`、`quant/narrative/llm.py` |
+| Fixture | `quant/data_fetch.py` |
+| Enrich | `quant/services/enrich.py` |
 
 ---
 
