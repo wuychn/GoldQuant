@@ -77,15 +77,21 @@ def eastmoney_index_kline(code: str, *, start: str, end: str) -> pd.DataFrame:
         # 每行: date,open,close,high,low,volume,amount,amplitude
         rows = [k.split(",") for k in kls]
         raw = pd.DataFrame(rows, columns=["date", "open", "close", "high", "low", "volume", "amount", "_amp"])
-        out = pd.DataFrame()
-        out["code"] = str(code)
-        out["date"] = raw["date"]
-        out["open"] = raw["open"]
-        out["high"] = raw["high"]
-        out["low"] = raw["low"]
-        out["close"] = raw["close"]
-        out["volume"] = raw["volume"]
-        out["amount"] = raw["amount"]
+        # 用 dict 构造：标量 code 广播到 N 行；勿用 out["code"]=scalar 在空帧上赋值
+        # （此时 out 0 行，后续 Series 赋值展开到 N 行时 code 列退化为 NaN，
+        #  曾导致 read_index_daily 按 code 过滤返回空 → 回测基准/超额全 0）。
+        out = pd.DataFrame(
+            {
+                "code": str(code),
+                "date": raw["date"],
+                "open": raw["open"],
+                "high": raw["high"],
+                "low": raw["low"],
+                "close": raw["close"],
+                "volume": raw["volume"],
+                "amount": raw["amount"],
+            }
+        )
         out["date"] = pd.to_datetime(out["date"]).dt.strftime("%Y-%m-%d")
         for c in ("open", "high", "low", "close", "volume", "amount"):
             out[c] = pd.to_numeric(out[c], errors="coerce")

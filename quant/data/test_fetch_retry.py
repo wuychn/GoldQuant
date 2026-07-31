@@ -81,3 +81,37 @@ def test_retry_normal_exception_no_double(monkeypatch):
     with pytest.raises(ConnectionError):
         _retry(fn, retries=3, base=1.0, label="t")
     assert sleeps == [1.0, 2.0, 4.0]
+
+
+def test_eastmoney_index_kline_code_not_nan(monkeypatch):
+    """eastmoney_index_kline 返回的 ``code`` 列必须非 NaN（修前：空帧上
+    ``out["code"]=scalar`` 再后续 Series 展开 → code 退化为 NaN，导致
+    ``read_index_daily`` 按 code 过滤返回空 → 回测基准/超额全 0）。"""
+    import requests
+
+    import common.utils.source_headers as sh
+    from quant.data.sources.daily._shared import eastmoney_index_kline
+
+    class _Resp:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> dict:
+            return {
+                "data": {
+                    "klines": [
+                        "2024-01-02,10,11,12,9,1000,10000,0.1",
+                        "2024-01-03,11,12,13,10,1100,11000,0.1",
+                    ]
+                }
+            }
+
+    monkeypatch.setattr(requests, "get", lambda *a, **k: _Resp())
+    monkeypatch.setattr(sh, "load_headers_from_file", lambda: {})
+    df = eastmoney_index_kline("000300", start="2024-01-01", end="2024-01-31")
+    assert not df.empty
+    assert df["code"].notna().all(), df["code"].tolist()
+    assert (df["code"] == "000300").all()
+    assert list(df.columns) == [
+        "code", "date", "open", "high", "low", "close", "volume", "amount"
+    ] or {"code", "date", "close"}.issubset(df.columns)
