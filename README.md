@@ -4,7 +4,7 @@ A 股日频波段量化辅助系统：**FastAPI 数据聚合服务** + **IC 因�
 
 > 本仓库仅做数据聚合与纸面模拟交易辅助，**不构成投资建议**。行情来自 AKShare / 东财 / 同花顺等第三方，存在延迟、字段变更或访问失败的可能。
 
-> 完整文档见 **[docs/README.md](docs/README.md)**（架构、因子、运维、配置、API）。
+> 完整文档见 **[docs/README.md](docs/README.md)**（架构、因子、运维、配置、API）；路线图见 **[ROADMAP.md](ROADMAP.md)**。
 
 ---
 
