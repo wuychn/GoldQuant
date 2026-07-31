@@ -18,11 +18,22 @@ import yaml
 
 from quant.data.adjust import load_adjusted_daily
 from quant.data.calendar import to_iso, trading_day_list
+from quant.data.universe import build_universe_snapshot
 from quant.factors.ic import factor_ic_report
 from quant.factors.panel_builder import build_panel
 from quant.factors.registry import REGISTRY
 from quant.factors.weights import full_weight_map
 from quant.store.paths import config_file
+
+
+def _universe_by_date(dates: list[str], daily) -> dict[str, list[str]]:
+    """一次性构建每日 universe（用内存 daily，避免 build_panel 内逐日重读
+    parquet + 重算 ADV 的 O(N²) 开销）。"""
+    out: dict[str, list[str]] = {}
+    for d in dates:
+        snap = build_universe_snapshot(d, daily=daily)
+        out[d] = list(snap.loc[snap["included"], "code"].astype(str))
+    return out
 
 
 def fit_walk_forward_weights(
@@ -44,7 +55,7 @@ def fit_walk_forward_weights(
     from collections import defaultdict
 
     names = REGISTRY.names()
-    panel = build_panel(dates, daily=daily)
+    panel = build_panel(dates, daily=daily, universe_by_date=_universe_by_date(dates, daily))
     by_date: dict[str, list] = defaultdict(list)
     for r in panel:
         by_date[r.date].append(r)
@@ -137,7 +148,7 @@ def main() -> None:
         print(f"walk-forward 权重表 → {path} | {len(ts)} 个日期")
         return
 
-    panel = build_panel(dates, daily=daily)
+    panel = build_panel(dates, daily=daily, universe_by_date=_universe_by_date(dates, daily))
     print(f"面板 {len(panel)} 行")
     names = REGISTRY.names()
     report_list = factor_ic_report(panel, names, horizon=args.horizon, horizons=horizons)

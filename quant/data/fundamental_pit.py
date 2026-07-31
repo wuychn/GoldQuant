@@ -401,8 +401,18 @@ def codes_in_pit_table() -> set[str]:
     return set(df["code"].astype(str).tolist())
 
 
+_AKSHARE_LISTING_CACHE: dict[str, str] | None = None
+
+
 def fetch_listing_map_akshare() -> dict[str, str]:
-    """交易所 A 股列表 + 上市日期（AKShare）。"""
+    """交易所 A 股列表 + 上市日期（AKShare）。
+
+    进程级缓存：IPO/上市日表在进程内静态，避免 ``listing_days_map`` 逐评估日
+    重算时反复触发网络取数（曾导致 build_panel O(N_dates) 网络拉取）。
+    """
+    global _AKSHARE_LISTING_CACHE
+    if _AKSHARE_LISTING_CACHE is not None:
+        return _AKSHARE_LISTING_CACHE
     out: dict[str, str] = {}
     try:
         import akshare as ak
@@ -434,7 +444,9 @@ def fetch_listing_map_akshare() -> dict[str, str]:
                         out[c] = raw[:10]
     except Exception:
         pass
-    return {c: d for c, d in out.items() if d}
+    out = {c: d for c, d in out.items() if d}
+    _AKSHARE_LISTING_CACHE = out
+    return out
 
 
 def fetch_with_retry(fn, *, retries: int = 3, sleep: float = 1.0):

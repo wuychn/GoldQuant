@@ -84,11 +84,34 @@ def _sina_symbol(code: str) -> str:
 
 
 def apply_hfq(df: pd.DataFrame, adj: pd.DataFrame) -> pd.DataFrame:
-    """把不复权日线按 hfq_factor 转为后复权。price 列 × factor。"""
+    """把不复权日线按 hfq_factor 转为后复权。price 列 × factor。
+
+    ``hfq_factor`` 是后复权**累积**因子，仅在除权日落库（稀疏）。每个交易日应
+    用「≤ 当日的最近一次除权因子」（step forward-fill），而非精确 ``[code,date]``
+    join——精确 join 只命中除权日，导致非除权日 ×1.0、除权日 ×大累积因子，形成
+    单日 20×+ 跳空尖刺（曾让回测在除权日凭空产生巨额收益，2.2M% 荒谬收益）。
+    """
     if df.empty or adj.empty:
         return df
     price_cols = ("open", "high", "low", "close", "pre_close")
-    merged = df.merge(adj[["code", "date", "hfq_factor"]], on=["code", "date"], how="left")
+    adj_sorted = (
+        adj[["code", "date", "hfq_factor"]]
+        .dropna(subset=["hfq_factor"])
+        .copy()
+    )
+    if adj_sorted.empty:
+        return df
+    adj_sorted["date"] = pd.to_datetime(adj_sorted["date"])
+    df2 = df.copy()
+    df2["date"] = pd.to_datetime(df2["date"])
+    merged = pd.merge_asof(
+        df2.sort_values("date"),
+        adj_sorted.sort_values("date"),
+        on="date",
+        by="code",
+        direction="backward",  # 最近一次 ≤ 当日的除权因子
+    )
+    merged["date"] = merged["date"].dt.strftime("%Y-%m-%d")
     merged["hfq_factor"] = merged["hfq_factor"].fillna(1.0)
     for c in price_cols:
         if c in merged.columns:

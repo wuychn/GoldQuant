@@ -36,6 +36,33 @@ def test_apply_hfq_smooths_dividend_drop():
     assert list(out["open"]) == [10.0] * 6
 
 
+def test_apply_hfq_sparse_factor_no_spike():
+    """因子仅在除权日落库（稀疏——akshare ``hfq-factor`` 实际口径）时，
+    非除权日不得 ×1.0 留空、除权日不得 ×大因子形成单日尖刺。每个交易日应用
+    「≤ 当日的最近除权因子」（merge_asof backward）。
+
+    修前：精确 ``[code,date]`` join 只命中除权日 → 非除权日 ×1.0、除权日 ×2，
+    产生 -50% 单日跳空尖刺（曾让回测在除权日凭空 20×+ 收益）。
+    """
+    dates = [f"2024-01-{i:02d}" for i in range(1, 8)]
+    raw = pd.DataFrame(
+        {
+            "code": ["000001"] * 7,
+            "date": dates,
+            "close": [10.0, 10.0, 10.0, 5.0, 5.0, 5.0, 5.0],  # 01-04 除权（10 送 10）
+        }
+    )
+    adj = pd.DataFrame(
+        {"code": ["000001"], "date": ["2024-01-04"], "hfq_factor": [2.0]}  # 仅除权日一行
+    )
+    out = apply_hfq(raw, adj)
+    # 后复权全程 ≈ 10（除权日及之后 ×2=10；之前无除权因子 → 1.0 → raw 10×1=10）
+    assert list(out["close"]) == [10.0] * 7, list(out["close"])
+    # 锁死：无 >28% 单日跳空
+    pct = (out["close"].pct_change().abs() * 100).iloc[1:]
+    assert (pct < 28).all(), f"除权日出现尖刺: {pct.tolist()}"
+
+
 def test_forward_returns_on_adjusted_no_fake_drop():
     """前瞻收益在复权帧上跨除权日应≈0，而非原始价的 -50% 假跳跌。"""
     dates = [f"2024-01-{i:02d}" for i in range(1, 11)]
