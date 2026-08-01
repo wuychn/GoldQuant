@@ -164,17 +164,26 @@ poetry run python -m scripts.data.build_daily --start 2021-01-01 --workers 1 --r
 | `--req-interval` | `1,3` | 东财请求间隔秒，`MIN,MAX` 或单值 `N`；降频如 `5,10` 避频控 |
 | `--limit` | — | 只拉前 N 只（调试） |
 | `--codes` | — | 逗号分隔代码列表（调试） |
-| `--ignore-existing` | — | 跳过「已落库代码」去重，用于补日期缺口 |
+| `--ignore-existing` | — | 跳过完整性检查，强制全拉；并跳过市场缺口第二轮 |
+| `--no-gap-fill` | — | 只做代码级续传，不做市场级缺失交易日第二轮 |
 | `--no-delisted` | — | 不并入退市股（默认并入，修幸存者偏差） |
 | `--no-adj` | — | 跳过后复权因子全量初始化 |
 | `--retry-failed` | — | 只重试 `build_failed.jsonl` 中的失败 code |
 | `--dead-threshold` | `5` | 失败次数达此值标 dead，不再自动重试 |
 
-- 拉全 A 历史（`stock_zh_a_hist` 不复权）+ 指数 + 日历 + 退市股
-- 支持断点续传（跳过已落库代码）
-- 数千只全量历史可能耗时数小时；夜间 + 低并发 + 较大 `--req-interval` 更稳
+**默认智能断点续传（推荐反复跑同一命令直到完成）：**
 
-补历史日期缺口：
+1. **逐只完整性检查**：相对 `[start,end]` 交易日历（默认 `end=今天`），**缺任意一天**则补拉；齐全则跳过。若有 `listing_dates`，期望从 `max(start, 上市日)` 起算。
+2. **缺哪段补哪段**：每码只请求缺失日的 `[min(缺日), max(缺日)]`（例如库已完整到上周，再跑只会拉最近几个交易日，不会重拉整段历史）。窗内已有日由 write 去重。
+3. **自动并入** `build_failed.jsonl` 中非 dead 失败码
+4. **市场级第二轮**：若日历上存在「全市场都没有数据」的交易日，对该缺口窗全代码补拉；`--no-gap-fill` / `--ignore-existing` / `--retry-failed` 时跳过
+
+- 拉全 A 历史（`stock_zh_a_hist` 不复权）+ 指数 + 日历 + 退市股
+- 中断后或隔几天未做增量，再执行同一命令即可续补到 `end`（默认今天）
+- 长期停牌日源站本身无 K 线时，完整性检查仍会判缺并重试；可配合失败清单 `dead` 阈值或先维护 `listing_dates`
+- 日常增量仍推荐 `update_daily` / `maintain`；`build_daily` 适合建库与查漏补缺
+
+强制补一段日期（跳过智能扫描）：
 
 ```powershell
 poetry run python -m scripts.data.build_daily --start 2026-07-20 --end 2026-07-25 --ignore-existing --workers 1 --req-interval 5,10

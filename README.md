@@ -326,7 +326,7 @@ poetry run python -m quant prefetch_concepts
 
 时点请在 `quant/config/quant.yml` 或 `~/.quant/config/quant.yml` 的 `scheduler` 段修改（如 `during_market_times`、`maintain_daily_time`）。也可用 cron / 任务计划调用 `.venv` 中的解释器，例如 `.venv\Scripts\python.exe -m quant <mode>`（工作目录为项目根）。
 
-**数据维护任务（16:00 `maintain`）**：`scripts/data/maintain.py` 自愈离线库——无库则全量 `build_daily`，有库则扫描交易日历缺口并用 `build_daily --ignore-existing` 回补，最后跑 `update_daily` 当日增量；拉取全程指数退避 + 限流加倍兜底（`quant/data/fetch.py:_retry`）。**首次建议手动** `poetry run python -m scripts.data.build_daily --start 2021-01-01 --workers 1 --req-interval 5,10`（夜间，数千只历史耗时数小时），之后 `maintain` 只做增量/补漏。手动补历史缺口：`poetry run python -m scripts.data.build_daily --start <起> --end <止> --ignore-existing`。参数详见 [docs/OPERATIONS.md](docs/OPERATIONS.md)。
+**数据维护任务（16:00 `maintain`）**：`scripts/data/maintain.py` 自愈离线库——无库则全量 `build_daily`，有库则扫描交易日历缺口并用 `build_daily --ignore-existing` 回补，最后跑 `update_daily` 当日增量；拉取全程指数退避 + 限流加倍兜底（`quant/data/fetch.py:_retry`）。**首次建议手动** `poetry run python -m scripts.data.build_daily --start 2021-01-01 --workers 1 --req-interval 5,10`（夜间；中断后重复同一命令即可智能续传：未完成代码 + 市场级漏日）。参数详见 [docs/OPERATIONS.md](docs/OPERATIONS.md)。
 
 ### 4.3 飞书推送（r3 六事件）
 
