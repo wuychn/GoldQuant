@@ -20,7 +20,7 @@ A 股日频波段量化辅助系统：**FastAPI 数据聚合服务** + **IC 因�
           │                                    │
 ┌──────────▼──────────────┐   ┌───────────────▼──────────────────┐
 │  app/   数据 API（FastAPI，│   │  quant/  决策与运维               │
-│  默认 :8085）五时段聚合接口 │   │  （python -m quant <mode>）        │
+│  默认 :8085）五时段聚合接口 │   │  （poetry run python -m quant）    │
 │  + 调度器（APScheduler）   │   │  L0→L1→L2→L3 纸面撮合→飞书推送    │
 └───────────────────────────┘   │  L4 时序出场（优先于再平衡）       │
                                 └───────────────┬──────────────────┘
@@ -31,7 +31,7 @@ A 股日频波段量化辅助系统：**FastAPI 数据聚合服务** + **IC 因�
                                 └──────────────────────────────────┘
 ```
 
-**依赖方向（硬约束）**：`common ← quant ← {app, scripts}`。`quant/` 不 import `app/`（r3 前经 HTTP、r3 起直调 service，均不经 app 包）；`common/` 不依赖 app/quant。运维五时段（news/pre/during 等）由 `quant/services/market/payload` 直调 service 构建 payload（不经 HTTP）；`daily_decision` 用离线库。**单次 `python -m quant <mode>` 无需启动 app**；仅内置调度器自动跑五时段时需 `python -m app`（调度器在 app 进程内）。
+**依赖方向（硬约束）**：`common ← quant ← {app, scripts}`。`quant/` 不 import `app/`（r3 前经 HTTP、r3 起直调 service，均不经 app 包）；`common/` 不依赖 app/quant。运维五时段（news/pre/during 等）由 `quant/services/market/payload` 直调 service 构建 payload（不经 HTTP）；`daily_decision` 用离线库。**单次 `poetry run python -m quant <mode>` 无需启动 app**；仅内置调度器自动跑五时段时需 `poetry run python -m app`（调度器在 app 进程内）。
 
 **职责划分**
 
@@ -75,7 +75,8 @@ GoldQuant/
 │   └── config.py / timeutil.py / trading_hours.py / data_fetch.py
 ├── scripts/{decision,backtest,data,factors,research}/
 ├── docs/                       # 文档（见 docs/README.md）
-└── requirements.txt
+├── pyproject.toml              # 依赖真源（Poetry / PEP 621）
+└── poetry.lock
 ```
 
 **运行时数据目录**（自动创建）：`~/.quant/`，纸面账户在 `~/.quant/paper_account/`。报告在 `~/.quant/reports/`。
@@ -108,18 +109,14 @@ GoldQuant/
 
 ## 一、安装
 
-在项目根目录 `GoldQuant` 下：
+在项目根目录 `GoldQuant` 下（需已安装 [Poetry](https://python-poetry.org/) 2.x）：
 
 ```powershell
-# 创建并激活虚拟环境（PowerShell）
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+# 安装主依赖（自动使用/创建项目 .venv）
+poetry install
 
-# 安装依赖（含量化 + ML）
-pip install -r requirements.txt
-
-# 或仅安装 ML 可选包
-# pip install -e ".[ml]"
+# 需要 ML 离线校准（IC/拟合等）时
+poetry install --extras ml
 ```
 
 复制环境变量模板：
@@ -140,18 +137,20 @@ copy .env.example .env
 | `FEISHU_APP_SECRET` | 飞书应用密钥 |
 | `FEISHU_USER_ID` | 飞书接收人 open_id |
 
+> 下文命令统一用 `poetry run python -m ...`，避免误用系统 Python。详细运维见 [docs/OPERATIONS.md](docs/OPERATIONS.md)。
+
 ---
 
 ## 二、启动数据 API
 
-**必须在项目根目录执行**，且已激活 venv。
+**必须在项目根目录执行。**
 
 ```powershell
 # 推荐
-python -m app
+poetry run python -m app
 
-# 或
-uvicorn app.main:app --host 0.0.0.0 --port 8085
+# 或（需自行带 host/port）
+poetry run uvicorn app.main:app --host 0.0.0.0 --port 8085
 ```
 
 - 文档：<http://127.0.0.1:8085/docs>
@@ -164,7 +163,7 @@ chmod +x run.sh
 ./run.sh start
 ```
 
-> **注意**：`python -m quant <mode>` 直调 service 构建 payload（不经 HTTP），单次运行无需先启动 API。仅当用内置调度器自动跑五时段时才需 `python -m app`（调度器在 app 进程内）。`QUANT_USE_LOCAL_FIXTURE=true` 时改读 `data/*.json` fixture，连 service 也不调。
+> **注意**：`poetry run python -m quant <mode>` 直调 service 构建 payload（不经 HTTP），单次运行无需先启动 API。仅当用内置调度器自动跑五时段时才需 `poetry run python -m app`（调度器在 app 进程内）。`QUANT_USE_LOCAL_FIXTURE=true` 时改读 `data/*.json` fixture，连 service 也不调。
 
 ---
 
@@ -294,22 +293,22 @@ raw × direction → winsorize(1%,99%) → 行业+log市值中性 → z-score �
 
 ```powershell
 # 运维推送（五时段）
-python -m quant news
-python -m quant pre_market
-python -m quant during_market
-python -m quant post_market_lunch
-python -m quant post_market_evening
+poetry run python -m quant news
+poetry run python -m quant pre_market
+poetry run python -m quant during_market
+poetry run python -m quant post_market_lunch
+poetry run python -m quant post_market_evening
 
 # 日决策（决策卡 + 纸面撮合 + 推送）
-python -m quant daily_decision
-python -m scripts.decision.daily --no-push    # 仅落盘
-python -m scripts.decision.daily --dry-run     # 不撮合，仅打印信号
+poetry run python -m quant daily_decision
+poetry run python -m scripts.decision.daily --no-push    # 仅落盘
+poetry run python -m scripts.decision.daily --dry-run     # 不撮合，仅打印信号
 
 # 预取概念/粘合度（05:00，可选）
-python -m quant prefetch_concepts
+poetry run python -m quant prefetch_concepts
 ```
 
-加 `--no-push` 只落盘不推飞书。每次运行：拉取 API 数据 → 落盘 `~/.quant/daily/` → 按模式执行 → 推送飞书。
+加 `--no-push` 只落盘不推飞书。每次运行：直调 service → 落盘 `~/.quant/daily/` → 按模式执行 → 推送飞书。
 
 ### 4.2 建议调度
 
@@ -325,9 +324,9 @@ python -m quant prefetch_concepts
 | 16:00 | `maintain`（数据维护：无库建库 / 查漏补漏 / 当日增量） |
 | 20:10 | `daily_decision`（含原 post_market_evening 职责） |
 
-时点请在 `quant/config/quant.yml` 或 `~/.quant/config/quant.yml` 的 `scheduler` 段修改（如 `during_market_times`、`maintain_daily_time`）。也可用 cron / 任务计划调用 `python -m quant <mode>`；工作目录为项目根并激活 venv。
+时点请在 `quant/config/quant.yml` 或 `~/.quant/config/quant.yml` 的 `scheduler` 段修改（如 `during_market_times`、`maintain_daily_time`）。也可用 cron / 任务计划调用 `.venv` 中的解释器，例如 `.venv\Scripts\python.exe -m quant <mode>`（工作目录为项目根）。
 
-**数据维护任务（16:00 `maintain`）**：`scripts/data/maintain.py` 自愈离线库——无库则全量 `build_daily`，有库则扫描交易日历缺口并用 `build_daily --ignore-existing` 回补，最后跑 `update_daily` 当日增量；拉取全程指数退避 + 限流加倍兜底（`quant/data/fetch.py:_retry`）。**首次建议手动** `python -m scripts.data.build_daily --start 2021-01-01 --workers 3`（夜间，数千只历史耗时数小时），之后 `maintain` 只做增量/补漏。手动补历史缺口：`python -m scripts.data.build_daily --start <起> --end <止> --ignore-existing`。
+**数据维护任务（16:00 `maintain`）**：`scripts/data/maintain.py` 自愈离线库——无库则全量 `build_daily`，有库则扫描交易日历缺口并用 `build_daily --ignore-existing` 回补，最后跑 `update_daily` 当日增量；拉取全程指数退避 + 限流加倍兜底（`quant/data/fetch.py:_retry`）。**首次建议手动** `poetry run python -m scripts.data.build_daily --start 2021-01-01 --workers 1 --req-interval 5,10`（夜间，数千只历史耗时数小时），之后 `maintain` 只做增量/补漏。手动补历史缺口：`poetry run python -m scripts.data.build_daily --start <起> --end <止> --ignore-existing`。参数详见 [docs/OPERATIONS.md](docs/OPERATIONS.md)。
 
 ### 4.3 飞书推送（r3 六事件）
 
@@ -345,7 +344,7 @@ python -m quant prefetch_concepts
 ### 4.4 历史回测
 
 ```powershell
-python -m scripts.backtest.run --start 2026-06-17 --end 2026-06-26 --cash 100000
+poetry run python -m scripts.backtest.run --start 2026-06-17 --end 2026-06-26 --max-positions 10
 ```
 
 - **与实盘对齐**：默认 strict 口径，走同一 `TargetPortfolio` + `evaluate_exits` + `execute_signals`。
@@ -419,14 +418,14 @@ r3 决策链改用 IC 驱动权重（`~/.quant/config/factor_weights.yml`，由 
 
 ## 八、常见问题
 
-**Q：quant 运行报错？**
-A：`python -m quant <mode>` 直调 service（不经 HTTP），无需先启动 API。若提示缺第三方依赖（如 akshare/py_mini_racer），`pip install -r requirements.txt`。只想离线验证可设 `QUANT_USE_LOCAL_FIXTURE=true` 读 `data/*.json`。
+**Q：quant 运行报错 / 缺 pandas？**
+A：请用 `poetry run python -m ...`，不要直接用系统 `python`。CLI 直调 service（不经 HTTP），无需先启动 API。缺依赖执行 `poetry install`（ML 加 `--extras ml`）。离线验证可设 `QUANT_USE_LOCAL_FIXTURE=true` 读 `data/*.json`。
 
 **Q：ML 提示样本不足？**
 A：多运行若干交易日，确保每天晚间复盘产生 `daily/{date}/derived/` 评分。
 
 **Q：`.env` 端口不生效？**
-A：使用 `python -m app` 启动；裸 `uvicorn` 需显式 `--port`，见 `.env.example` 说明。
+A：使用 `poetry run python -m app` 启动；裸 `uvicorn` 需显式 `--port`，见 `.env.example` 说明。
 
 ---
 
@@ -435,7 +434,7 @@ A：使用 `python -m app` 启动；裸 `uvicorn` 需显式 `--port`，见 `.env
 ```powershell
 curl http://127.0.0.1:8085/health
 curl http://127.0.0.1:8085/api/v1/quant/market/pre_market
-python -m scripts.decision.daily --dry-run
+poetry run python -m scripts.decision.daily --dry-run
 ```
 
 ---

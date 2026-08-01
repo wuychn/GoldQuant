@@ -1,8 +1,11 @@
 # 运维与操作指南
 
+> 依赖由 **Poetry** 管理（`pyproject.toml` + `poetry.lock`）。下文命令一律用 `poetry run python -m ...`，避免误用系统 Python。
+
 ## 1. 环境要求
 
-- Python **3.11+**（推荐 3.11）
+- Python **3.11+**（推荐 3.11；`requires-python >=3.11,<3.14`）
+- [Poetry](https://python-poetry.org/) 2.x
 - 可访问外网（拉取行情）
 - Windows / Linux 均可
 
@@ -13,26 +16,36 @@
 在项目根目录 `GoldQuant` 下：
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+# 安装主依赖（Poetry 会使用/创建项目 .venv）
+poetry install
+
+# 需要 ML 离线校准（IC/拟合等）时再装可选组
+poetry install --extras ml
+
 copy .env.example .env
 ```
 
 编辑 `.env`：至少配置 API 端口、飞书、LLM（见 [CONFIG.md](./CONFIG.md)）。
 
+> 等价写法：激活后直接调解释器  
+> `poetry env activate`（或 `.\.venv\Scripts\Activate.ps1`）→ `python -m ...`  
+> 与 `poetry run python -m ...` 使用同一环境。
+
 ---
 
 ## 3. 启动数据 API
 
-**必须在项目根目录执行**，且已激活 venv。**量化机器人依赖此服务拉数据，须先启动 API。**
+**必须在项目根目录执行。**
+
+- 仅当需要 **内置调度器** 自动跑五时段、或要访问 HTTP API / Swagger 时，才需启动 app。
+- 单次 `poetry run python -m quant <mode>` **直调 service**，不经 HTTP，**不必**先启 API。
 
 ```powershell
 # 推荐（读取 .env 端口）
-python -m app
+poetry run python -m app
 
-# 或
-uvicorn app.main:app --host 0.0.0.0 --port 8085
+# 或（需自行带 host/port；不读 GOLDQUANT_PORT）
+poetry run uvicorn app.main:app --host 0.0.0.0 --port 8085
 ```
 
 - Swagger：<http://127.0.0.1:8085/docs>
@@ -45,7 +58,9 @@ chmod +x run.sh
 ./run.sh start
 ```
 
-**Fixture 模式**：设 `GOLDQUANT_QUANT_USE_LOCAL_FIXTURE=true`，quant CLI 读 `data/fixtures/*.json`，不请求 API（联调/离线测试）。
+（`run.sh` / `run.ps1` 调用项目 `.venv` 中的 Python，需先 `poetry install`。）
+
+**Fixture 模式**：设 `GOLDQUANT_QUANT_USE_LOCAL_FIXTURE=true`，quant CLI 读 `data/fixtures/*.json`，不请求外网/service（联调/离线测试）。
 
 ---
 
@@ -55,22 +70,33 @@ chmod +x run.sh
 
 ```powershell
 # 运维推送
-python -m quant news
-python -m quant pre_market
-python -m quant during_market          # 盘中先卖后买 + 推送
-python -m quant post_market_lunch
-python -m quant post_market_evening
+poetry run python -m quant news
+poetry run python -m quant pre_market
+poetry run python -m quant during_market          # 盘中先卖后买 + 推送
+poetry run python -m quant post_market_lunch
+poetry run python -m quant post_market_evening
 
 # 日决策（T 晚选股 + 作战池/卖出监控 + 推送）
-python -m quant daily_decision
-python -m scripts.decision.daily --no-push    # 仅落盘
-python -m scripts.decision.daily --dry-run     # 不撮合
+poetry run python -m quant daily_decision
+poetry run python -m scripts.decision.daily --no-push    # 仅落盘
+poetry run python -m scripts.decision.daily --dry-run     # 不撮合
 
 # 预取概念/基本信息（可选）
-python -m quant prefetch_concepts
+poetry run python -m quant prefetch_concepts
 ```
 
-加 `--no-push` 只落盘不推飞书。
+`scripts.decision.daily` 常用参数：
+
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `--date` | 今天 | 决策日 YYYY-MM-DD |
+| `--out` | `$QUANT_HOME/reports/decision` | 报告目录 |
+| `--n-enter` / `--n-exit` | 8 / 15 | 排名 buffer |
+| `--max-positions` | 10 | 最大持股 |
+| `--battle-pool-size` | 30 | 作战池规模（alpha top N） |
+| `--no-paper` | — | 仅决策卡，不撮合 |
+| `--dry-run` | — | 干跑 |
+| `--no-push` | — | 不推飞书 |
 
 ### 4.2 建议调度（quant.yml → scheduler）
 
@@ -84,7 +110,12 @@ python -m quant prefetch_concepts
 | 16:00 | `maintain` | 离线库维护 |
 | 20:10 | `daily_decision` | T 晚选股 |
 
-启动 API 时若 `scheduler.enabled: true`，`app/scheduling/quant_scheduler.py` 会自动注册上述任务。也可 cron / 任务计划手动调用 `python -m quant <mode>`。
+启动 API 时若 `scheduler.enabled: true`，`app/scheduling/quant_scheduler.py` 会自动注册上述任务。也可 cron / 任务计划手动调用：
+
+```text
+# 示例：指向 Poetry 创建的同一解释器
+D:\workspace\GoldQuant\.venv\Scripts\python.exe -m quant during_market
+```
 
 ### 4.3 飞书推送事件
 
@@ -122,20 +153,45 @@ python -m quant prefetch_concepts
 ### 5.2 首次建库（手动，建议夜间）
 
 ```powershell
-python -m scripts.data.build_daily --start 2021-01-01 --workers 3
+poetry run python -m scripts.data.build_daily --start 2021-01-01 --workers 1 --req-interval 5,10
 ```
+
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `--start` | `2021-01-01` | 起始日 YYYY-MM-DD |
+| `--end` | 今天 | 结束日 YYYY-MM-DD |
+| `--workers` | `3` | 并发数（建议 1–3；过高易被东财限流） |
+| `--req-interval` | `1,3` | 东财请求间隔秒，`MIN,MAX` 或单值 `N`；降频如 `5,10` 避频控 |
+| `--limit` | — | 只拉前 N 只（调试） |
+| `--codes` | — | 逗号分隔代码列表（调试） |
+| `--ignore-existing` | — | 跳过「已落库代码」去重，用于补日期缺口 |
+| `--no-delisted` | — | 不并入退市股（默认并入，修幸存者偏差） |
+| `--no-adj` | — | 跳过后复权因子全量初始化 |
+| `--retry-failed` | — | 只重试 `build_failed.jsonl` 中的失败 code |
+| `--dead-threshold` | `5` | 失败次数达此值标 dead，不再自动重试 |
 
 - 拉全 A 历史（`stock_zh_a_hist` 不复权）+ 指数 + 日历 + 退市股
 - 支持断点续传（跳过已落库代码）
-- 建议 `--workers 3`，过高易被东财限流
-- 数千只全量历史可能耗时数小时
+- 数千只全量历史可能耗时数小时；夜间 + 低并发 + 较大 `--req-interval` 更稳
+
+补历史日期缺口：
+
+```powershell
+poetry run python -m scripts.data.build_daily --start 2026-07-20 --end 2026-07-25 --ignore-existing --workers 1 --req-interval 5,10
+```
 
 ### 5.3 日增量
 
 ```powershell
-python -m scripts.data.update_daily
-python -m scripts.data.update_daily --date 2026-07-25
+poetry run python -m scripts.data.update_daily
+poetry run python -m scripts.data.update_daily --date 2026-07-25
+poetry run python -m scripts.data.update_daily --force-fundamental-pit
 ```
+
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `--date` | 今天 | 指定日 YYYY-MM-DD |
+| `--force-fundamental-pit` | — | 无视披露季窗口，增量刷新 fundamental_pit |
 
 收盘后执行：`spot_em` → 追加当日 daily_raw、除权检测、复权刷新、universe/行业/listing、fundamental_pit、因子快照（flow/hot/theme）。
 
@@ -144,9 +200,15 @@ python -m scripts.data.update_daily --date 2026-07-25
 ### 5.4 自动维护（推荐）
 
 ```powershell
-python -m scripts.data.maintain
-python -m scripts.data.maintain --date 2026-07-25
+poetry run python -m scripts.data.maintain
+poetry run python -m scripts.data.maintain --date 2026-07-25
+poetry run python -m scripts.data.maintain --start 2021-01-01
 ```
+
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `--date` | 今天 | 维护截至日（非交易日回退最近交易日） |
+| `--start` | `2021-01-01` | 无库时全量起始日 |
 
 逻辑（`scripts/data/maintain.py`）：
 
@@ -158,13 +220,13 @@ python -m scripts.data.maintain --date 2026-07-25
 
 ### 5.5 其他数据脚本
 
-| 命令 | 作用 |
-|---|---|
-| `python -m scripts.data.build_fundamental_pit` | 批量建财务 PIT |
-| `python -m scripts.data.build_listing_dates` | 上市日表 |
-| `python -m scripts.data.backfill_factor_snapshots` | 因子快照回填 |
-| `python -m scripts.data.verify_daily` | 数据校验 |
-| `python -m scripts.data.audit_data_health` | 健康审计 |
+| 命令 | 主要参数 | 作用 |
+|---|---|---|
+| `poetry run python -m scripts.data.build_fundamental_pit` | `--codes` `--limit` `--batch-size` `--sleep` `--retries` `--resume` | 批量建财务 PIT |
+| `poetry run python -m scripts.data.build_listing_dates` | （无 CLI 参数） | 上市日表 |
+| `poetry run python -m scripts.data.backfill_factor_snapshots` | `--start` `--end`（必填） | 因子快照回填 |
+| `poetry run python -m scripts.data.verify_daily` | `--sample` `--start` `--end` | 数据校验 |
+| `poetry run python -m scripts.data.audit_data_health` | `--probe-code` | 健康审计 |
 
 ### 5.6 复权说明
 
@@ -179,10 +241,8 @@ python -m scripts.data.maintain --date 2026-07-25
 ### 6.1 主回测
 
 ```powershell
-python -m scripts.backtest.run --start 2024-01-01 --end 2024-06-30
+poetry run python -m scripts.backtest.run --start 2024-01-01 --end 2024-06-30
 ```
-
-常用参数：
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
@@ -202,10 +262,10 @@ python -m scripts.backtest.run --start 2024-01-01 --end 2024-06-30
 
 ### 6.2 其他回测/验证
 
-| 命令 | 作用 |
-|---|---|
-| `python -m scripts.backtest.validate` | 随机 alpha 基准 + 前视泄漏检验 |
-| `python -m scripts.backtest.run_intraday_timing` | 盘中择时 θ 增益验证（日频代理） |
+| 命令 | 主要参数 | 作用 |
+|---|---|---|
+| `poetry run python -m scripts.backtest.validate` | `--start` `--end`（必填）`--max-positions` `--seed` | 随机 alpha 基准 + 前视泄漏检验 |
+| `poetry run python -m scripts.backtest.run_intraday_timing` | `--start` `--end`（必填）`--theta` `--pool` `--horizon` `--out` | 盘中择时 θ 增益验证（日频代理） |
 
 ### 6.3 回测前置条件
 
@@ -217,14 +277,14 @@ python -m scripts.backtest.run --start 2024-01-01 --end 2024-06-30
 
 ## 7. 因子研究脚本
 
-| 命令 | 作用 |
-|---|---|
-| `python -m scripts.factors.build_panel` | 构建因子面板 |
-| `python -m scripts.factors.ic_report` | IC/ICIR 报告 → `$QUANT_HOME/reports/ic/` |
-| `python -m scripts.factors.fit_weights` | 拟合 factor_weights.yml |
-| `python -m scripts.research.walk_forward` | walk-forward → factor_weights_ts.yml |
-| `python -m scripts.research.delist_bias_audit` | 退市偏差审计 |
-| `python -m scripts.research.calibrate_slippage` | 滑点校准 |
+| 命令 | 主要参数 | 作用 |
+|---|---|---|
+| `poetry run python -m scripts.factors.build_panel` | `--start` `--end`（必填）`--out` | 构建因子面板 |
+| `poetry run python -m scripts.factors.ic_report` | `--panel`（必填）`--out` | IC/ICIR 报告 → `$QUANT_HOME/reports/ic/` |
+| `poetry run python -m scripts.factors.fit_weights` | `--start` `--end`（必填）`--min-icir` `--min-tstat` `--static` `--train-window` `--step` `--fdr-alpha` `--horizon` `--horizons` | 拟合 factor_weights.yml |
+| `poetry run python -m scripts.research.walk_forward` | `--start` `--end`（必填）`--out` `--train-months` `--test-months` `--max-positions` | walk-forward → factor_weights_ts.yml |
+| `poetry run python -m scripts.research.delist_bias_audit` | `--as-of`（必填）`--lookback-days` `--top-n` `--refresh-delisted` | 退市偏差审计 |
+| `poetry run python -m scripts.research.calibrate_slippage` | `--days` | 滑点校准 |
 
 ---
 
@@ -255,22 +315,28 @@ python -m scripts.backtest.run --start 2024-01-01 --end 2024-06-30
 ```powershell
 curl http://127.0.0.1:8085/health
 curl http://127.0.0.1:8085/api/v1/quant/market/pre_market
-python -m scripts.decision.daily --dry-run
-python -m scripts.smoke_e2e          # 端到端冒烟（合成数据，不碰网络）
+poetry run python -m scripts.decision.daily --dry-run
+poetry run python -m scripts.smoke_e2e          # 端到端冒烟（合成数据，不碰网络）
 ```
 
 ---
 
 ## 10. 常见问题
 
+**Q：`ModuleNotFoundError: No module named 'pandas'`？**  
+A：系统 `python` 与 Poetry 环境不是同一个。请用 `poetry run python -m ...`，或先 `.\.venv\Scripts\Activate.ps1`。用 `poetry run python -c "import sys; print(sys.executable)"` 确认解释器路径落在项目 `.venv`。
+
 **Q：quant 报连接失败？**  
-A：确认 `python -m app` 已启动，端口与 `quant/config.py` 中 `BASE_URL` 一致（默认 `http://localhost:8085`）。或开 fixture 模式。
+A：单次 CLI **不依赖** HTTP。若仍报错，检查是否误开了旧路径/错误环境；或设 fixture 模式。仅调度器自动跑五时段时需 `poetry run python -m app`。
 
 **Q：面板为空 / 决策失败？**  
 A：检查离线库是否已 build；至少需覆盖决策日前若干交易日。
 
 **Q：`.env` 端口不生效？**  
-A：使用 `python -m app` 启动；裸 `uvicorn` 需显式 `--port`。
+A：使用 `poetry run python -m app` 启动；裸 `uvicorn` 需显式 `--port`。
 
 **Q：回测与实盘差异？**  
 A：回测用 strict 差额 rebalance；实盘 T+1 盘中 intraday_alpha 触发。见 [ARCHITECTURE.md §4.5](./ARCHITECTURE.md#45-回测-vs-实盘纸面)。
+
+**Q：缺依赖怎么装？**  
+A：`poetry install`；ML 相关再加 `--extras ml`。不要再维护平行的 `requirements.txt`。

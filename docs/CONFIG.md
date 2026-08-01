@@ -27,7 +27,7 @@
 | `GOLDQUANT_ENV` | `local` | 运行环境标识（仅 `/` 根路径展示） |
 | `GOLDQUANT_API_V1_STR` | `/api/v1` | API 路由前缀 |
 
-### Uvicorn 启动（`python -m app`）
+### Uvicorn 启动（`poetry run python -m app`）
 
 | 项 | 默认 | 作用 |
 |----|------|------|
@@ -35,7 +35,7 @@
 | `GOLDQUANT_PORT` | `8085` | API 端口 |
 | `GOLDQUANT_UVICORN_RELOAD` | `true` | 热重载；生产设 `false` |
 
-> 裸 `uvicorn app.main:app` 不读 `GOLDQUANT_PORT`；请用 `python -m app` 或显式 `--port`。
+> 裸 `uvicorn app.main:app` 不读 `GOLDQUANT_PORT`；请用 `poetry run python -m app` 或显式 `--port`。
 
 ### CORS
 
@@ -108,7 +108,7 @@
 | 项 | 默认 | 作用 |
 |----|------|------|
 | `GOLDQUANT_QUANT_TEST_PHASE` | `false` | `true` 时 API/enrich/推送/state 列表统一仅 3 条 |
-| `GOLDQUANT_QUANT_USE_LOCAL_FIXTURE` | `false` | `true` 时 `python -m quant` 读 `data/*.json`，不调 service |
+| `GOLDQUANT_QUANT_USE_LOCAL_FIXTURE` | `false` | `true` 时 `poetry run python -m quant` 读 `data/*.json`，不调 service |
 
 ### 飞书推送
 

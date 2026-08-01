@@ -5,7 +5,7 @@ Set-Location $Root
 
 $Py = Join-Path $Root ".venv\Scripts\python.exe"
 if (-not (Test-Path $Py)) {
-    Write-Host "未找到 $Py ，请先创建 venv 并安装依赖: pip install -r requirements.txt" -ForegroundColor Yellow
+    Write-Host "未找到 $Py ，请先在项目根执行: poetry install" -ForegroundColor Yellow
     exit 1
 }
 

@@ -34,7 +34,7 @@ cmd_start() {
   local venv_py="${ROOT}/.venv/bin/python"
   if [[ ! -x "$venv_py" ]]; then
     echo "错误: 未找到虚拟环境解释器: ${venv_py}" >&2
-    echo "请先执行: python3 -m venv .venv && .venv/bin/pip install -r requirements.txt" >&2
+    echo "请先在项目根执行: poetry install" >&2
     exit 1
   fi
 

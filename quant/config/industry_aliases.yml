@@ -8,7 +8,7 @@
 #
 # generated_at: 2026-06-17 14:30:58
 # ths=90 em_input=496 aliases=197 em_only=300 ths_only=0
-# 刷新：python -m quant industry_aliases_draft
+# 刷新：poetry run python -m quant industry_aliases_draft
 catalog:
   generated_at: 2026-06-17 14:30:58
   ths:

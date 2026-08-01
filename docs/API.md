@@ -1,7 +1,7 @@
 # FastAPI 数据服务 API
 
 > 前缀：**`/api/v1`**（`GOLDQUANT_API_V1_STR`）  
-> 完整交互文档：<http://127.0.0.1:8085/docs>（启动 `python -m app` 后访问）
+> 完整交互文档：<http://127.0.0.1:8085/docs>（`poetry run python -m app` 启动后访问）
 
 ## 1. 架构
 
@@ -82,11 +82,11 @@ app/main.py
 
 | 组件 | 关系 |
 |---|---|
-| `python -m quant <mode>` | 通过 HTTP 拉上述 payload（`quant/data_fetch.py`，默认 `BASE_URL=http://localhost:8085`） |
-| `GOLDQUANT_QUANT_USE_LOCAL_FIXTURE=true` | 不请求 API，读 `data/fixtures/*.json` |
-| `scheduler.in_process_modes` | news/pre_market 等轻量模式在 API 进程内直接跑，不另起 HTTP |
+| `poetry run python -m quant <mode>` | 直调 `quant/services/market/payload` 等构建 payload（**不经 HTTP**） |
+| `GOLDQUANT_QUANT_USE_LOCAL_FIXTURE=true` | 不调 service，读 `data/fixtures/*.json` |
+| `scheduler.in_process_modes` | news/pre_market 等轻量模式在 API 进程内直接跑 |
 
-**运行顺序**：先 `python -m app`，再 `python -m quant`。
+**何时需要启 API**：内置调度器自动跑五时段、或访问本页 HTTP 接口时，先 `poetry run python -m app`。单次 CLI 不必先启。
 
 ---
 

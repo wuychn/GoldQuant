@@ -41,21 +41,23 @@ GoldQuant 是 A 股日频波段量化辅助系统，由 **FastAPI 数据聚合�
 
 ## 常用命令
 
+依赖用 Poetry 安装：`poetry install`（详见 [OPERATIONS.md](./OPERATIONS.md)）。命令前缀统一为 `poetry run`。
+
 ```powershell
-# 启动数据 API（须先于 quant 运行）
-python -m app
+# 启动数据 API（调度器 / HTTP / Swagger 需要；单次 quant CLI 不必先启）
+poetry run python -m app
 
 # 日决策（T 晚选股）
-python -m quant daily_decision
+poetry run python -m quant daily_decision
 
 # 盘中择时买卖
-python -m quant during_market
+poetry run python -m quant during_market
 
 # 离线库维护
-python -m scripts.data.maintain
+poetry run python -m scripts.data.maintain
 
 # 回测
-python -m scripts.backtest.run --start 2024-01-01 --end 2024-06-30 --max-positions 10
+poetry run python -m scripts.backtest.run --start 2024-01-01 --end 2024-06-30 --max-positions 10
 ```
 
 详细说明见 [OPERATIONS.md](./OPERATIONS.md)。

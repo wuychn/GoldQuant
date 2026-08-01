@@ -72,7 +72,7 @@ GoldQuant/
 - `quant/` 中间层，只 import `common`，**禁止 import `app`**（r3 前经 HTTP、r3 起直调 service，均不经 app 包）。
 - `app/` 与 `scripts/` 最上层，可 import `quant` 与 `common`。
 
-运维五时段（news/pre/during/lunch/evening）payload 由 `quant/services/market/payload` 直调 service 构建（不经 HTTP）；`daily_decision` 用离线库。内置调度器（APScheduler）在 `app.main` 进程内，故自动跑五时段需 `python -m app`；单次 `python -m quant <mode>` 无需 app。
+运维五时段（news/pre/during/lunch/evening）payload 由 `quant/services/market/payload` 直调 service 构建（不经 HTTP）；`daily_decision` 用离线库。内置调度器（APScheduler）在 `app.main` 进程内，故自动跑五时段需 `poetry run python -m app`；单次 `poetry run python -m quant <mode>` 无需 app。
 
 quant 内部 L0→L4：
 
@@ -150,7 +150,7 @@ sequenceDiagram
 
 ### 4.2 T 晚：选股与定计划
 
-**入口**：`python -m quant daily_decision` 或 `python -m scripts.decision.daily`
+**入口**：`poetry run python -m quant daily_decision` 或 `poetry run python -m scripts.decision.daily`
 
 | 步骤 | 动作 | 代码 |
 |---|---|---|
@@ -172,7 +172,7 @@ sequenceDiagram
 
 ### 4.3 T+1 盘中：买入
 
-**入口**：`python -m quant during_market` → `quant/services/market/intraday.py`
+**入口**：`poetry run python -m quant during_market` → `quant/services/market/intraday.py`
 
 | 步骤 | 规则 |
 |---|---|
