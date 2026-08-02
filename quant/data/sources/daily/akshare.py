@@ -74,7 +74,7 @@ class AkshareDailySource:
                 symbol=str(code), period="daily",
                 start_date=start.replace("-", ""), end_date=end.replace("-", ""), adjust=adjust,
             ),
-            label=f"hist {code}", retries=3,
+            label=f"hist {code}", retries=3, empty_ok=True,
         )
         return _normalize_hist(df, code)
 

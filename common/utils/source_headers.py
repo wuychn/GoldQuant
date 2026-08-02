@@ -147,6 +147,26 @@ def _to_requests_response(cfr: Any, method: str, url: str) -> requests.Response:
     return r
 
 
+def _request_proxies() -> dict[str, str | None] | None:
+    """行情请求代理：仅当 GOLDQUANT_PROXY_ENABLED 时走应用代理；否则显式禁用系统代理。
+
+    Clash 等注入的 HTTP(S)_PROXY 会导致 push2his.eastmoney.com 出现 ProxyError，
+    与「应用未开代理」预期不符，故默认 proxies http/https=None。
+    """
+    try:
+        from common.config import Settings
+
+        settings = Settings()
+    except Exception:  # noqa: BLE001
+        return {"http": None, "https": None}
+    if not settings.PROXY_ENABLED:
+        return {"http": None, "https": None}
+    px = settings.httpx_proxy_url()
+    if not px:
+        return {"http": None, "https": None}
+    return {"http": px, "https": px}
+
+
 def _patched_session_request(self: Session, method: str, url: str | bytes, **kwargs: Any) -> Any:
     url_s = url.decode("utf-8", errors="replace") if isinstance(url, bytes) else str(url)
     # 1) 策略：注入头 + 限速（sleep）
@@ -158,6 +178,9 @@ def _patched_session_request(self: Session, method: str, url: str | bytes, **kwa
                 headers.update(extra)
             strat.pre_request(url_s)
             break
+    proxies = kwargs.get("proxies")
+    if proxies is None:
+        proxies = _request_proxies()
     # 2) curl_cffi 发请求（impersonate=chrome 解决东财 clist 的 TLS 指纹反爬）；异常回退原 requests
     try:
         cfr = cf_requests.request(
@@ -170,12 +193,14 @@ def _patched_session_request(self: Session, method: str, url: str | bytes, **kwa
             files=kwargs.get("files"),
             timeout=kwargs.get("timeout") or 15,
             allow_redirects=kwargs.get("allow_redirects", True),
+            proxies=proxies,
             impersonate="chrome",
         )
         return _to_requests_response(cfr, method, url_s)
     except Exception:
         # fallback：原 requests（带已注入的头）。覆盖 TLS 不查的接口 + curl_cffi 不兼容场景。
         kwargs["headers"] = headers or None
+        kwargs["proxies"] = proxies
         return _ORIGINAL_SESSION_REQUEST(self, method, url, **kwargs)
 
 

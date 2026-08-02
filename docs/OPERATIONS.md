@@ -173,15 +173,23 @@ poetry run python -m scripts.data.build_daily --start 2021-01-01 --workers 1 --r
 
 **默认智能断点续传（推荐反复跑同一命令直到完成）：**
 
-1. **逐只完整性检查**：相对 `[start,end]` 交易日历（默认 `end=今天`），**缺任意一天**则补拉；齐全则跳过。若有 `listing_dates`，期望从 `max(start, 上市日)` 起算。
-2. **缺哪段补哪段**：每码只请求缺失日的 `[min(缺日), max(缺日)]`（例如库已完整到上周，再跑只会拉最近几个交易日，不会重拉整段历史）。窗内已有日由 write 去重。
+1. **逐只完整性检查**：相对 `[start,end]`（默认 `end=今天`，与 `--start 2021-01-01` 等 CLI 一致），**缺任意一天**则补拉；齐全则跳过。若有 `listing_dates`，期望从 `max(start, 上市日)` 起算。
+2. **补拉窗口 = 完整检查区间**：待拉码按 `{start}~{end}` 整段请求（write 去重，不重复堆行）。停牌等源站无 K 线的交易日记入 `$QUANT_HOME/data/no_bar_dates.json` 豁免，避免反复补拉。
 3. **自动并入** `build_failed.jsonl` 中非 dead 失败码
 4. **市场级第二轮**：若日历上存在「全市场都没有数据」的交易日，对该缺口窗全代码补拉；`--no-gap-fill` / `--ignore-existing` / `--retry-failed` 时跳过
 
 - 拉全 A 历史（`stock_zh_a_hist` 不复权）+ 指数 + 日历 + 退市股
-- 中断后或隔几天未做增量，再执行同一命令即可续补到 `end`（默认今天）
-- 长期停牌日源站本身无 K 线时，完整性检查仍会判缺并重试；可配合失败清单 `dead` 阈值或先维护 `listing_dates`
+- 中断后或隔几天未做增量，再执行同一命令即可按完整性续补到 `end`
 - 日常增量仍推荐 `update_daily` / `maintain`；`build_daily` 适合建库与查漏补缺
+
+**常见告警：**
+
+| 现象 | 原因 | 处理 |
+|---|---|---|
+| `ProxyError` / `Unable to connect to proxy` | Clash 等注入了系统 `HTTP(S)_PROXY`，请求被劫持 | 默认 `PROXY_ENABLED=false` 时已显式禁用系统代理；确认 `.env` 未误开代理即可重跑 |
+| `Couldn't deserialize thrift` / `Unexpected end of stream` | 多线程并发写同一 `year=*/part.parquet` 曾写坏分区 | 现已文件锁+原子写；读到损坏会改名为 `part.parquet.corrupt.<ts>`。重跑同一 `build_daily` 命令即可回补丢失年份 |
+
+若本地已有损坏分区，也可手动删掉对应 `year=*/part.parquet`（或保留 `.corrupt.*` 备份）后重跑续传。
 
 强制补一段日期（跳过智能扫描）：
 

@@ -124,8 +124,8 @@ class IncompleteCodesTests(unittest.TestCase):
         )
         self.assertEqual(got, ["b", "c"])
 
-    def test_fetch_plan_tail_only(self):
-        """尾部缺两天 → 只补那两天窗口，不重拉全历史。"""
+    def test_fetch_plan_uses_full_check_range(self):
+        """缺尾部两天 → 补拉仍用完整检查区间 start~end。"""
         from scripts.data.build_daily import incomplete_fetch_plans
 
         rows = [("000001", d) for d in CAL[:-2]]
@@ -136,9 +136,24 @@ class IncompleteCodesTests(unittest.TestCase):
             daily=_daily(rows),
             calendar=CAL,
         )
-        self.assertEqual(plans, [("000001", "2026-07-23", "2026-07-24")])
+        self.assertEqual(plans, [("000001", "2026-07-20", "2026-07-24")])
 
-    def test_fetch_plan_single_middle_day(self):
+    def test_fetch_plan_respects_no_bar(self):
+        """无行情豁免日后，不再因该日进入待拉。"""
+        from scripts.data.build_daily import incomplete_fetch_plans
+
+        rows = [("000001", d) for d in CAL if d != "2026-07-22"]
+        plans = incomplete_fetch_plans(
+            ["000001"],
+            start="2026-07-20",
+            end="2026-07-24",
+            daily=_daily(rows),
+            calendar=CAL,
+            no_bar_map={"000001": {"2026-07-22"}},
+        )
+        self.assertEqual(plans, [])
+
+    def test_fetch_plan_single_middle_day_still_full_range(self):
         from scripts.data.build_daily import incomplete_fetch_plans
 
         rows = [("000001", d) for d in CAL if d != "2026-07-22"]
@@ -149,7 +164,7 @@ class IncompleteCodesTests(unittest.TestCase):
             daily=_daily(rows),
             calendar=CAL,
         )
-        self.assertEqual(plans, [("000001", "2026-07-22", "2026-07-22")])
+        self.assertEqual(plans, [("000001", "2026-07-20", "2026-07-24")])
 
     def test_fetch_plan_empty_code_full_window(self):
         from scripts.data.build_daily import incomplete_fetch_plans

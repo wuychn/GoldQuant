@@ -1,8 +1,8 @@
 """全量初始化离线日线库：逐只拉 stock_zh_a_hist（不复权）+ 指数 + 交易日历。
 
 默认智能断点续传：
-  1. 逐只完整性检查（相对交易日历，缺一天即补）；完整则跳过
-  2. 补拉窗口 = 该码缺失日的 [min, max]（缺哪段补哪段，不重拉已完整区间）
+  1. 逐只完整性检查（相对 --start/--end 交易日历，缺一天即补）；完整则跳过
+  2. 待拉码按**完整检查区间**补拉（与 CLI 一致，write 去重）；停牌日写入无行情豁免
   3. 自动并入 build_failed.jsonl 中非 dead 失败码
   4. 再扫市场级缺失交易日，有缺口则对缺口窗全代码补拉
 
@@ -44,6 +44,50 @@ def last_cal_day_on_or_before(calendar: list[str], end: str) -> str | None:
     return candidates[-1] if candidates else None
 
 
+def _no_bar_path() -> Path:
+    from quant.store.paths import quant_home
+
+    return quant_home() / "data" / "no_bar_dates.json"
+
+
+def load_no_bar_map() -> dict[str, set[str]]:
+    """已确认无 K 线的 (code → dates)，停牌日等豁免完整性检查。"""
+    p = _no_bar_path()
+    if not p.is_file():
+        return {}
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, set[str]] = {}
+    for k, v in raw.items():
+        if isinstance(v, list):
+            out[str(k)] = {str(d) for d in v}
+    return out
+
+
+def save_no_bar_map(mp: dict[str, set[str]]) -> None:
+    p = _no_bar_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    payload = {c: sorted(dates) for c, dates in sorted(mp.items()) if dates}
+    p.write_text(json.dumps(payload, ensure_ascii=False, indent=0) + "\n", encoding="utf-8")
+
+
+def add_no_bar_dates(code: str, dates: set[str]) -> int:
+    """追加无行情豁免日，返回新增条数。"""
+    if not dates:
+        return 0
+    mp = load_no_bar_map()
+    c = str(code).strip()
+    before = set(mp.get(c, set()))
+    merged = before | {str(d) for d in dates}
+    mp[c] = merged
+    save_no_bar_map(mp)
+    return len(merged - before)
+
+
 def incomplete_fetch_plans(
     codes: list[str],
     *,
@@ -52,17 +96,19 @@ def incomplete_fetch_plans(
     daily: pd.DataFrame,
     calendar: list[str],
     listing_map: dict[str, str] | None = None,
+    no_bar_map: dict[str, set[str]] | None = None,
 ) -> list[tuple[str, str, str]]:
     """逐只完整性检查，返回 ``[(code, fetch_start, fetch_end), ...]``（保序）。
 
-    期望交易日 = 日历 ∩ [start, end]；有上市日则从 ``max(start, listing_date)`` 起算。
-    缺任意一天则补拉；窗口为缺失日的 ``[min(missing), max(missing)]``
-   （东财 hist 按区间返回；窗内已有日 write 去重）。完整则不进入列表。
+    期望交易日 = 日历 ∩ [start, end] − 无行情豁免；有上市日则从
+    ``max(start, listing_date)`` 起算。缺任意一天则补拉，窗口为**完整检查区间**
+    ``[start, end]``（与 CLI ``--start/--end`` 一致，write 按 code+date 去重）。
     """
     if not codes:
         return []
     expected_all = {d for d in calendar if start <= d <= end}
     listing = listing_map or {}
+    no_bar = no_bar_map if no_bar_map is not None else load_no_bar_map()
 
     def _lo(code: str) -> str:
         ld = listing.get(code)
@@ -96,14 +142,15 @@ def incomplete_fetch_plans(
     for code in codes:
         c = str(code).strip()
         lo = _lo(c)
-        expected = {d for d in expected_all if d >= lo}
+        expected = {d for d in expected_all if d >= lo} - no_bar.get(c, set())
         if not expected:
             continue
         have = have_by_code.get(c, set())
         missing = expected - have
         if not missing:
             continue
-        out.append((c, min(missing), max(missing)))
+        # 补拉全检查区间，避免日志/语义上出现「只拉了某几天」的误解
+        out.append((c, start, end))
     return out
 
 
@@ -115,6 +162,7 @@ def incomplete_codes(
     daily: pd.DataFrame,
     calendar: list[str],
     listing_map: dict[str, str] | None = None,
+    no_bar_map: dict[str, set[str]] | None = None,
 ) -> list[str]:
     """``incomplete_fetch_plans`` 的代码列表视图（兼容单测 / 调用方）。"""
     return [
@@ -126,6 +174,7 @@ def incomplete_codes(
             daily=daily,
             calendar=calendar,
             listing_map=listing_map,
+            no_bar_map=no_bar_map,
         )
     ]
 
@@ -153,12 +202,39 @@ def _all_codes() -> list[str]:
     return df["code"].astype(str).str.strip().tolist()
 
 
-def _build_one(code: str, start: str, end: str) -> tuple[str, int, str | None]:
-    """拉单只并落库。返回 ``(code, 行数, reason)``：reason 非 None 表示**网络失败**（可重试）。
+def _probe_start(start: str, *, lookback_days: int = 90) -> str:
+    """目标窗起点往前推若干自然日，作宽窗探测。"""
+    from datetime import date, timedelta
 
-    重试/退避由 ``fetch_hist`` 内部 ``_retry`` 兜底；东财对退市/早期停牌股常返回空，
-    此时回退 Sina ``stock_zh_a_daily``（退市股修复幸存者偏差的关键路径）。空数据（行数 0、
-    reason None）属正常，不计入失败清单。
+    d0 = date.fromisoformat(str(start)[:10])
+    return (d0 - timedelta(days=lookback_days)).isoformat()
+
+
+def _mark_holes_as_no_bar(code: str, *, start: str, end: str, returned_dates: set[str]) -> int:
+    """成功拉到数据后：在返回区间内、日历有但源站未返回的交易日记为无行情豁免。"""
+    if not returned_dates:
+        return 0
+    cal = read_calendar()
+    lo, hi = min(returned_dates), max(returned_dates)
+    # 仅标记「有返回覆盖的跨度」内部空洞，避免限流截断时误伤首尾
+    span_lo = max(start, lo)
+    span_hi = min(end, hi)
+    holes = {d for d in cal if span_lo <= d <= span_hi} - returned_dates
+    n = add_no_bar_dates(code, holes)
+    if n:
+        print(
+            f"[INFO] {code} 检查区间 {start}~{end} 内记入无行情豁免 {n} 天"
+            f"（源站未返回，多为停牌）",
+            file=sys.stderr,
+        )
+    return n
+
+
+def _build_one(code: str, start: str, end: str) -> tuple[str, int, str | None]:
+    """拉单只并落库。返回 ``(code, 行数, reason)``：reason 非 None 表示**失败可重试**。
+
+    ``start/end`` 为完整性检查全区间（与 CLI ``--start/--end`` 一致）。
+    双源皆空时宽窗探测区分：假空写入 / 确认无行情并豁免 / 未确认则 WARN 记失败。
     """
     try:
         df = fetch_hist(code, start=start, end=end, adjust="")
@@ -166,9 +242,48 @@ def _build_one(code: str, start: str, end: str) -> tuple[str, int, str | None]:
             df = fetch_delisted_daily(code, start=start, end=end)
         if not df.empty:
             write_daily_raw(df)
-        return code, len(df), None
+            ret = set(df["date"].astype(str))
+            _mark_holes_as_no_bar(code, start=start, end=end, returned_dates=ret)
+            return code, len(df), None
+
+        # —— 全区间双源空：宽窗探测 ——
+        p_start = _probe_start(start)
+        probe = fetch_hist(code, start=p_start, end=end, adjust="")
+        if probe.empty:
+            probe = fetch_delisted_daily(code, start=p_start, end=end)
+
+        if not probe.empty:
+            overlap = probe[(probe["date"] >= start) & (probe["date"] <= end)]
+            if not overlap.empty:
+                write_daily_raw(overlap)
+                ret = set(overlap["date"].astype(str))
+                _mark_holes_as_no_bar(code, start=start, end=end, returned_dates=ret)
+                print(
+                    f"[INFO] {code} 检查区间 {start}~{end} 首次空，"
+                    f"宽窗探测命中 {len(overlap)} 行已写入（疑假空/限流）",
+                    file=sys.stderr,
+                )
+                return code, len(overlap), None
+            # 宽窗有数、检查区间内无 → 整段检查窗记豁免
+            cal = read_calendar()
+            exempt = {d for d in cal if start <= d <= end}
+            n = add_no_bar_dates(code, exempt)
+            print(
+                f"[INFO] {code} 确认无行情: 检查区间 {start}~{end} 无K线，"
+                f"宽窗 {p_start}~{end} 有 {len(probe)} 行；"
+                f"已豁免 {n} 个交易日（停牌/未上市）",
+                file=sys.stderr,
+            )
+            return code, 0, None
+
+        reason = (
+            f"检查区间 {start}~{end} 与探测窗 {p_start}~{end} "
+            f"东财+退市回退均空（未确认无行情，疑限流/反爬）"
+        )
+        print(f"[WARN] {code} 拉取失败: {reason}", file=sys.stderr)
+        return code, 0, reason[:200]
     except Exception as e:  # noqa: BLE001
-        print(f"[WARN] {code} 拉取失败: {e}", file=sys.stderr)
+        print(f"[WARN] {code} 拉取失败: {type(e).__name__}: {e}", file=sys.stderr)
         return code, 0, str(e)[:200]
 
 
@@ -423,17 +538,14 @@ def main() -> None:
                 daily=daily,
                 calendar=cal_local,
                 listing_map=listing_map,
+                no_bar_map=load_no_bar_map(),
             )
             n_have = 0 if daily.empty else daily["code"].astype(str).nunique()
+            print(f"完整性检查区间: {args.start} ~ {end}")
             print(
-                f"完整性检查: 窗口内已有 {n_have} 只，"
-                f"缺日待拉 {len(plans)}/{len(codes)}"
+                f"完整性检查: 区间内已有 {n_have} 只，"
+                f"缺日待拉 {len(plans)}/{len(codes)}（待拉码按全区间 {args.start}~{end} 补拉）"
             )
-            if plans:
-                print(
-                    f"补拉窗口: {min(s for _, s, _ in plans)} ~ "
-                    f"{max(e for _, _, e in plans)}（每码仅拉自身缺失区间）"
-                )
             # 自动并入非 dead 失败码（尚无计划的用全区间；已有计划保留缺失窗）
             failed_map = _read_failed()
             planned = {c for c, _, _ in plans}

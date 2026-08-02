@@ -1,12 +1,18 @@
 """parquet 离线日线库读写。
 
 按年分区，列裁剪；pyarrow 懒导入，模块本身不依赖 pyarrow。
+写路径：文件锁 + 原子替换，避免 build_daily 多线程并发写坏分区。
 """
 
 from __future__ import annotations
 
+import os
+import sys
+import tempfile
+import time
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import pandas as pd
 
@@ -52,25 +58,97 @@ def _year_partition_path(base: Path, date_str: str) -> Path:
     return base / f"year={year}" / "part.parquet"
 
 
+@contextmanager
+def _file_lock(path: Path) -> Iterator[None]:
+    """分区级文件锁（多线程/多进程 RMW 安全）。"""
+    try:
+        from filelock import FileLock
+    except ImportError:
+        with nullcontext():
+            yield
+        return
+    lock = FileLock(str(path) + ".lock", timeout=120)
+    with lock:
+        yield
+
+
+def _quarantine_corrupt(path: Path, err: BaseException) -> None:
+    """损坏的 parquet 改名为 .corrupt.<ts>，避免反复读炸。"""
+    ts = time.strftime("%Y%m%d%H%M%S")
+    dest = path.with_name(f"{path.name}.corrupt.{ts}")
+    try:
+        path.replace(dest)
+        print(
+            f"[WARN] parquet 损坏已隔离: {path} → {dest.name} ({type(err).__name__}: {err})",
+            file=sys.stderr,
+        )
+    except OSError as e:
+        print(f"[WARN] parquet 隔离失败 {path}: {e}", file=sys.stderr)
+
+
+def _read_parquet_safe(path: Path, *, empty_columns: list[str] | None = None) -> pd.DataFrame:
+    """读 parquet；损坏则隔离并返回空表。"""
+    if not path.is_file():
+        return pd.DataFrame(columns=empty_columns or [])
+    try:
+        return pd.read_parquet(path)
+    except Exception as e:  # noqa: BLE001
+        msg = str(e).lower()
+        corrupt_markers = (
+            "thrift",
+            "parquet",
+            "unexpected end",
+            "deserialize",
+            "invalid",
+            "corrupt",
+            "magic bytes",
+        )
+        if any(m in msg for m in corrupt_markers) or isinstance(e, OSError):
+            _quarantine_corrupt(path, e)
+            return pd.DataFrame(columns=empty_columns or [])
+        raise
+
+
+def _write_parquet_atomic(path: Path, df: pd.DataFrame) -> None:
+    """先写临时文件再 replace，避免写到一半被读到半截文件。"""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, suffix=".parquet.tmp")
+    os.close(fd)
+    tmp = Path(tmp_name)
+    try:
+        pq.write_table(pa.Table.from_pandas(df, preserve_index=False), tmp)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+
 def write_daily_raw(df: pd.DataFrame) -> None:
-    """按年分区写不复权日线。追加到现有分区时先读后写去重。"""
+    """按年分区写不复权日线。追加到现有分区时先读后写去重（加锁）。"""
     _ensure_pyarrow()
     if df.empty:
         return
-    import pyarrow as pa
-    import pyarrow.parquet as pq
 
     d = daily_raw_dir()
     for year, g in df.groupby(df["date"].str[:4]):
         path = d / f"year={year}" / "part.parquet"
         path.parent.mkdir(parents=True, exist_ok=True)
-        if path.is_file():
-            old = pd.read_parquet(path)
-            g = pd.concat([old, g], ignore_index=True)
-            g = g.drop_duplicates(subset=["code", "date"], keep="last")
-        g = g.sort_values(["code", "date"]).reset_index(drop=True)
-        table = pa.Table.from_pandas(g, preserve_index=False)
-        pq.write_table(table, path)
+        with _file_lock(path):
+            if path.is_file():
+                old = _read_parquet_safe(
+                    path, empty_columns=["code", "date"]
+                )
+                if not old.empty:
+                    g = pd.concat([old, g], ignore_index=True)
+                    g = g.drop_duplicates(subset=["code", "date"], keep="last")
+            g = g.sort_values(["code", "date"]).reset_index(drop=True)
+            _write_parquet_atomic(path, g)
 
 
 def read_daily_raw(
@@ -84,17 +162,19 @@ def read_daily_raw(
     root = daily_raw_dir()
     if not root.is_dir():
         return pd.DataFrame(columns=["code", "date"])
-    parts = []
+    frames: list[pd.DataFrame] = []
     for p in sorted(root.glob("year=*/part.parquet")):
         year = p.parent.name.split("=")[1]
         if start and year < str(start)[:4]:
             continue
         if end and year > str(end)[:4]:
             continue
-        parts.append(p)
-    if not parts:
+        part = _read_parquet_safe(p, empty_columns=["code", "date"])
+        if not part.empty:
+            frames.append(part)
+    if not frames:
         return pd.DataFrame(columns=["code", "date"])
-    df = pd.concat([pd.read_parquet(p) for p in parts], ignore_index=True)
+    df = pd.concat(frames, ignore_index=True)
     if start:
         df = df[df["date"] >= start]
     if end:
@@ -108,19 +188,21 @@ def write_adj_factor(df: pd.DataFrame) -> None:
     _ensure_pyarrow()
     if df.empty:
         return
-    import pyarrow as pa
-    import pyarrow.parquet as pq
 
     d = adj_factor_dir()
     for code, g in df.groupby("code"):
         path = d / f"code={code}" / "part.parquet"
         path.parent.mkdir(parents=True, exist_ok=True)
-        if path.is_file():
-            old = pd.read_parquet(path)
-            g = pd.concat([old, g], ignore_index=True)
-            g = g.drop_duplicates(subset=["code", "date"], keep="last")
-        g = g.sort_values("date").reset_index(drop=True)
-        pq.write_table(pa.Table.from_pandas(g, preserve_index=False), path)
+        with _file_lock(path):
+            if path.is_file():
+                old = _read_parquet_safe(
+                    path, empty_columns=["code", "date", "hfq_factor"]
+                )
+                if not old.empty:
+                    g = pd.concat([old, g], ignore_index=True)
+                    g = g.drop_duplicates(subset=["code", "date"], keep="last")
+            g = g.sort_values("date").reset_index(drop=True)
+            _write_parquet_atomic(path, g)
 
 
 def read_adj_factor(codes: list[str] | None = None) -> pd.DataFrame:
@@ -128,33 +210,35 @@ def read_adj_factor(codes: list[str] | None = None) -> pd.DataFrame:
     root = adj_factor_dir()
     if not root.is_dir():
         return pd.DataFrame(columns=["code", "date", "hfq_factor"])
-    parts = []
+    frames: list[pd.DataFrame] = []
     for p in sorted(root.glob("code=*/part.parquet")):
         if codes:
             c = p.parent.name.split("=")[1]
             if c not in codes:
                 continue
-        parts.append(p)
-    if not parts:
+        part = _read_parquet_safe(p, empty_columns=["code", "date", "hfq_factor"])
+        if not part.empty:
+            frames.append(part)
+    if not frames:
         return pd.DataFrame(columns=["code", "date", "hfq_factor"])
-    return pd.concat([pd.read_parquet(p) for p in parts], ignore_index=True)
+    return pd.concat(frames, ignore_index=True)
 
 
 def write_index_daily(df: pd.DataFrame) -> None:
     _ensure_pyarrow()
     if df.empty:
         return
-    import pyarrow as pa
-    import pyarrow.parquet as pq
 
     path = index_daily_dir() / "part.parquet"
     path.parent.mkdir(parents=True, exist_ok=True)
-    if path.is_file():
-        old = pd.read_parquet(path)
-        df = pd.concat([old, df], ignore_index=True)
-        df = df.drop_duplicates(subset=["code", "date"], keep="last")
-    df = df.sort_values(["code", "date"]).reset_index(drop=True)
-    pq.write_table(pa.Table.from_pandas(df, preserve_index=False), path)
+    with _file_lock(path):
+        if path.is_file():
+            old = _read_parquet_safe(path, empty_columns=["code", "date", "close"])
+            if not old.empty:
+                df = pd.concat([old, df], ignore_index=True)
+                df = df.drop_duplicates(subset=["code", "date"], keep="last")
+        df = df.sort_values(["code", "date"]).reset_index(drop=True)
+        _write_parquet_atomic(path, df)
 
 
 def read_index_daily(code: str = "000300", start: str | None = None, end: str | None = None) -> pd.DataFrame:
@@ -162,7 +246,9 @@ def read_index_daily(code: str = "000300", start: str | None = None, end: str | 
     path = index_daily_dir() / "part.parquet"
     if not path.is_file():
         return pd.DataFrame(columns=["code", "date", "close"])
-    df = pd.read_parquet(path)
+    df = _read_parquet_safe(path, empty_columns=["code", "date", "close"])
+    if df.empty:
+        return df
     df = df[df["code"] == code]
     if start:
         df = df[df["date"] >= start]
@@ -175,15 +261,14 @@ def write_universe_snapshot(df: pd.DataFrame) -> None:
     _ensure_pyarrow()
     if df.empty:
         return
-    import pyarrow as pa
-    import pyarrow.parquet as pq
 
     d = universe_dir()
     for date_str, g in df.groupby("date"):
         year = str(date_str)[:4]
         path = d / f"year={year}" / f"{date_str}.parquet"
         path.parent.mkdir(parents=True, exist_ok=True)
-        pq.write_table(pa.Table.from_pandas(g, preserve_index=False), path)
+        with _file_lock(path):
+            _write_parquet_atomic(path, g)
 
 
 def read_universe_snapshot(date_str: str) -> pd.DataFrame:
@@ -192,7 +277,9 @@ def read_universe_snapshot(date_str: str) -> pd.DataFrame:
     path = universe_dir() / f"year={year}" / f"{date_str}.parquet"
     if not path.is_file():
         return pd.DataFrame(columns=["date", "code", "name", "included"])
-    return pd.read_parquet(path)
+    return _read_parquet_safe(
+        path, empty_columns=["date", "code", "name", "included"]
+    )
 
 
 def name_snapshot_dir() -> Path:
@@ -205,8 +292,6 @@ def write_name_snapshot(date_str: str, code_name: dict[str, str]) -> None:
     _ensure_pyarrow()
     if not code_name:
         return
-    import pyarrow as pa
-    import pyarrow.parquet as pq
 
     year = str(date_str)[:4]
     path = name_snapshot_dir() / f"year={year}" / f"{date_str}.parquet"
@@ -214,7 +299,8 @@ def write_name_snapshot(date_str: str, code_name: dict[str, str]) -> None:
     df = pd.DataFrame(
         [{"date": date_str, "code": c, "name": n} for c, n in code_name.items()]
     )
-    pq.write_table(pa.Table.from_pandas(df, preserve_index=False), path)
+    with _file_lock(path):
+        _write_parquet_atomic(path, df)
 
 
 def read_name_snapshot(date_str: str) -> dict[str, str]:
@@ -223,19 +309,19 @@ def read_name_snapshot(date_str: str) -> dict[str, str]:
     path = name_snapshot_dir() / f"year={year}" / f"{date_str}.parquet"
     if not path.is_file():
         return {}
-    df = pd.read_parquet(path)
+    df = _read_parquet_safe(path, empty_columns=["date", "code", "name"])
+    if df.empty:
+        return {}
     return dict(zip(df["code"].astype(str), df["name"].astype(str)))
 
 
 def write_calendar(trade_dates: list[str]) -> None:
     _ensure_pyarrow()
-    import pyarrow as pa
-    import pyarrow.parquet as pq
-
     path = calendar_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     df = pd.DataFrame({"trade_date": sorted(set(trade_dates))})
-    pq.write_table(pa.Table.from_pandas(df, preserve_index=False), path)
+    with _file_lock(path):
+        _write_parquet_atomic(path, df)
 
 
 def read_calendar() -> list[str]:
@@ -243,5 +329,7 @@ def read_calendar() -> list[str]:
     path = calendar_path()
     if not path.is_file():
         return []
-    df = pd.read_parquet(path)
+    df = _read_parquet_safe(path, empty_columns=["trade_date"])
+    if df.empty or "trade_date" not in df.columns:
+        return []
     return sorted(df["trade_date"].astype(str).tolist())

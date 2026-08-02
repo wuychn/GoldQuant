@@ -42,6 +42,13 @@ def test_retry_exhausted_raises(monkeypatch):
         _retry(lambda: pd.DataFrame(), retries=2, base=0, label="t")
 
 
+def test_retry_empty_ok_returns_empty(monkeypatch):
+    """empty_ok=True 时空数据耗尽返回空帧，不抛。"""
+    monkeypatch.setattr("quant.data.sources.daily._shared.time.sleep", lambda s: None)
+    df = _retry(lambda: pd.DataFrame(), retries=2, base=0, label="hist x", empty_ok=True)
+    assert df is not None and df.empty
+
+
 def test_retry_exception_retried(monkeypatch):
     """异常也重试，最终抛出。"""
     monkeypatch.setattr("quant.data.sources.daily._shared.time.sleep", lambda s: None)
