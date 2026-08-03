@@ -107,7 +107,8 @@ poetry run python -m quant prefetch_concepts
 | 09:25 | `pre_market` | 盘前推送 |
 | 09:37–15:00 每 7 分钟 | `during_market` | 盘中择时买卖 |
 | 11:50 | `post_market_lunch` | 午间复盘 |
-| 16:00 | `maintain` | 离线库维护 |
+| 18:00 | `update_daily` | 每日盘后增量（spot_em + 快照，分钟级，只补当天） |
+| 周五 22:00 | `maintain` | 每周离线库自愈（建库/补漏/retry-failed，重） |
 | 20:10 | `daily_decision` | T 晚选股 |
 
 启动 API 时若 `scheduler.enabled: true`，`app/scheduling/quant_scheduler.py` 会自动注册上述任务。也可 cron / 任务计划手动调用：
@@ -233,7 +234,7 @@ poetry run python -m scripts.data.maintain --start 2021-01-01
 2. 有库 → 扫描交易日历缺口 → `build_daily --ignore-existing` 回补
 3. 最后跑 `update_daily` 当日增量
 
-默认由调度器 **16:00** 触发。
+默认由调度器 **周五 22:00** 触发（每日 18:00 只跑 `update_daily` 当日增量，分钟级；重活的建库/补漏/retry-failed 拆到周五晚，避免日常 `update_daily` 被长 `build_daily` 阻塞）。
 
 ### 5.5 其他数据脚本
 

@@ -137,13 +137,24 @@ def _job_daily_decision() -> None:
     _invoke_quant_cli("daily_decision")
 
 
-def _job_maintain_daily() -> None:
-    """收盘后数据维护（无库建库 / 查漏补漏 / 当日增量），仅交易日。
+def _job_update_daily() -> None:
+    """每日盘后增量（spot_em + 指数/行业/universe/因子快照），仅交易日，分钟级。
 
-    见 ``scripts/data/maintain.py``；须早于 ``daily_decision``，日决策依赖当日数据。
+    见 ``scripts/data/update_daily.py``；须早于 ``daily_decision``，日决策依赖当日数据。
+    重活（建库/补漏/retry-failed）拆到 ``_job_maintain_weekly``，避免日常 update_daily
+    被长 ``build_daily`` 阻塞。
     """
     if not is_real_workday_cn():
         return
+    _invoke_python_module("scripts.data.update_daily")
+
+
+def _job_maintain_weekly() -> None:
+    """每周离线库自愈：无库建库 / 缺口回补 / retry-failed（末尾含 update_daily）。
+
+    见 ``scripts/data/maintain.py``。重，单独每周一晚（默认周五 22:00）跑，避开日常时段；
+    maintain 内部按交易日回退 as_of，非交易日亦安全。
+    """
     _invoke_python_module("scripts.data.maintain")
 
 
@@ -205,11 +216,22 @@ def build_quant_scheduler() -> BackgroundScheduler | None:
         **defaults,
     )
 
-    uph, upm = _parse_hh_mm(str(sched_cfg.get("maintain_daily_time") or "16:00"))
+    # 每日盘后增量（update_daily，分钟级，只补当天）
+    uph, upm = _parse_hh_mm(str(sched_cfg.get("update_daily_time") or "18:00"))
     sched.add_job(
-        _job_maintain_daily,
+        _job_update_daily,
         CronTrigger(timezone=tz, hour=uph, minute=upm),
-        id="quant_maintain_daily",
+        id="quant_update_daily",
+        **defaults,
+    )
+
+    # 每周离线库自愈（maintain：建库/补漏/retry-failed，重；默认周五 22:00）
+    mday = str(sched_cfg.get("maintain_weekly_day") or "fri").strip().lower() or "fri"
+    mwh, mwm = _parse_hh_mm(str(sched_cfg.get("maintain_weekly_time") or "22:00"))
+    sched.add_job(
+        _job_maintain_weekly,
+        CronTrigger(timezone=tz, day_of_week=mday, hour=mwh, minute=mwm),
+        id="quant_maintain_weekly",
         **defaults,
     )
 

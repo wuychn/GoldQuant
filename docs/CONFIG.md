@@ -277,7 +277,9 @@
 | `pre_market_time` | `09:25` | 盘前 |
 | `during_market_times` | `09:37` 起每 7 分钟 | 盘中时点列表 |
 | `post_market_lunch_time` | `11:50` | 午间复盘 |
-| `maintain_daily_time` | `16:00` | 收盘后数据维护（须早于 daily_decision） |
+| `update_daily_time` | `18:00` | 每日盘后增量（`update_daily`：spot_em + 快照，分钟级，只补当天） |
+| `maintain_weekly_day` | `fri` | 每周离线库自愈日（`mon..sun`；默认周五） |
+| `maintain_weekly_time` | `22:00` | 每周自愈（`maintain`：建库/补漏/retry-failed，重；避开日常时段） |
 | `daily_decision_time` | `20:10` | 晚间选股定计划 |
 | `prefetch_concepts_enabled` | `true` | 是否预取概念/基本信息 |
 | `prefetch_concepts_time` | `05:00` | 预取时点 |

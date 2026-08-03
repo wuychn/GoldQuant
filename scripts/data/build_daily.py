@@ -72,20 +72,43 @@ def save_no_bar_map(mp: dict[str, set[str]]) -> None:
     p = _no_bar_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     payload = {c: sorted(dates) for c, dates in sorted(mp.items()) if dates}
-    p.write_text(json.dumps(payload, ensure_ascii=False, indent=0) + "\n", encoding="utf-8")
+    with _no_bar_lock():
+        p.write_text(json.dumps(payload, ensure_ascii=False, indent=0) + "\n", encoding="utf-8")
+
+
+def _no_bar_lock():
+    """no_bar_dates.json 写锁（多线程 RMW 安全，复用 filelock）。"""
+    from contextlib import nullcontext
+
+    try:
+        from filelock import FileLock
+    except ImportError:
+        return nullcontext()
+    p = _no_bar_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return FileLock(str(p) + ".lock", timeout=120)
 
 
 def add_no_bar_dates(code: str, dates: set[str]) -> int:
     """追加无行情豁免日，返回新增条数。"""
     if not dates:
         return 0
-    mp = load_no_bar_map()
     c = str(code).strip()
-    before = set(mp.get(c, set()))
-    merged = before | {str(d) for d in dates}
-    mp[c] = merged
-    save_no_bar_map(mp)
+    add = {str(d) for d in dates}
+    with _no_bar_lock():
+        mp = load_no_bar_map()
+        before = set(mp.get(c, set()))
+        merged = before | add
+        mp[c] = merged
+        _save_no_bar_map_unlocked(mp)
     return len(merged - before)
+
+
+def _save_no_bar_map_unlocked(mp: dict[str, set[str]]) -> None:
+    """已持锁时调用，避免重入。"""
+    p = _no_bar_path()
+    payload = {c: sorted(dates) for c, dates in sorted(mp.items()) if dates}
+    p.write_text(json.dumps(payload, ensure_ascii=False, indent=0) + "\n", encoding="utf-8")
 
 
 def incomplete_fetch_plans(
@@ -324,12 +347,16 @@ def _update_failed(
     *,
     dead_threshold: int,
 ) -> dict[str, dict]:
-    """成功移除；网络失败 retries+1（达阈值标 dead）。空数据不动。"""
+    """已解决（成功 n>0 或 确认无行情 n=0/reason=None）→ 移除；网络失败（reason 非空）→ retries+1（达阈值标 dead）。
+
+    ``_build_one`` 返回 ``(0, None)`` 的唯一路径是宽窗探测确认的「检查区间无行情」
+    （line 277，probe 命中窗外数据）——这是**已解决**状态，不是未知空数据；故 reason
+    为空一律移除。修前对 ``(0, None)`` 不动，导致曾失败的退市码永留 failed、
+    ``--retry-failed`` 反复重拉已确认无行情的码。
+    """
     failed = _read_failed()
     for code, (n, reason) in results.items():
-        if n > 0:
-            failed.pop(code, None)
-        elif reason:
+        if reason:
             retries = failed.get(code, {}).get("retries", 0) + 1
             failed[code] = {
                 "code": code,
@@ -338,6 +365,8 @@ def _update_failed(
                 "retries": retries,
                 "dead": retries >= dead_threshold,
             }
+        else:
+            failed.pop(code, None)
     _write_failed(failed)
     return failed
 

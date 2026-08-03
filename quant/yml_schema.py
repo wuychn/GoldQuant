@@ -33,7 +33,9 @@ class SchedulerCfg(BaseModel):
     pre_market_time: str = "09:25"
     during_market_times: str = ""
     post_market_lunch_time: str = "11:50"
-    maintain_daily_time: str = "16:00"
+    update_daily_time: str = "18:00"
+    maintain_weekly_day: str = "fri"
+    maintain_weekly_time: str = "22:00"
     daily_decision_time: str = "20:10"
     prefetch_concepts_enabled: bool = True
     prefetch_concepts_time: str = "05:00"

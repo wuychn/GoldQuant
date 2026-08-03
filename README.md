@@ -321,12 +321,15 @@ poetry run python -m quant prefetch_concepts
 | 09:25 | `pre_market` |
 | 09:37–15:00 每 7 分钟 | `during_market` |
 | 11:50 | `post_market_lunch` |
-| 16:00 | `maintain`（数据维护：无库建库 / 查漏补漏 / 当日增量） |
+| 18:00 | `update_daily`（盘后增量：spot_em + 快照，分钟级） |
+| 周五 22:00 | `maintain`（每周自愈：建库 / 补漏 / retry-failed） |
 | 20:10 | `daily_decision`（含原 post_market_evening 职责） |
 
-时点请在 `quant/config/quant.yml` 或 `~/.quant/config/quant.yml` 的 `scheduler` 段修改（如 `during_market_times`、`maintain_daily_time`）。也可用 cron / 任务计划调用 `.venv` 中的解释器，例如 `.venv\Scripts\python.exe -m quant <mode>`（工作目录为项目根）。
+时点请在 `quant/config/quant.yml` 或 `~/.quant/config/quant.yml` 的 `scheduler` 段修改（如 `during_market_times`、`update_daily_time`、`maintain_weekly_time`）。也可用 cron / 任务计划调用 `.venv` 中的解释器，例如 `.venv\Scripts\python.exe -m quant <mode>`（工作目录为项目根）。
 
-**数据维护任务（16:00 `maintain`）**：`scripts/data/maintain.py` 自愈离线库——无库则全量 `build_daily`，有库则扫描交易日历缺口并用 `build_daily --ignore-existing` 回补，最后跑 `update_daily` 当日增量；拉取全程指数退避 + 限流加倍兜底（`quant/data/fetch.py:_retry`）。**首次建议手动** `poetry run python -m scripts.data.build_daily --start 2021-01-01 --workers 1 --req-interval 5,10`（夜间；中断后重复同一命令即可智能续传：未完成代码 + 市场级漏日）。参数详见 [docs/OPERATIONS.md](docs/OPERATIONS.md)。
+**盘后增量（每日 18:00 `update_daily`）**：一次 `spot_em` 全市场 + 指数/行业/universe/因子快照，分钟级，只补当天。
+
+**离线库自愈（每周五 22:00 `maintain`）**：`scripts/data/maintain.py` 自愈离线库——无库则全量 `build_daily`，有库则扫描交易日历缺口并用 `build_daily --ignore-existing` 回补，最后跑 `update_daily` 当日增量 + `build_daily --retry-failed` 重试失败码；拉取全程指数退避 + 限流加倍兜底（`quant/data/fetch.py:_retry`）。重活拆到周五晚，避免日常 `update_daily` 被长 `build_daily` 阻塞。**首次建议手动** `poetry run python -m scripts.data.build_daily --start 2021-01-01 --workers 1 --req-interval 5,10`（夜间；中断后重复同一命令即可智能续传：未完成代码 + 市场级漏日）。参数详见 [docs/OPERATIONS.md](docs/OPERATIONS.md)。
 
 ### 4.3 飞书推送（r3 六事件）
 
@@ -351,7 +354,7 @@ poetry run python -m scripts.backtest.run --start 2026-06-17 --end 2026-06-26 --
 - **输出**：交易笔数、胜率、盈亏比、最大回撤、总回报、年化收益/波动、Sharpe/Sortino/Calmar、年化换手、出场归因（按 `Trade.reason` 分组）。
 - 报告写 `$QUANT_HOME/reports/bt/`。
 
-> 离线库由 16:00 `maintain` 自动维护（无库建库 / 查漏补漏 / 当日增量）；回测显著度取决于快照积累量，ML 校准要求 ≥100 样本，建议至少覆盖一轮趋势 + 一轮震荡再下结论。
+> 离线库由每周五 22:00 `maintain` 自动自愈（无库建库 / 查漏补漏 / retry-failed），日常 18:00 只跑 `update_daily` 当日增量（分钟级）；回测显著度取决于快照积累量，ML 校准要求 ≥100 样本，建议至少覆盖一轮趋势 + 一轮震荡再下结论。
 
 ---
 

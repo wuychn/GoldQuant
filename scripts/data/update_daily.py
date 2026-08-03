@@ -1,6 +1,7 @@
 """每日增量：1 次 spot_em 追加当日 + 除权检测 + 因子补拉 + 指数增量。
 
-收盘后执行。spot_em 无历史，当天没抓就补不回来，故失败必须告警。
+由调度器每日 18:00（``update_daily_time``，盘后 3h 让数据源就绪）触发，分钟级、只补当天。
+重活（建库/补漏/retry-failed）由每周五 22:00 ``maintain`` 单独跑。spot_em 无历史，当天没抓就补不回来，故失败必须告警。
 
 用法：
     python -m scripts.data.update_daily

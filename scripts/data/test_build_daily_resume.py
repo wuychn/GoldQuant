@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+import json
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import pandas as pd
 
 from scripts.data.build_daily import (
+    add_no_bar_dates,
     incomplete_codes,
     last_cal_day_on_or_before,
+    load_no_bar_map,
     market_missing_dates,
 )
 
@@ -199,6 +205,80 @@ class MarketMissingDatesTests(unittest.TestCase):
     def test_gap_fill_skip_when_complete(self, mock_scan):
         mock_scan.return_value = []
         self.assertEqual(market_missing_dates(start="2026-07-20", end="2026-07-24"), [])
+
+
+class UpdateFailedTests(unittest.TestCase):
+    """``_update_failed``：已解决（成功/确认无行情）清出；网络失败 retries+1。"""
+
+    def _prep(self, td: str, entries: list[dict]) -> Path:
+        p = Path(td) / "build_failed.jsonl"
+        p.write_text(
+            "\n".join(json.dumps(e, ensure_ascii=False) for e in entries)
+            + ("\n" if entries else ""),
+            encoding="utf-8",
+        )
+        return p
+
+    @patch("scripts.data.build_daily._failed_file")
+    def test_confirmed_no_bar_clears_failed(self, mock_ff):
+        """确认无行情 (0, None) 应清出 failed（修前永留 → --retry-failed 反复重拉）。"""
+        with TemporaryDirectory() as td:
+            p = self._prep(td, [{"code": "000999", "reason": "net", "retries": 2, "dead": False, "ts": "x"}])
+            mock_ff.return_value = p
+            from scripts.data.build_daily import _update_failed
+
+            failed = _update_failed({"000999": (0, None)}, dead_threshold=5)
+        self.assertNotIn("000999", failed)
+
+    @patch("scripts.data.build_daily._failed_file")
+    def test_network_failure_increments(self, mock_ff):
+        with TemporaryDirectory() as td:
+            p = self._prep(td, [{"code": "000998", "reason": "net", "retries": 2, "dead": False, "ts": "x"}])
+            mock_ff.return_value = p
+            from scripts.data.build_daily import _update_failed
+
+            failed = _update_failed({"000998": (0, "RemoteDisconnected")}, dead_threshold=5)
+        self.assertEqual(failed["000998"]["retries"], 3)
+        self.assertFalse(failed["000998"]["dead"])
+
+    @patch("scripts.data.build_daily._failed_file")
+    def test_network_failure_hits_dead_threshold(self, mock_ff):
+        with TemporaryDirectory() as td:
+            p = self._prep(td, [{"code": "000997", "reason": "net", "retries": 4, "dead": False, "ts": "x"}])
+            mock_ff.return_value = p
+            from scripts.data.build_daily import _update_failed
+
+            failed = _update_failed({"000997": (0, "err")}, dead_threshold=5)
+        self.assertTrue(failed["000997"]["dead"])
+
+    @patch("scripts.data.build_daily._failed_file")
+    def test_success_clears(self, mock_ff):
+        with TemporaryDirectory() as td:
+            p = self._prep(td, [{"code": "000996", "reason": "net", "retries": 1, "dead": False, "ts": "x"}])
+            mock_ff.return_value = p
+            from scripts.data.build_daily import _update_failed
+
+            failed = _update_failed({"000996": (100, None)}, dead_threshold=5)
+        self.assertNotIn("000996", failed)
+
+
+class NoBarLockTests(unittest.TestCase):
+    """``add_no_bar_dates`` 并发 RMW 不丢更新（``_no_bar_lock`` 验证）。"""
+
+    @patch("scripts.data.build_daily._no_bar_path")
+    def test_concurrent_add_no_lost_updates(self, mock_path):
+        with TemporaryDirectory() as td:
+            p = Path(td) / "no_bar.json"
+            mock_path.return_value = p
+            code = "000001"
+
+            def add(i: int) -> int:
+                return add_no_bar_dates(code, {f"D{i * 5 + j:03d}" for j in range(5)})
+
+            with ThreadPoolExecutor(max_workers=8) as ex:
+                list(ex.map(add, range(20)))
+            mp = load_no_bar_map()
+        self.assertEqual(len(mp.get(code, set())), 100)  # 20×5 全保留，无丢失
 
 
 if __name__ == "__main__":

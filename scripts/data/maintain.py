@@ -1,12 +1,14 @@
-"""日数据维护：无库→建库；有库→查漏补漏；最后跑当日增量。
+"""每周离线库自愈：无库→建库；有库→查漏补漏；最后跑当日增量。
 
-由调度器 16:00（收盘后）触发，目标是离线库自愈，平时无需手动 build/update。
+由调度器每周五 22:00（``maintain_weekly_time``）触发，目标是离线库自愈。
+日常的当日增量由 18:00 ``update_daily`` 单独跑（分钟级），避免 ``build_daily`` 长跑阻塞。
 ``build_daily`` 长跑用子进程隔离，失败不阻断后续步骤（补漏失败仍尝试当日增量）。
 
 逻辑：
     1. read_daily_raw(end=as_of) 为空 → build_daily 全量（断点续传）
     2. 非空 → scan_missing_dates 比对交易日历找缺口 → 有则 build_daily --ignore-existing 回补
     3. 无论建/补，最后跑 update_daily 当日增量（spot_em + 指数/行业/universe）
+    4. build_daily --retry-failed 重试失败清单
 
 用法：
     python -m scripts.data.maintain

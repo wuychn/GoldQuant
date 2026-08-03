@@ -91,7 +91,9 @@ scheduler:                     # APScheduler 定时任务（app/scheduling/quant
   pre_market_time: "09:25"     # 盘前
   during_market_times: "09:37,09:44,09:51,09:58,10:05,10:12,10:19,10:26,10:33,10:40,10:47,10:54,11:01,11:08,11:15,11:22,11:29,13:00,13:07,13:14,13:21,13:28,13:35,13:42,13:49,13:56,14:03,14:10,14:17,14:24,14:31,14:38,14:45,14:52,14:59"  # 盘中每 7 分钟
   post_market_lunch_time: "11:50"  # 午间复盘
-  maintain_daily_time: "16:00" # 收盘后数据维护（无库建库/补漏/增量）
+  update_daily_time: "18:00"    # 每日盘后增量（spot_em + 指数/行业/universe/因子快照），分钟级；18:00 留 3h 让盘后数据就绪
+  maintain_weekly_day: "fri"     # 每周离线库自愈日（mon..sun；默认周五）
+  maintain_weekly_time: "22:00"  # 每周自愈（建库/补漏/retry-failed，末尾含 update_daily）；重，周五晚跑避免日常 update_daily 被长 build_daily 阻塞
   daily_decision_time: "20:10" # 晚间选股定计划（作战池/卖出监控）
   prefetch_concepts_enabled: true  # 是否预取概念/基本信息
   prefetch_concepts_time: "05:00" # 预取时点
