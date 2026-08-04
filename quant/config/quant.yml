@@ -92,7 +92,7 @@ data:                          # 数据源并发限流
     #             wencai(问财概念)/akshare(分钟K)
     #     info:   default(组合)/akshare(新闻)/eastmoney(个股基本信息)
     #   接口级例：enrich: {fetch_stock_quote: eastmoney, fetch_stock_fund_flow: ths}
-    daily: default   # 日线库数据源（整源或接口级 dict）
+    daily: {fetch_spot: sina, fetch_hist: sina, fetch_index: sina}  # 接口级：spot/hist/index 走新浪
     market: default  # 运维行情数据源（整源或接口级 dict）
     enrich: default  # 个股 enrich 数据源（整源或接口级 dict）
     info: default    # 资讯/基本信息数据源（整源或接口级 dict）

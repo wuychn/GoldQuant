@@ -25,6 +25,14 @@ _SPOT_COLUMNS = [
 _SINA_SPOT_URL = "http://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeData"
 
 
+def _index_symbol(code: str) -> str:
+    """指数代码 → 新浪前缀（沪深 000/上证 000，深证 399）。"""
+    c = str(code).strip()
+    if c.startswith("399"):
+        return f"sz{c}"
+    return f"sh{c}"
+
+
 def _sina_symbol(code: str) -> str:
     c = str(code).strip()
     if c.startswith(("6", "9", "5")):
@@ -124,9 +132,33 @@ class SinaDailySource:
     def fetch_hist(self, code: str, *, start: str, end: str, adjust: str = "") -> pd.DataFrame:
         return fetch_hist_sina(code, start=start, end=end, adjust=adjust)
 
-    # ---- 未实现接口：显式报错，不 fallback ----
     def fetch_index(self, code: str = "000300", *, start: str, end: str) -> pd.DataFrame:
-        raise NotImplementedError("sina 未实现 fetch_index（可用 default/akshare）")
+        """新浪指数日线（``stock_zh_index_daily``）→ INDEX_DAILY_COLUMNS。
+
+        新浪一次返回全历史，这里按 [start,end] 裁剪。amount 新浪指数不含 → NaN。
+        """
+        import akshare as ak
+
+        from quant.data.schema import INDEX_DAILY_COLUMNS
+
+        df = _retry(
+            lambda: ak.stock_zh_index_daily(symbol=_index_symbol(code)),
+            label=f"index_sina {code}", retries=3,
+        )
+        out = pd.DataFrame()
+        n = len(df)
+        out["code"] = [str(code).strip()] * n
+        out["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
+        out["open"] = df["open"]
+        out["high"] = df["high"]
+        out["low"] = df["low"]
+        out["close"] = df["close"]
+        out["volume"] = df["volume"]
+        out["amount"] = pd.to_numeric(df.get("amount"), errors="coerce") if "amount" in df.columns else pd.NA
+        for c in ("open", "high", "low", "close", "volume", "amount"):
+            out[c] = pd.to_numeric(out[c], errors="coerce")
+        out = out[(out["date"] >= start) & (out["date"] <= end)].reset_index(drop=True)
+        return out[list(INDEX_DAILY_COLUMNS)]
 
     def fetch_calendar(self) -> list[str]:
         raise NotImplementedError("sina 未实现 fetch_calendar（可用 default/akshare）")
