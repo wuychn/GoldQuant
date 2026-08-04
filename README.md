@@ -329,6 +329,8 @@ poetry run python -m quant prefetch_concepts
 
 **盘后增量（每日 18:00 `update_daily`）**：一次 `spot_em` 全市场 + 指数/行业/universe/因子快照，分钟级，只补当天。
 
+**离线库与每日增量合并**：全量 `build_daily --end <昨日>` 与每日 `update_daily` 分 home 跑，build 完成后 `scripts.data.merge_library --offline <离线home> --daily <增量home> --out <统一home>` 合并（daily_raw 归一 13 列、update 覆盖 build、复权沿用 raw+factor 分离，不复发除权尖刺）；`scripts.data.backfill_daily_meta --home <统一home>` 用 `stock_value_em` 补历史段 `float_mv/total_mv/pre_close`（精确市值，name 不灌历史避免 ST 前视）；`scripts.data.validate_library --home <统一home>` 一键校验完整性与正确性（含复权连续性 + 市值覆盖）。完整**执行步骤**见 [docs/OPERATIONS.md §5.0](docs/OPERATIONS.md#50-执行步骤总览从零到可回测)。
+
 **离线库自愈（每周五 22:00 `maintain`）**：`scripts/data/maintain.py` 自愈离线库——无库则全量 `build_daily`，有库则扫描交易日历缺口并用 `build_daily --ignore-existing` 回补，最后跑 `update_daily` 当日增量 + `build_daily --retry-failed` 重试失败码；拉取全程指数退避 + 限流加倍兜底（`quant/data/fetch.py:_retry`）。重活拆到周五晚，避免日常 `update_daily` 被长 `build_daily` 阻塞。**首次建议手动** `poetry run python -m scripts.data.build_daily --start 2021-01-01 --workers 1 --req-interval 5,10`（夜间；中断后重复同一命令即可智能续传：未完成代码 + 市场级漏日）。参数详见 [docs/OPERATIONS.md](docs/OPERATIONS.md)。
 
 ### 4.3 飞书推送（r3 六事件）

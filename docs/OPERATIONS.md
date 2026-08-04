@@ -137,6 +137,63 @@ D:\workspace\GoldQuant\.venv\Scripts\python.exe -m quant during_market
 
 离线库是因子计算、日决策、回测的**共同依赖**。
 
+### 5.0 执行步骤总览（从零到可回测）
+
+> 思路：全量 build 需数小时/数天，与每日增量分 **home** 跑；build 完成后**合并 → 补缺 → 校验**。
+> 三个 home：`~/.quant/offline`（离线 build）、`~/.quant/daily`（每日增量）、`~/.quant`（统一库）。
+> 各脚本目录参数均指 **quant-home 根**（直接含 `store/` 的那级，见 §5.6a）。
+
+**① 拉离线历史（到昨日）** — build 与 update 同时进行、互不干扰：
+
+```powershell
+# 离线历史（建议盘后/周末起跑；--end 钉到已收盘的昨日，避免跨交易日数据不一致）
+QUANT_HOME=~/.quant/offline poetry run python -m scripts.data.build_daily --start 2021-01-01 --end 2026-08-02 --workers 1 --req-interval 5,10
+```
+
+```powershell
+# 每日增量（另一 home）—— 启动 app 后调度器每日 18:00 自动跑；或手动：
+QUANT_HOME=~/.quant/daily poetry run python -m scripts.data.update_daily
+```
+
+> ⚠️ **复权因子**：build_daily 在拉取循环**之后**跑 `_refresh_adj_all` 落 adj_factor。若中断在拉取阶段、没跑到复权步骤，adj_factor 会缺——validate 会报 FAIL。补法：重跑同命令（智能续传跳过已拉码、直接到复权步骤）。
+
+**② 合并**（build 完成后）— 把离线历史 + 每日增量拼成一段连续区间：
+
+```powershell
+poetry run python -m scripts.data.merge_library --offline ~/.quant/offline --daily ~/.quant/daily --out ~/.quant
+```
+
+**③ 补缺**（合并后跑一次，幂等可重跑）— 补历史段缺列 `float_mv/total_mv`（精确市值）+ `pre_close`：
+
+```powershell
+poetry run python -m scripts.data.backfill_daily_meta --home ~/.quant
+```
+
+**④ 校验** — 一键确认完整性与正确性（退出码 0=通过）：
+
+```powershell
+poetry run python -m scripts.data.validate_library --home ~/.quant
+```
+
+> 期望：`adj_factor 覆盖 ≥90%`、`index 000300·000905·000852` 齐、无重复、价格 sanity 过、
+> **后复权单日跳空 0**（复权无尖刺）、`float_mv`/`pre_close` 覆盖达标。有 FAIL 先处理再往下。
+
+**⑤ 日常运行**（此后无需再 build/merge/backfill）：
+
+| 时机 | 动作 | 说明 |
+|---|---|---|
+| 每日 18:00 | `update_daily`（定时） | 当日 spot + 快照，自带 float_mv/name，无需补缺 |
+| 每周五 22:00 | `maintain`（定时） | 自愈：查缺口回补 + update_daily + retry-failed |
+| 每周五后（可选） | `backfill_daily_meta --home ~/.quant` | 幂等，兜住新入库票的历史缺列 |
+| 每次改动后 | `validate_library --home ~/.quant` | 复验 |
+
+**⑥ 可选·因子数据**（激活更多因子）：
+
+```powershell
+poetry run python -m scripts.data.build_fundamental_pit   # 激活 EP/BP/ROE/rev_yoy（价值因子）
+poetry run python -m scripts.data.backfill_factor_snapshots --start <起> --end <止>  # 激活 flow_ratio_5
+```
+
 ### 5.1 目录结构
 
 数据根：`$QUANT_HOME/data/`（与 `quant/data/store.py` 一致）
@@ -245,6 +302,89 @@ poetry run python -m scripts.data.maintain --start 2021-01-01
 | `poetry run python -m scripts.data.backfill_factor_snapshots` | `--start` `--end`（必填） | 因子快照回填 |
 | `poetry run python -m scripts.data.verify_daily` | `--sample` `--start` `--end` | 数据校验 |
 | `poetry run python -m scripts.data.audit_data_health` | `--probe-code` | 健康审计 |
+| `poetry run python -m scripts.data.merge_library` | `--offline` `--daily` `--out` | 合并离线库与每日增量 |
+| `poetry run python -m scripts.data.backfill_daily_meta` | `--home` `--codes` `--workers` `--req-interval` | 补历史段 float_mv/total_mv/pre_close（精确市值） |
+| `poetry run python -m scripts.data.validate_library` | `--home` `--start` `--end` | 离线库完整性与正确性校验（含复权连续性） |
+
+### 5.6a 离线库与每日增量合并（`merge_library`）
+
+**场景**：全量 `build_daily` 需数小时/数天，期间不想让日常 `update_daily` 与它抢同一 store。
+
+**目录级别（重要）**：`--offline` / `--daily` / `--out`（以及校验脚本的 `--home`）都指向
+**quant-home 根**——即**直接包含 `store/` 子目录**的那一级，不是 `store/` 本身、也不是 `data/`：
+
+```text
+~/.quant/offline/            ← --offline 指到这级（含 store/）
+├── store/                   # daily_raw / adj_factor / index_daily / calendar.parquet / 快照…
+└── data/                    # build_failed.jsonl、no_bar_dates.json 等
+~/.quant/daily/              ← --daily 指到这级
+~/.quant/                    ← --out / --home 指到这级
+```
+
+```powershell
+# 1. 离线 build 到昨日（home 分开）
+QUANT_HOME=~/.quant/offline poetry run python -m scripts.data.build_daily --start 2021-01-01 --end 2026-08-02 --workers 1 --req-interval 5,10
+# 2. 每日盘后增量（另一 home）
+QUANT_HOME=~/.quant/daily poetry run python -m scripts.data.update_daily
+# 3. build 完成后合并到统一 home
+poetry run python -m scripts.data.merge_library --offline ~/.quant/offline --daily ~/.quant/daily --out ~/.quant
+# 4. 补历史段缺列（float_mv/total_mv 精确市值 + pre_close；合并后跑一次即可，幂等可重跑）
+poetry run python -m scripts.data.backfill_daily_meta --home ~/.quant
+# 5. 校验合并结果
+poetry run python -m scripts.data.validate_library --home ~/.quant
+```
+
+**`backfill_daily_meta`**：用 `stock_value_em`（东财估值分析，逐日历史）把历史段 `float_mv/total_mv`
+**精确**补上、`pre_close` 用 `close[t-1]` 推导。参数 `--home`（quant-home 根）/ `--codes`
+（只补指定码）/ `--workers` / `--req-interval`。**name 刻意不灌历史**（当前名灌历史 = ST 过滤
+前视），PIT 名靠 `update_daily` 的 `name_snapshot` 逐日积累；确需当前名兜底用 `--fill-name`。
+日常增量不需要补（spot 当天自带这些列）；每周五 `maintain` 后可选重跑兜住新入库票。
+
+**build_daily 与 update_daily 的 daily_raw 列差异及影响**：
+
+| 列 | build（`stock_zh_a_hist`） | update（spot_em） | 缺失影响 |
+|---|---|---|---|
+| `name` | ❌ 无 | ✅ | ST 过滤走 `name_snapshot`（update 每日落），**无影响**（无快照则 ST 过滤退化，属既有限制） |
+| `pre_close` | ❌ 无 | ✅ | 回测 `prev_close` 由序列前一日 close 现算，**基本无影响** |
+| `float_mv` | ❌ 无 | ✅ | **有影响**：`neutralize.py` 用 `log(float_mv)` 做市值中性化，全缺则 `use_size=0` → **跳过市值中性化**，因子保留 size 暴露。可选近似：`当前流通股本 × 后复权 close` 生成代理 float_mv |
+| `total_mv` | ❌ 无 | ✅ | 极少直接用，无影响 |
+
+合并脚本把 build 行缺的列补 NaN 后归一到统一 13 列，所以**合并后行为 = 纯 build 库行为**，
+合并本身不放大缺失。
+
+一致性保证：
+
+- **daily_raw 归一到 13 列**（`DAILY_RAW_COLUMNS`）：统一 schema 后按 `(code, date)` 去重、
+  **update 覆盖 build**（重叠日以增量为准）。
+- **复权不复发除权尖刺 bug**：合并只做 raw + `adj_factor` 的并集去重，**不自己算复权**；
+  读时经 `quant/data/adjust.py:apply_hfq`（merge_asof 还原累积因子）得连续后复权价。
+- `index_daily` / `calendar` / snapshot 目录（universe/industry/name_snapshot/
+  fundamental_pit/因子快照等）取并集，snapshot 冲突 daily 优先。
+
+**注意**：`merge_library` 不补 adj_factor——若 build 中断未跑 `_refresh_adj_all`，须先补复权因子
+（重跑 build_daily 到 `_refresh_adj_all` 阶段，或 `refresh_adj_for_codes`），否则 `validate_library`
+会报 adj 覆盖 FAIL、回测除权假跳空。
+
+### 5.6b 完整性与正确性校验（`validate_library`）
+
+```powershell
+poetry run python -m scripts.data.validate_library            # 校验当前 QUANT_HOME
+poetry run python -m scripts.data.validate_library --home ~/.quant
+```
+
+**`--home` 级别**：同 merge——**quant-home 根**（直接包含 `store/` 的那一级，见 §5.6a 目录树）。
+所有检查（daily_raw / adj_factor / index_daily / calendar / no_bar 豁免）都从该目录读，
+不读当前 QUANT_HOME。
+
+跑一遍即知数据是否完整、是否正确（退出码 0=通过，1=发现问题）：
+
+- **[1] 基础**：calendar 天数 / daily_raw 行·码·日期区间 / name 非空率
+- **[2] 完整性**：`adj_factor` 覆盖（<90% FAIL）/ `index_daily` 000300·000905·000852（缺 FAIL）/
+  per-code 日历覆盖（低 WARN，次新/停牌为合法缺日）/ `float_mv` 市值覆盖（<50% WARN，可跑
+  `backfill_daily_meta`）/ `pre_close` 覆盖（<90% WARN）
+- **[3] 正确性**：重复 `(code,date)`（>0 FAIL）/ 价格 sanity（close>0、high>=low、high·low 夹住
+  open·close、volume·amount>=0，违规 FAIL）/ **后复权单日跳空 >28%**（>0 FAIL——`apply_hfq`
+  精确 join 旧 bug 的表现，A 股涨停/跌停 ≤20% 故阈值安全）
 
 ### 5.6 复权说明
 

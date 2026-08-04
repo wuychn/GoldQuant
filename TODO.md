@@ -4,22 +4,30 @@
 > 唯一卡可信回测的是数据不够。下面是 **Phase 0 可信基线化**的执行清单，按序勾。
 > 完整路线图见 [ROADMAP.md](ROADMAP.md)；命令一律用 `poetry run python -m ...`（见 [docs/OPERATIONS.md](docs/OPERATIONS.md)）。
 
-## 1. 全量拉离线库（先沪深300，再扩全 A）
+## 1. 全量拉离线库 + 每日增量合并（build_daily 到昨日 + update_daily 今日起）
 
-- [ ] 沪深300 起跑通（~300 只，~30–60 分钟，保守限速避频控）：
-      `poetry run python -m scripts.data.build_daily --start 2021-01-01 --workers 1 --req-interval 5,10`
-- [ ] 数字 sane 后扩全 A（~5500 只，数小时；可适度升并发）：
-      `poetry run python -m scripts.data.build_daily --start 2021-01-01 --workers 3 --req-interval 3,6`
+**方案**：全量 build 需数小时/数天，期间不想与日常 update_daily 抢同一 store——分 home 跑，build 完成后合并。
+
+- [ ] 离线 build 到昨日（home 分开）：
+      `QUANT_HOME=~/.quant/offline poetry run python -m scripts.data.build_daily --start 2021-01-01 --end <昨日> --workers 1 --req-interval 5,10`
+- [ ] 每日盘后增量（另一 home）：
+      `QUANT_HOME=~/.quant/daily poetry run python -m scripts.data.update_daily`
+- [ ] build 完成后合并到统一 home：
+      `poetry run python -m scripts.data.merge_library --offline ~/.quant/offline --daily ~/.quant/daily --out ~/.quant`
+      （daily_raw 归一 13 列、update 覆盖 build、复权沿用 raw+factor 分离不复发除权尖刺）
+- [ ] 补历史段缺列（float_mv/total_mv 精确市值 + pre_close，一次幂等）：
+      `poetry run python -m scripts.data.backfill_daily_meta --home ~/.quant`
 
 > 起始日 2021-01-01 给 ~5 年历史，够 walk-forward 训练窗 504 日 + OOS。
 > curl_cffi 已绕东财 TLS；`build_daily` 支持智能断点续传，中断后重跑同一命令即按完整性续补。
-> 全量参数见 [docs/OPERATIONS.md §5.2](docs/OPERATIONS.md#52-首次建库手动建议夜间)。
+> 合并/校验详见 [docs/OPERATIONS.md §5.6a/5.6b](docs/OPERATIONS.md#56a-离线库与每日增量合并merge_library)。
 
 ## 2. 校验数据
 
-- [ ] `poetry run python -m scripts.data.audit_data_health`
-      验：后复权价无 >28% 单日跳空（除权尖刺已修）、复权/name/快照覆盖。
-- [ ] 不通过先修数据（补 name/industry/universe 快照、复权缺口）再往下。
+- [ ] `poetry run python -m scripts.data.validate_library --home ~/.quant`
+      一键验：adj_factor 覆盖（<90% FAIL）、index 000300·000905·000852、市值 float_mv/pre_close
+      覆盖、重复/价格 sanity/**后复权单日跳空 >28%**（复权 bug 探测器）。退出码 0=通过、1=发现问题。
+- [ ] 不通过先修数据（补复权因子/缺口）再往下。
 
 ## 3. walk-forward IC 权重（OOS，勿用 --static）
 
