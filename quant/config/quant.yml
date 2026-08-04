@@ -79,10 +79,23 @@ data:                          # 数据源并发限流
   ths_max_concurrent: 1         # 同花顺并发
   eastmoney_max_concurrent: 1  # 东财并发
   sources:
-    daily: default   # 日线库数据源：default(组合最优)|akshare|eastmoney(未来)|tushare(未来)
-    market: default  # 运维行情数据源：default(组合最优)
-    enrich: default  # 个股 enrich 数据源：default(组合最优；盘口/资金流/概念/分钟K)
-    info: default    # 资讯/基本信息数据源：default(组合最优；新闻+个股基本信息)
+    # 四类（daily/market/enrich/info）均支持整源或接口级换源：
+    #   整源：daily: default            # 所有接口走同一实现（default 组合）
+    #   接口级：daily: {fetch_spot: sina, fetch_hist: tencent, ...}
+    #     —— 每个 facade 方法（接口）独立选源；未配置的接口缺省 default；
+    #        源未实现某接口时抛 NotImplementedError（不隐式 fallback）。
+    #   现有源（每个源类只实现其支持的接口，未实现抛 NotImplementedError）：
+    #     daily:  default(组合)/akshare(东财全)/sina(spot·hist)/tencent(仅 hist)
+    #     market: default(组合)/akshare(index_spot·资金流·人气·概念板)/
+    #             eastmoney(涨停池·行业映射)/ths(赚钱效应·热度·概念·行业·形态榜)
+    #     enrich: default(组合)/eastmoney(盘口·资金流日线)/ths(资金流·概念粘合度)/
+    #             wencai(问财概念)/akshare(分钟K)
+    #     info:   default(组合)/akshare(新闻)/eastmoney(个股基本信息)
+    #   接口级例：enrich: {fetch_stock_quote: eastmoney, fetch_stock_fund_flow: ths}
+    daily: default   # 日线库数据源（整源或接口级 dict）
+    market: default  # 运维行情数据源（整源或接口级 dict）
+    enrich: default  # 个股 enrich 数据源（整源或接口级 dict）
+    info: default    # 资讯/基本信息数据源（整源或接口级 dict）
 scheduler:                     # APScheduler 定时任务（app/scheduling/quant_scheduler.py）
   enabled: true                # 总开关；false 时不启动调度器
   timezone: Asia/Shanghai

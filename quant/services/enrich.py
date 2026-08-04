@@ -9,7 +9,7 @@ from typing import Any, Literal
 
 from common.config import Settings
 from common.utils.common_util import get_n_workdays_ago, today
-from quant.data.sources.factory import get_daily_source, get_enrich_source
+from quant.data.sources.factory import get_enrich_source
 from quant.services.indicators import (
     compute_metrics_from_bars,
     computed_raw_to_zh,
@@ -174,11 +174,13 @@ def _bar_to_zh_row(bar: dict, symbol: str) -> dict:
     }
 
 
-def _fetch_today_bar(src, symbol: str) -> dict | None:
-    """经 DailySource 拉今日（盘中形成中的）日K；失败/非交易日返回 None。"""
+def _fetch_today_bar(symbol: str) -> dict | None:
+    """经 DailySource facade 拉今日（盘中形成中的）日K；失败/非交易日返回 None。"""
+    from quant.data.fetch import fetch_hist
+
     t = today()
     try:
-        bars = _df_to_bars(src.fetch_hist(symbol, start=t, end=t))
+        bars = _df_to_bars(fetch_hist(symbol, start=t, end=t))
     except Exception as e:  # noqa: BLE001
         _log_error(f"今日K symbol={symbol!r}", e)
         return None
@@ -209,15 +211,17 @@ def _load_hist_bars(settings: Settings, symbol: str) -> list[dict]:
     except Exception as e:  # noqa: BLE001  损坏 parquet 等不致命 → 视为空，走兜底
         _log_error(f"离线库读取 symbol={symbol!r}", e)
         bars = []
-    bars = _upsert_today_bar(bars, _fetch_today_bar(get_daily_source(), symbol))
+    bars = _upsert_today_bar(bars, _fetch_today_bar(symbol))
     if bars:
         return bars
-    # 兜底：离线库无该股（未建库 / 新上市）→ 经 DailySource 全量拉
+    # 兜底：离线库无该股（未建库 / 新上市）→ 经 DailySource facade 全量拉
     try:
+        from quant.data.fetch import fetch_hist
+
         full_start = normalized_full_start_date(settings)
         df = _sync_call_or_none(
             f"历史行情兜底 | fetch_hist symbol={symbol!r}",
-            lambda: get_daily_source().fetch_hist(symbol, start=full_start, end=today()),
+            lambda: fetch_hist(symbol, start=full_start, end=today()),
         )
         bars = _df_to_bars(df)
     except Exception as e:  # noqa: BLE001

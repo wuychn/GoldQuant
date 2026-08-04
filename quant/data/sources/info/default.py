@@ -1,40 +1,27 @@
-"""DefaultInfoSource：资讯/基本信息取数（全局新闻 + 个股基本信息）。
+"""DefaultInfoSource：组合源（每个方法委托到最优的单源实现）。
 
-- ``fetch_news``：全局新闻（东财+同花顺聚合）。fixture 模式读 ``news_global.json``
-  离线样本（原 ``FixtureNewsSource``），否则走 ``AkshareNewsSource.fetch_global``。
-- ``fetch_stock_info``：个股基本信息（东财 ``jbxx`` = ``_fetch_stock_individual_info_em``），
-  供 ``jbxx_cache`` 的 live 取数委托。
-
-换源 = 配置选 ``data.sources.info``；下游（``payload.build_news_payload`` /
-``jbxx_cache``）走 facade 零感知。
+接口级：facade 一个方法 = 一个接口 = 一个源。
+- fetch_news：akshare（AkshareInfoSource，东财+同花顺聚合）
+- fetch_stock_info：东财（EastmoneyInfoSource，jbxx）
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-
-def _fixture_mode() -> bool:
-    from common.config import get_settings
-
-    return bool(get_settings().QUANT_USE_LOCAL_FIXTURE)
+from quant.data.sources.info.akshare import AkshareInfoSource
+from quant.data.sources.info.eastmoney import EastmoneyInfoSource
 
 
 class DefaultInfoSource:
     name = "default"
 
+    def __init__(self) -> None:
+        self._ak = AkshareInfoSource()
+        self._em = EastmoneyInfoSource()
+
     def fetch_news(self) -> list[dict[str, Any]]:
-        """全局新闻（东财 + 同花顺聚合）；fixture 模式读离线样本。"""
-        if _fixture_mode():
-            from quant.data.sources.fixture.news import FixtureNewsSource
-
-            return FixtureNewsSource().fetch_global()
-        from quant.data.sources.akshare.news import AkshareNewsSource
-
-        return AkshareNewsSource().fetch_global()
+        return self._ak.fetch_news()
 
     def fetch_stock_info(self, symbol: str) -> dict[str, Any]:
-        """个股基本信息（东财 ``jbxx``）。"""
-        from quant.data.sources.eastmoney import jbxx
-
-        return jbxx(symbol)
+        return self._em.fetch_stock_info(symbol)

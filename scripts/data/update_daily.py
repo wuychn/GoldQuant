@@ -10,7 +10,9 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
+from pathlib import Path
 
 import pandas as pd
 
@@ -18,7 +20,63 @@ from quant.data.adjust import detect_ex_dividend_codes, refresh_adj_for_codes
 from quant.data.calendar import is_trading_day
 from quant.data.fetch import fetch_index, fetch_spot_em, fetch_trade_calendar
 from quant.data.store import read_daily_raw, write_calendar, write_daily_raw, write_index_daily
+from quant.store.paths import quant_home
 from common.timeutil import cn_now
+
+
+def _pending_path() -> Path:
+    return quant_home() / "data" / "update_pending.json"
+
+
+def _read_pending() -> dict:
+    p = _pending_path()
+    if not p.is_file():
+        return {"indices": [], "industry": False}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {"indices": [], "industry": False}
+
+
+def _write_pending(pend: dict) -> None:
+    p = _pending_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(pend, ensure_ascii=False), encoding="utf-8")
+
+
+def _update_indices(today: str, daily: pd.DataFrame, pend: list) -> None:
+    """拉三个基准指数增量；失败的记入 ``pend``（调用方负责写盘）。"""
+    start = _latest_date(daily) or today
+    todo = sorted(set(("000300", "000905", "000852")) | set(pend))
+    failed: list[str] = []
+    for idx in todo:
+        try:
+            df = fetch_index(idx, start=start, end=today)
+            write_index_daily(df)
+            print(f"指数 {idx} 增量: {len(df)} 行")
+        except Exception as e:
+            print(f"[WARN] 指数 {idx} 增量失败（记 pending 下次重试）: {e}", file=sys.stderr)
+            failed.append(idx)
+    pend.clear()
+    pend.extend(failed)
+
+
+def _update_industry(today: str, pend: dict) -> None:
+    """行业 PIT 快照；失败记 pending.industry，下次运行先重试。"""
+    from quant.data.industry import fetch_current_industry_map, write_industry_snapshot
+
+    try:
+        ind_map = fetch_current_industry_map()
+        if ind_map:
+            write_industry_snapshot(today, ind_map)
+            pend["industry"] = False
+            print(f"行业快照: {len(ind_map)} 只 @ {today}")
+        else:
+            print("[WARN] 行业映射为空，跳过落库", file=sys.stderr)
+            pend["industry"] = True
+    except Exception as e:
+        print(f"[WARN] 行业快照失败（记 pending 下次重试）: {e}", file=sys.stderr)
+        pend["industry"] = True
 
 
 def _latest_date(daily: pd.DataFrame) -> str | None:
@@ -50,27 +108,29 @@ def main() -> None:
         print(f"{today} 非交易日，跳过")
         return
 
-    # 1. spot_em 全市场当日
+    # 1. 全市场当日 spot（经 DailySource facade；默认新浪直连 20s 全量含市值，东财 spot_em
+    #    走 clist 58 页易断——换源只改 quant.yml data.sources.daily）
     try:
         spot = fetch_spot_em()
     except Exception as e:
-        print(f"[FATAL] spot_em 拉取失败，当日数据将缺失且无法补回: {e}", file=sys.stderr)
-        sys.exit(2)
-
-    if spot.empty:
-        print("[WARN] spot_em 返回空，跳过", file=sys.stderr)
+        print(f"[FATAL] spot 拉取失败（{type(e).__name__}: {e}），当日数据将缺失且无法补回", file=sys.stderr)
         sys.exit(2)
 
     spot["date"] = today
+    # 当日行 pre_close 统一用库内前一交易日 close（而非新浪盘中 settlement）：保证
+    # daily_raw 历史连续性 + 除权检测与库同源，盘中/盘后跑一致。
+    daily = read_daily_raw(end=today)
+    prev_map = _prev_close_map(daily, today)
+    spot["pre_close"] = spot["code"].map(prev_map).fillna(spot["pre_close"])
     # 仅保留 daily_raw 列
     cols = ["code", "date", "name", "open", "high", "low", "close", "pre_close",
             "volume", "amount", "turnover_rate", "float_mv", "total_mv"]
     spot_out = spot[[c for c in cols if c in spot.columns]]
     write_daily_raw(spot_out)
-    print(f"spot_em 追加: {len(spot_out)} 行 @ {today}")
+    print(f"spot 追加: {len(spot_out)} 行 @ {today}")
 
     # 1b. PIT 名称快照（供 universe ST/退市过滤、涨跌停 ST 分档）
-    #     spot_em 的 name 是当日真实名（PIT），落库后 universe 可按日取，避免依赖
+    #     spot 的 name 是当日真实名（PIT），落库后 universe 可按日取，避免依赖
     #     daily_raw.name（历史常缺失或为查询当下的当前名）。
     try:
         from quant.data.store import write_name_snapshot
@@ -85,9 +145,7 @@ def main() -> None:
     except Exception as e:
         print(f"[WARN] name 快照失败: {e}", file=sys.stderr)
 
-    # 2. 除权检测 + 因子补拉
-    daily = read_daily_raw(end=today)
-    prev_map = _prev_close_map(daily, today)
+    # 2. 除权检测 + 因子补拉（spot 的 pre_close 已在 step 1 统一为库内 prev，同源）
     ex_codes = detect_ex_dividend_codes(spot, prev_map)
     if ex_codes:
         print(f"检测到除权 {len(ex_codes)} 只，补拉复权因子: {ex_codes[:10]}{'...' if len(ex_codes)>10 else ''}")
@@ -96,14 +154,10 @@ def main() -> None:
     else:
         print("无除权")
 
-    # 3. 指数增量
-    try:
-        start = _latest_date(daily) or today
-        df = fetch_index(args.index, start=start, end=today)
-        write_index_daily(df)
-        print(f"指数 {args.index} 增量: {len(df)} 行")
-    except Exception as e:
-        print(f"[WARN] 指数增量失败: {e}", file=sys.stderr)
+    # 3. 指数增量（三个基准指数，与 build_daily 一致）——失败即时记 pending，下次运行先重试
+    pend = _read_pending()
+    _update_indices(today, daily, pend.get("indices", []))
+    _write_pending(pend)  # 即时落盘，避免后续步骤（因子快照等）慢/卡导致丢失
 
     # 4. 交易日历刷新（低频）
     try:
@@ -112,18 +166,9 @@ def main() -> None:
     except Exception:
         pass
 
-    # 5. 行业 PIT 快照（供中性化 / 组合约束）
-    try:
-        from quant.data.industry import fetch_current_industry_map, write_industry_snapshot
-
-        ind_map = fetch_current_industry_map()
-        if ind_map:
-            write_industry_snapshot(today, ind_map)
-            print(f"行业快照: {len(ind_map)} 只 @ {today}")
-        else:
-            print("[WARN] 行业映射为空，跳过落库", file=sys.stderr)
-    except Exception as e:
-        print(f"[WARN] 行业快照失败: {e}", file=sys.stderr)
+    # 5. 行业 PIT 快照（供中性化 / 组合约束）——失败即时记 pending，下次运行先重试
+    _update_industry(today, pend)
+    _write_pending(pend)  # 即时落盘
 
     # 6. Universe PIT 快照
     try:
@@ -173,13 +218,18 @@ def main() -> None:
         from quant.data.universe import universe_codes
 
         uni = universe_codes(today, rebuild=False)
-        from quant.data.fetch import fetch_spot_em
-
-        raw_spot = fetch_spot_em()
-        counts = capture_all_factor_snapshots(today, spot=raw_spot, universe_codes=uni)
+        # 复用 step 1 已拉的新浪 spot（含 code/float_mv），避免再触发东财 clist 拉全市场
+        counts = capture_all_factor_snapshots(today, spot=spot, universe_codes=uni)
         print(f"因子快照 @ {today}: {counts}")
     except Exception as e:
         print(f"[WARN] 因子快照失败: {e}", file=sys.stderr)
+
+    # 10. 写 pending（指数/行业失败待重试），下次运行开头自动补
+    _write_pending(pend)
+    n_pend = len(pend.get("indices", [])) + (1 if pend.get("industry") else 0)
+    if n_pend:
+        print(f"[INFO] 待重试 {n_pend} 项（指数 {pend.get('indices')}，行业 "
+              f"{pend.get('industry')}）→ 下次 update_daily 自动补", file=sys.stderr)
 
 
 if __name__ == "__main__":
