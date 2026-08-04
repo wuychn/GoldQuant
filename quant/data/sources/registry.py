@@ -10,25 +10,47 @@ from typing import Any
 
 from quant.data.sources.daily.akshare import AkshareDailySource
 from quant.data.sources.daily.default import DefaultDailySource
+from quant.data.sources.daily.sina import SinaDailySource
+from quant.data.sources.daily.tencent import TencentDailySource
+from quant.data.sources.enrich.akshare import AkshareEnrichSource
 from quant.data.sources.enrich.default import DefaultEnrichSource
+from quant.data.sources.enrich.eastmoney import EastmoneyEnrichSource
+from quant.data.sources.enrich.ths import ThsEnrichSource
+from quant.data.sources.enrich.wencai import WencaiEnrichSource
+from quant.data.sources.info.akshare import AkshareInfoSource
 from quant.data.sources.info.default import DefaultInfoSource
+from quant.data.sources.info.eastmoney import EastmoneyInfoSource
+from quant.data.sources.market.akshare import AkshareMarketSource
 from quant.data.sources.market.default import DefaultMarketSource
+from quant.data.sources.market.eastmoney import EastmoneyMarketSource
+from quant.data.sources.market.ths import ThsMarketSource
 
 DAILY_REGISTRY: dict[str, type] = {
     "default": DefaultDailySource,
     "akshare": AkshareDailySource,
+    "sina": SinaDailySource,
+    "tencent": TencentDailySource,
 }
 
 MARKET_REGISTRY: dict[str, type] = {
     "default": DefaultMarketSource,
+    "akshare": AkshareMarketSource,
+    "eastmoney": EastmoneyMarketSource,
+    "ths": ThsMarketSource,
 }
 
 ENRICH_REGISTRY: dict[str, type] = {
     "default": DefaultEnrichSource,
+    "eastmoney": EastmoneyEnrichSource,
+    "ths": ThsEnrichSource,
+    "wencai": WencaiEnrichSource,
+    "akshare": AkshareEnrichSource,
 }
 
 INFO_REGISTRY: dict[str, type] = {
     "default": DefaultInfoSource,
+    "akshare": AkshareInfoSource,
+    "eastmoney": EastmoneyInfoSource,
 }
 
 

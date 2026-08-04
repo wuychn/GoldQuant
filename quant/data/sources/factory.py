@@ -1,11 +1,17 @@
-"""Source factory: 按 ``quant.yml`` 的 ``data.sources.*`` 选实现 + fixture 模式。
+"""Source factory：返回接口级代理，按 ``quant.yml data.sources.<类>.<接口>`` 独立选源。
 
-四类数据源（Daily/Market/Enrich/Info）均以 ``default`` 为唯一注册实现；fixture 模式
-（``QUANT_USE_LOCAL_FIXTURE``）下同样回退到 ``default``（各 default 实现内部自行判断
-是否读离线样本，如 news/index_spot）。
+facade 一个方法 = 一个接口 = 一个源。业务层 ``get_xxx_source().fetch_yyy()`` 零改动，
+内部每个方法按接口路由到配置的源；源未实现某接口抛 NotImplementedError。
+
+配置：
+    # 整源（简写）：daily: default
+    # 接口级（dict）：daily: {fetch_spot: sina, fetch_hist: tencent, ...}
+fixture 模式（QUANT_USE_LOCAL_FIXTURE）下未配置的接口回退 default。
 """
 
 from __future__ import annotations
+
+from typing import Any
 
 
 def fixture_mode() -> bool:
@@ -14,42 +20,36 @@ def fixture_mode() -> bool:
     return bool(get_settings().QUANT_USE_LOCAL_FIXTURE)
 
 
-def _source_name(key: str) -> str:
-    """返回 ``data.sources.<key>`` 配置值；fixture 模式或未配置均为 ``default``。"""
-    if fixture_mode():
-        return "default"
-    from quant.config import load_quant_config
+def get_daily_source() -> "InterfaceProxy":
+    from quant.data.sources.interface import get_interface_proxy
+    from quant.data.sources.protocols import DailySource
 
-    return (load_quant_config().get("data") or {}).get("sources", {}).get(key, "default")
+    return get_interface_proxy("daily", DailySource)
 
 
-def get_daily_source() -> "DailySource":
-    from quant.data.sources.protocols import DailySource  # noqa: F811 (type hint)
+def get_market_source() -> "InterfaceProxy":
+    from quant.data.sources.interface import get_interface_proxy
+    from quant.data.sources.protocols import MarketSource
 
-    from quant.data.sources.registry import get_daily_source_from_registry
-
-    return get_daily_source_from_registry(_source_name("daily"))
-
-
-def get_market_source() -> "MarketSource":
-    from quant.data.sources.protocols import MarketSource  # noqa: F811 (type hint)
-
-    from quant.data.sources.registry import get_market_source_from_registry
-
-    return get_market_source_from_registry(_source_name("market"))
+    return get_interface_proxy("market", MarketSource)
 
 
-def get_enrich_source() -> "EnrichSource":
-    from quant.data.sources.protocols import EnrichSource  # noqa: F811 (type hint)
+def get_enrich_source() -> "InterfaceProxy":
+    from quant.data.sources.interface import get_interface_proxy
+    from quant.data.sources.protocols import EnrichSource
 
-    from quant.data.sources.registry import get_enrich_source_from_registry
-
-    return get_enrich_source_from_registry(_source_name("enrich"))
+    return get_interface_proxy("enrich", EnrichSource)
 
 
-def get_info_source() -> "InfoSource":
-    from quant.data.sources.protocols import InfoSource  # noqa: F811 (type hint)
+def get_info_source() -> "InterfaceProxy":
+    from quant.data.sources.interface import get_interface_proxy
+    from quant.data.sources.protocols import InfoSource
 
-    from quant.data.sources.registry import get_info_source_from_registry
+    return get_interface_proxy("info", InfoSource)
 
-    return get_info_source_from_registry(_source_name("info"))
+
+# 兼容旧导出（已废弃，新代码用上面 get_*_source）
+def _source_name(key: str) -> str:  # 保留旧签名兼容 import
+    from quant.data.sources.interface import _interface_source
+
+    return _interface_source(key, "__old__")  # 实际不再使用

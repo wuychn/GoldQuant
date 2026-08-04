@@ -1,11 +1,9 @@
-"""日线库数据 facade：委托当前 DailySource（``quant.yml data.sources.daily`` 配置选）。
+"""日线库数据 facade：每个方法（接口）独立选源，一个方法只走一个源。
 
-具体实现见 ``quant/data/sources/daily/``：
-- ``default``：组合最优（fetch_index 直连东财 kline，其余 akshare），推荐。
-- ``akshare``：全 akshare（fetch_index 走 clist 易断，仅对照）。
+经 ``get_daily_source()`` 返回的接口级代理路由——换源只改 ``quant.yml data.sources.daily``
+（整源或接口级 dict），业务代码零改动。源未实现某接口抛 NotImplementedError。
 
-本模块**不再 import akshare**——换源改配置即可，下游（build_daily/maintain/backtest）零感知。
-退市接口（fetch_delisted_codes/daily）仍在 ``quant/data/delist.py``，DailySource 内部委托之。
+本模块不 import akshare/具体源。
 """
 
 from __future__ import annotations
@@ -26,11 +24,11 @@ def _src():
 
 
 def fetch_hist(code: str, *, start: str, end: str, adjust: str = "") -> pd.DataFrame:
-    return _src().fetch_hist(code, start=start, end=end, adjust=adjust)
+    return _src().fetch_hist(code=code, start=start, end=end, adjust=adjust)
 
 
 def fetch_index(code: str = "000300", *, start: str, end: str) -> pd.DataFrame:
-    return _src().fetch_index(code, start=start, end=end)
+    return _src().fetch_index(code=code, start=start, end=end)
 
 
 def fetch_trade_calendar() -> list[str]:
@@ -41,5 +39,17 @@ def fetch_a_code_name() -> list[str]:
     return _src().fetch_code_list()
 
 
-def fetch_spot_em() -> pd.DataFrame:
+def fetch_spot() -> pd.DataFrame:
     return _src().fetch_spot()
+
+
+def fetch_delisted_codes() -> pd.DataFrame:
+    return _src().fetch_delisted_codes()
+
+
+def fetch_delisted_daily(code: str, *, start: str, end: str) -> pd.DataFrame:
+    return _src().fetch_delisted_daily(code=code, start=start, end=end)
+
+
+# 兼容旧名（与东财耦合的命名已废弃，仅留别名防遗漏调用方；新代码请用 fetch_spot）
+fetch_spot_em = fetch_spot
