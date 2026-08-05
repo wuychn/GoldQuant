@@ -253,7 +253,7 @@ def build_quant_scheduler() -> BackgroundScheduler | None:
         )
 
     logger.info(
-        "[quant-scheduler] r3 已注册: news / pre / during×%d / lunch / maintain_daily / daily_decision",
+        "[quant-scheduler] r3 已注册: news / pre / during×%d / lunch / update_daily(18:00) / maintain_weekly(周五22:00) / daily_decision",
         len(during_times),
     )
     return sched
