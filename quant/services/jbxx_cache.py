@@ -174,7 +174,8 @@ def _fetch_jbxx_live(symbol: str) -> dict[str, Any] | None:
     try:
         from quant.data.sources.factory import get_info_source
 
-        raw = get_info_source().fetch_stock_info(key)
+        from quant.data.sources.interface import try_with_fallback
+        raw = try_with_fallback("info", "fetch_stock_info", symbol=key)
         return raw if isinstance(raw, dict) and raw else None
     except Exception as e:
         log_caught_error(logger, f"stock_jbxx_cache 拉取基本信息 symbol={key!r}", e)

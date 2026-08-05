@@ -36,7 +36,9 @@ def _market_source():
 
 async def fetch_index_spot() -> list | None:
     try:
-        return await run_in_threadpool(_market_source().fetch_index_spot)
+        from quant.data.sources.interface import try_with_fallback_async
+
+        return await try_with_fallback_async("market", "fetch_index_spot")
     except Exception as e:
         log_tool_error("大盘指数", e)
         return None
@@ -44,7 +46,9 @@ async def fetch_index_spot() -> list | None:
 
 async def fetch_zqxy(*, market_phase: str = "intraday") -> Any:
     try:
-        return await _market_source().fetch_zqxy(market_phase=market_phase)
+        from quant.data.sources.interface import try_with_fallback_async
+
+        return await try_with_fallback_async("market", "fetch_zqxy", market_phase=market_phase)
     except Exception:
         log_tool_error("赚钱效应")
         return None
@@ -72,16 +76,19 @@ def ztgk_rows(settings: Any, zt_full: list, *, more: bool = False, zrzt: list | 
 
 
 async def fetch_ztgk(settings: Any, more: bool = False, *, zt_full: list | None = None):
-    src = _market_source()
+    from quant.data.sources.interface import try_with_fallback_async
+
     try:
-        pool = zt_full if zt_full is not None else await run_in_threadpool(src.fetch_ztgk_pool)
+        pool = zt_full if zt_full is not None else await try_with_fallback_async("market", "fetch_ztgk_pool")
         zrzt: list | None = None
         if more:
             try:
                 prev = prev_trading_day(cn_now().date())
                 if prev is None:
                     raise ValueError("无上一交易日")
-                zrzt = await run_in_threadpool(src.fetch_ztgk_prev, prev.strftime("%Y%m%d"))
+                zrzt = await try_with_fallback_async(
+                    "market", "fetch_ztgk_prev", date=prev.strftime("%Y%m%d")
+                )
             except Exception:
                 log_tool_error("昨日涨停股池全量")
         return ztgk_rows(settings, pool if isinstance(pool, list) else [], more=more, zrzt=zrzt)
@@ -92,8 +99,10 @@ async def fetch_ztgk(settings: Any, more: bool = False, *, zt_full: list | None 
 
 async def fetch_hot(settings: Any, *, progress_scope: str | None = "during_market") -> list:
     try:
+        from quant.data.sources.interface import try_with_fallback_async
+
         n = settings.quant_hot_list_limit()
-        raw_hot = await _market_source().fetch_hot_raw(n)
+        raw_hot = await try_with_fallback_async("market", "fetch_hot_raw", limit=n)
         rows = prefilter_popularity(raw_hot if isinstance(raw_hot, list) else [])
         scope = progress_scope or "during_market"
         log_progress(scope, "人气榜", detail=f"共 {len(rows)} 只")
@@ -105,7 +114,9 @@ async def fetch_hot(settings: Any, *, progress_scope: str | None = "during_marke
 
 async def fetch_concept_boards(context: str = "概念四榜"):
     try:
-        return await _market_source().fetch_concept_boards()
+        from quant.data.sources.interface import try_with_fallback_async
+
+        return await try_with_fallback_async("market", "fetch_concept_boards")
     except Exception as exc:
         log_tool_error(context, exc)
         return None, None, None, None
@@ -113,7 +124,11 @@ async def fetch_concept_boards(context: str = "概念四榜"):
 
 async def fetch_industry_board(context: str, sort_key: str, desc: bool = True) -> list | None:
     try:
-        return await _market_source().fetch_industry_board(context, sort_key, desc)
+        from quant.data.sources.interface import try_with_fallback_async
+
+        return await try_with_fallback_async(
+            "market", "fetch_industry_board", context=context, sort_key=sort_key, desc=desc
+        )
     except Exception:
         log_tool_error(f"{context} sort_key={sort_key!r} desc={desc}")
         return None
@@ -121,7 +136,9 @@ async def fetch_industry_board(context: str, sort_key: str, desc: bool = True) -
 
 async def fetch_market_fund_flow(n: int) -> list | None:
     try:
-        return await _market_source().fetch_market_fund_flow(n)
+        from quant.data.sources.interface import try_with_fallback_async
+
+        return await try_with_fallback_async("market", "fetch_market_fund_flow", n=n)
     except Exception as e:
         log_tool_error("大盘资金流", e)
         return None

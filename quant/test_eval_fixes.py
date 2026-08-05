@@ -278,13 +278,23 @@ def test_refresh_already_ran_today(tmp_path, monkeypatch):
     assert fp.refresh_already_ran_today("2024-05-02") is False
 
 
-def test_capture_all_no_fundamentals_key():
+def test_capture_all_no_fundamentals_key(monkeypatch, tmp_path):
+    """只验证返回结构；mock 掉三个 capture（真跑会拉网络 + 写 home），并隔离临时 home。"""
     import pandas as pd
     from quant.data import factor_capture as fc
+    from quant.store.paths import override_quant_home
 
-    out = fc.capture_all_factor_snapshots("2099-01-01", spot=pd.DataFrame(), universe_codes=[])
-    assert "fundamentals" not in out
-    assert set(out.keys()) == {"hot", "flow", "theme"}
+    # 隔离：测试只写临时 home，不污染真实 QUANT_HOME（曾把 hot_rank/year=2099 写进 .quant2）
+    with override_quant_home(tmp_path):
+        # mock 网络写盘：三个 capture 不真跑
+        monkeypatch.setattr(fc, "capture_hot_rank", lambda as_of: 0)
+        monkeypatch.setattr(fc, "capture_fund_flow", lambda as_of, spot=None, universe_codes=None: 0)
+        monkeypatch.setattr(fc, "capture_theme_mom", lambda as_of, spot=None: 0)
+        out = fc.capture_all_factor_snapshots(
+            "2026-08-04", spot=pd.DataFrame(), universe_codes=[]
+        )
+        assert "fundamentals" not in out
+        assert set(out.keys()) == {"hot", "flow", "theme"}
 
 
 def test_spot_row_from_daily_speed_proxy():

@@ -66,3 +66,9 @@ class AkshareMarketSource:
 
     def fetch_em_industry_map(self) -> Any:
         raise NotImplementedError("akshare 未实现 fetch_em_industry_map（可用 eastmoney/default）")
+
+    def fetch_industry_map(self) -> Any:
+        raise NotImplementedError("akshare 未实现 fetch_industry_map（可用 eastmoney/sina/default）")
+
+    def fetch_stop_resume(self, date: str) -> Any:
+        raise NotImplementedError("akshare 未实现 fetch_stop_resume（可用 eastmoney/default）")

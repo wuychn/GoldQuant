@@ -121,14 +121,41 @@ def read_listing_map() -> dict[str, str]:
         return {}
 
 
+_RESOLVED_MAP_CACHE: dict[str, str] | None = None
+
+
 def resolve_listing_map(
     daily: pd.DataFrame | None = None,
     base: dict[str, str] | None = None,
+    *,
+    skip_network: bool = False,
 ) -> dict[str, str]:
-    """parquet 基底 + AKShare IPO + jbxx + daily 首条（后者优先级递增）。"""
+    """parquet 基底 + AKShare IPO + jbxx + daily 首条（后者优先级递增）。
+
+    进程级缓存：网络拉取（IPO + jbxx）只做一次，同进程后续复用。
+    ``skip_network=True``：只读 parquet + daily 首条（跳过 IPO/jbxx 网络），
+    供 update_daily 的 universe_snapshot 用（已有 listing_dates.parquet，不需拉网络）。
+    """
+    global _RESOLVED_MAP_CACHE
+    # 跳过网络模式：parquet + daily 首条（本地，秒级）
+    if skip_network:
+        mp = dict(base if base is not None else read_listing_map())
+        if daily is not None and not daily.empty:
+            built = build_listing_map_from_daily(daily)
+            mp.update(built)
+        return mp
+    # 正常模式（含网络）：进程级缓存
+    if _RESOLVED_MAP_CACHE is not None and base is None:
+        mp = dict(_RESOLVED_MAP_CACHE)
+        if daily is not None and not daily.empty:
+            built = build_listing_map_from_daily(daily)
+            mp.update(built)
+        return mp
     mp = dict(base if base is not None else read_listing_map())
-    built = build_listing_map(daily)
-    return {**mp, **built}
+    built = build_listing_map(daily)  # 含网络 IPO + jbxx
+    mp.update(built)
+    _RESOLVED_MAP_CACHE = dict(mp)
+    return mp
 
 
 def listing_days_as_of(
@@ -156,14 +183,29 @@ def listing_days_map(
     *,
     listing_map: dict[str, str] | None = None,
 ) -> dict[str, int]:
-    """批量：{code: listing_days}。"""
+    """批量：{code: listing_days}。
+
+    优化：``resolve_listing_map`` 只调一次（旧版逐码调 = 5535 次，每次都 rebuild，
+    含网络 IPO + jbxx merge → 数分钟卡死）。向量化：一次 resolve → 逐码 trading_days_between（纯计算）。
+    """
+    from datetime import date as _date
+
     as_of = to_iso(as_of)
-    mp = resolve_listing_map(daily, listing_map)
-    codes = set()
+    mp = resolve_listing_map(daily, listing_map, skip_network=True)  # 只读 parquet+daily，跳网络
+    codes: set[str] = set()
     if daily is not None and not daily.empty:
         d = daily[daily["date"] <= as_of]
         codes = set(d["code"].astype(str).tolist())
     out: dict[str, int] = {}
+    as_of_d = _date.fromisoformat(as_of)
     for code in codes:
-        out[code] = listing_days_as_of(code, as_of, listing_map=mp, daily=daily)
+        ld = mp.get(code)
+        if not ld:
+            out[code] = 0
+            continue
+        try:
+            ld_d = _date.fromisoformat(to_iso(ld))
+            out[code] = trading_days_between(ld_d, as_of_d)
+        except Exception:
+            out[code] = 0
     return out

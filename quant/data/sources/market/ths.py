@@ -72,8 +72,14 @@ class ThsMarketSource:
     def fetch_em_industry_map(self) -> Any:
         raise NotImplementedError("ths 未实现 fetch_em_industry_map（可用 eastmoney/default）")
 
+    def fetch_industry_map(self) -> Any:
+        raise NotImplementedError("ths 未实现 fetch_industry_map（可用 eastmoney/sina/default）")
+
     def fetch_em_hot_rank(self) -> Any:
         raise NotImplementedError("ths 未实现 fetch_em_hot_rank（可用 akshare/default）")
 
     def fetch_em_concept_boards(self) -> Any:
         raise NotImplementedError("ths 未实现 fetch_em_concept_boards（可用 akshare/default）")
+
+    def fetch_stop_resume(self, date: str) -> Any:
+        raise NotImplementedError("ths 未实现 fetch_stop_resume（可用 eastmoney/default）")

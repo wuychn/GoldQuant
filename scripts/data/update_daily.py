@@ -45,8 +45,21 @@ def _write_pending(pend: dict) -> None:
 
 
 def _update_indices(today: str, daily: pd.DataFrame, pend: list) -> None:
-    """拉三个基准指数增量；失败的记入 ``pend``（调用方负责写盘）。"""
-    start = _latest_date(daily) or today
+    """拉三个基准指数增量；失败的记入 ``pend``（调用方负责写盘）。
+
+    ``start`` 取 index_daily 最新日（而非 daily_raw 最新日）：若指数多日拉取失败，
+    daily_raw 会因 spot 增量继续前进，用 daily 最新日会漏掉中间缺失的指数缺口；
+    基于 index_daily 自身最新日才能补全断档。
+    """
+    from quant.data.store import read_index_daily
+
+    start = today
+    try:
+        cur = read_index_daily("000300")
+        if not cur.empty:
+            start = str(cur["date"].astype(str).max())
+    except Exception:  # noqa: BLE001
+        pass
     todo = sorted(set(("000300", "000905", "000852")) | set(pend))
     failed: list[str] = []
     for idx in todo:
@@ -77,6 +90,41 @@ def _update_industry(today: str, pend: dict) -> None:
     except Exception as e:
         print(f"[WARN] 行业快照失败（记 pending 下次重试）: {e}", file=sys.stderr)
         pend["industry"] = True
+
+
+def _mark_suspended(spot: pd.DataFrame, today: str) -> tuple[int, int]:
+    """用当日停复牌信息标记停牌票（volume 置 0，使 universe 停牌过滤生效）。
+
+    返回 (停牌票数, 复牌首日盘口缺失数)。停牌票当日无成交 → volume 置 0；
+    复牌票若 open/high/low 缺失，属盘口异常，记告警而非当停牌。
+    停牌数据走 MarketSource.facade（可换源，默认东财 stock_tfp_em）。
+    """
+    try:
+        from quant.data.sources.factory import get_market_source
+
+        from quant.data.sources.interface import try_with_fallback
+        stop_map = try_with_fallback("market", "fetch_stop_resume", date=today)
+    except Exception as e:
+        print(f"[WARN] 停复牌信息拉取失败（停牌识别跳过）: {e}", file=sys.stderr)
+        return 0, 0
+    if not stop_map:
+        return 0, 0
+
+    n_stop = 0
+    n_resume_missing = 0
+    for code, info in stop_map.items():
+        hit = spot["code"].astype(str) == code
+        if not hit.any():
+            continue
+        # 停牌：停牌截止未到（NaT=无截止）→ 当日无成交。注意 NaT 是 truthy，须用 pd.isna
+        if info.get("停牌时间") and pd.isna(info.get("停牌截止时间")):
+            spot.loc[hit, "volume"] = 0.0
+            spot.loc[hit, "amount"] = 0.0
+            n_stop += 1
+        # 复牌首日（截止时间=当日或已过）：盘口 open/high/low 缺失属异常，告警
+        elif spot.loc[hit, "open"].isna().any() or spot.loc[hit, "high"].isna().any():
+            n_resume_missing += 1
+    return n_stop, n_resume_missing
 
 
 def _latest_date(daily: pd.DataFrame) -> str | None:
@@ -128,6 +176,11 @@ def main() -> None:
     spot_out = spot[[c for c in cols if c in spot.columns]]
     write_daily_raw(spot_out)
     print(f"spot 追加: {len(spot_out)} 行 @ {today}")
+
+    # 1a. 停牌识别：停牌票 volume 置 0（universe 过滤生效），复牌盘口缺失记告警
+    n_stop, n_resume = _mark_suspended(spot, today)
+    if n_stop or n_resume:
+        print(f"停牌 {n_stop} 只（volume 置 0）· 复牌盘口缺失 {n_resume} 只", file=sys.stderr)
 
     # 1b. PIT 名称快照（供 universe ST/退市过滤、涨跌停 ST 分档）
     #     spot 的 name 是当日真实名（PIT），落库后 universe 可按日取，避免依赖

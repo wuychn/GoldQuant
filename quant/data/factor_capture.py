@@ -21,9 +21,9 @@ def _num(v: object) -> float | None:
 def capture_hot_rank(as_of: str) -> int:
     """东财人气榜 → 截面 rank z-score。"""
     try:
-        from quant.data.sources.factory import get_market_source
+        from quant.data.sources.interface import try_with_fallback
 
-        df = get_market_source().fetch_em_hot_rank()
+        df = try_with_fallback("market", "fetch_em_hot_rank")
     except Exception as e:
         print(f"[WARN] hot_rank 拉取失败: {e}", file=sys.stderr)
         return 0
@@ -134,9 +134,9 @@ def _fetch_flows_5d_batch(codes: list[str]) -> dict[str, float]:
 def capture_theme_mom(as_of: str, spot: pd.DataFrame | None = None) -> int:
     """概念板块 5 日涨幅分位 → 个股 theme_mom（PIT 当日板块榜）。"""
     try:
-        from quant.data.sources.factory import get_market_source
+        from quant.data.sources.interface import try_with_fallback
 
-        boards = get_market_source().fetch_em_concept_boards()
+        boards = try_with_fallback("market", "fetch_em_concept_boards")
         if boards is None or boards.empty:
             return 0
         name_col = "板块名称" if "板块名称" in boards.columns else boards.columns[0]

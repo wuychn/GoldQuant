@@ -9,7 +9,6 @@ from typing import Any, Literal
 
 from common.config import Settings
 from common.utils.common_util import get_n_workdays_ago, today
-from quant.data.sources.factory import get_enrich_source
 from quant.services.indicators import (
     compute_metrics_from_bars,
     computed_raw_to_zh,
@@ -17,6 +16,7 @@ from quant.services.indicators import (
 )
 from common.utils.error_log import log_caught_error
 from common.progress_log import log_progress, log_progress_count
+from quant.data.sources.interface import try_with_fallback_async
 
 logger = logging.getLogger(__name__)
 
@@ -313,7 +313,8 @@ async def fetch_stock_concept_fit_ths(
             return ConceptFitFetchResult(None, None)
 
         try:
-            rows = await get_enrich_source().fetch_concept_fit_rank(key)
+            from quant.data.sources.interface import try_with_fallback_async
+            rows = await try_with_fallback_async("enrich", "fetch_concept_fit_rank", symbol=key)
             result = rows if rows else None
         except Exception:
             _log_error(f"同花顺F10概念粘合度 symbol={symbol!r}")
@@ -485,7 +486,8 @@ async def fetch_stock_concepts_wcxg(
             return ConceptFetchResult(None, None)
 
         try:
-            concepts = await get_enrich_source().fetch_stock_concepts(key, name=name)
+            from quant.data.sources.interface import try_with_fallback_async
+            concepts = await try_with_fallback_async("enrich", "fetch_stock_concepts", symbol=key, name=name)
             result = concepts if concepts else None
         except Exception:
             _log_error(f"问财所属概念 symbol={symbol!r}")
@@ -571,12 +573,11 @@ async def enrich_stock_row(
 
     await _ensure_stock_industry(item, symbol, allow_network=not skip_jbxx)
 
-    enrich_src = get_enrich_source()
     io_tasks: list[Any] = [
-        enrich_src.fetch_stock_quote(symbol),
+        await try_with_fallback_async("enrich", "fetch_stock_quote", symbol=symbol),
         asyncio.to_thread(_load_hist_with_metrics, settings, symbol, hist_max_bars=hist_max_bars),
-        enrich_src.fetch_stock_fund_flow(symbol),
-        enrich_src.fetch_stock_fund_flow_daily(symbol),
+        await try_with_fallback_async("enrich", "fetch_stock_fund_flow", symbol=symbol),
+        await try_with_fallback_async("enrich", "fetch_stock_fund_flow_daily", symbol=symbol),
     ]
     if include_pre_snapshot:
         io_tasks.append(

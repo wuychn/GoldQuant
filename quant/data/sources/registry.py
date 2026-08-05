@@ -23,6 +23,7 @@ from quant.data.sources.info.eastmoney import EastmoneyInfoSource
 from quant.data.sources.market.akshare import AkshareMarketSource
 from quant.data.sources.market.default import DefaultMarketSource
 from quant.data.sources.market.eastmoney import EastmoneyMarketSource
+from quant.data.sources.market.sina import SinaMarketSource
 from quant.data.sources.market.ths import ThsMarketSource
 
 DAILY_REGISTRY: dict[str, type] = {
@@ -37,6 +38,7 @@ MARKET_REGISTRY: dict[str, type] = {
     "akshare": AkshareMarketSource,
     "eastmoney": EastmoneyMarketSource,
     "ths": ThsMarketSource,
+    "sina": SinaMarketSource,
 }
 
 ENRICH_REGISTRY: dict[str, type] = {

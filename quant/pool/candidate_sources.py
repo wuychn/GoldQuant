@@ -41,7 +41,8 @@ async def _prefilter_popularity(settings: Settings, cfg: dict) -> list[dict]:
         if settings.QUANT_TEST_PHASE
         else popularity_limit(cfg)
     )
-    raw = await get_market_source().fetch_hot_raw(fetch_limit)
+    from quant.data.sources.interface import try_with_fallback_async, try_with_fallback
+    raw = await try_with_fallback_async("market", "fetch_hot_raw", limit=fetch_limit)
     rows = prefilter_popularity(raw if isinstance(raw, list) else [], cfg=cfg)
     return truncate_list_for_test_phase(rows, settings)
 
@@ -52,7 +53,7 @@ async def _prefilter_zt(
     *,
     zt_rows: list[dict] | None = None,
 ) -> list[dict]:
-    raw = zt_rows if zt_rows is not None else get_market_source().fetch_ztgk_pool()
+    raw = zt_rows if zt_rows is not None else try_with_fallback("market", "fetch_ztgk_pool")
     rows = prefilter_zt_pool(raw if isinstance(raw, list) else [], cfg=cfg)
     return truncate_list_for_test_phase(rows, settings)
 

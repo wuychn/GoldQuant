@@ -57,8 +57,14 @@ class DefaultMarketSource:
     def fetch_em_industry_map(self) -> Any:
         return self._em.fetch_em_industry_map()
 
+    def fetch_industry_map(self) -> Any:
+        return self._em.fetch_industry_map()
+
     def fetch_em_hot_rank(self) -> Any:
         return self._ak.fetch_em_hot_rank()
 
     def fetch_em_concept_boards(self) -> Any:
         return self._ak.fetch_em_concept_boards()
+
+    def fetch_stop_resume(self, date: str) -> Any:
+        return self._em.fetch_stop_resume(date)

@@ -29,6 +29,31 @@ class EastmoneyMarketSource:
 
         return fetch_em_industry_board()
 
+    def fetch_industry_map(self) -> Any:
+        return self.fetch_em_industry_map()
+
+    def fetch_stop_resume(self, date: str) -> Any:
+        """当日停复牌信息（东财 ``stock_tfp_em``）→ {代码: {停牌时间, 停牌截止, 停牌原因}}。"""
+        import akshare as ak
+
+        from quant.data.sources.rate_limit import with_limit
+
+        df = with_limit("eastmoney", lambda: ak.stock_tfp_em(date=date.replace("-", "")))
+        out: dict[str, dict] = {}
+        if df is None or df.empty or "代码" not in df.columns:
+            return out
+        for _, r in df.iterrows():
+            code = str(r.get("代码", "")).strip()
+            if not code:
+                continue
+            out[code] = {
+                "停牌时间": r.get("停牌时间"),
+                "停牌截止时间": r.get("停牌截止时间"),
+                "停牌原因": r.get("停牌原因"),
+                "停牌期限": r.get("停牌期限"),
+            }
+        return out
+
     # ---- 未实现接口：显式报错 ----
     def fetch_index_spot(self) -> Any:
         raise NotImplementedError("eastmoney 未实现 fetch_index_spot（可用 akshare/default）")

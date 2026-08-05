@@ -79,23 +79,33 @@ data:                          # 数据源并发限流
   ths_max_concurrent: 1         # 同花顺并发
   eastmoney_max_concurrent: 1  # 东财并发
   sources:
-    # 四类（daily/market/enrich/info）均支持整源或接口级换源：
-    #   整源：daily: default            # 所有接口走同一实现（default 组合）
-    #   接口级：daily: {fetch_spot: sina, fetch_hist: tencent, ...}
-    #     —— 每个 facade 方法（接口）独立选源；未配置的接口缺省 default；
-    #        源未实现某接口时抛 NotImplementedError（不隐式 fallback）。
-    #   现有源（每个源类只实现其支持的接口，未实现抛 NotImplementedError）：
-    #     daily:  default(组合)/akshare(东财全)/sina(spot·hist)/tencent(仅 hist)
-    #     market: default(组合)/akshare(index_spot·资金流·人气·概念板)/
-    #             eastmoney(涨停池·行业映射)/ths(赚钱效应·热度·概念·行业·形态榜)
+    # 四类（daily/market/enrich/info）均支持接口级换源 + 数据驱动 fallback：
+    #   整源：daily: default                  # 所有接口走同一实现，不 fallback
+    #   接口级单值：daily: {fetch_spot: sina}  # 只用这个源，不 fallback
+    #   接口级列表：daily: {fetch_spot: [sina, akshare]}  # 按序尝试，失败换下一个，全失败抛异常
+    #     加新源 = 实现源类 + 注册 registry + yml list 加名字，业务层永不改。
+    #   现有源（未实现某接口抛 NotImplementedError）：
+    #     daily:  default(组合)/akshare(东财全)/sina(spot·hist·index)/tencent(仅 hist)
+    #     market: default(组合)/akshare(eastmoney系)/eastmoney(涨停池·行业·停牌)/ths(同花顺系)/sina(行业)
     #     enrich: default(组合)/eastmoney(盘口·资金流日线)/ths(资金流·概念粘合度)/
     #             wencai(问财概念)/akshare(分钟K)
     #     info:   default(组合)/akshare(新闻)/eastmoney(个股基本信息)
-    #   接口级例：enrich: {fetch_stock_quote: eastmoney, fetch_stock_fund_flow: ths}
-    daily: {fetch_spot: sina, fetch_hist: sina, fetch_index: sina}  # 接口级：spot/hist/index 走新浪
-    market: default  # 运维行情数据源（整源或接口级 dict）
-    enrich: default  # 个股 enrich 数据源（整源或接口级 dict）
-    info: default    # 资讯/基本信息数据源（整源或接口级 dict）
+    daily:
+      fetch_spot: [sina, akshare]
+      fetch_hist: [sina, akshare]
+      fetch_index: [sina, akshare]
+    market:
+      fetch_industry_map: [sina, eastmoney]
+    enrich:
+      fetch_stock_quote: [eastmoney, default]
+      fetch_stock_fund_flow: [ths, default]
+      fetch_stock_fund_flow_daily: [eastmoney, default]
+      fetch_concept_fit_rank: [ths, default]
+      fetch_stock_concepts: [wencai, default]
+      fetch_stock_minute: [akshare, default]
+    info:
+      fetch_news: [akshare, default]
+      fetch_stock_info: [eastmoney, default]
 scheduler:                     # APScheduler 定时任务（app/scheduling/quant_scheduler.py）
   enabled: true                # 总开关；false 时不启动调度器
   timezone: Asia/Shanghai

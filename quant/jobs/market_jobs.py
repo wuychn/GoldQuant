@@ -9,13 +9,6 @@ from typing import Any
 from common.config import get_settings
 from quant.data_fetch import load_mode_fixture, fixture_mode
 from quant.jobs.runs_log import append_run_record
-from quant.ops.modes import (
-    build_during_body,
-    build_evening_body,
-    build_lunch_body,
-    build_news_body,
-    build_pre_market_body,
-)
 from quant.ops.push import push_text
 from common.progress_log import log_progress, log_progress_done, log_progress_error
 from quant.services.market.payload import build_mode_payload_async
@@ -28,13 +21,23 @@ _LABELS = {
     "post_market_evening": "收盘复盘",
 }
 
-_BUILDERS = {
-    "news": build_news_body,
-    "pre_market": build_pre_market_body,
-    "during_market": build_during_body,
-    "post_market_lunch": build_lunch_body,
-    "post_market_evening": build_evening_body,
-}
+def _builders() -> dict[str, Any]:
+    """延迟 import ``ops.modes``（顶部 import 会与 ``ops.runner`` 循环导入）。"""
+    from quant.ops.modes import (
+        build_during_body,
+        build_evening_body,
+        build_lunch_body,
+        build_news_body,
+        build_pre_market_body,
+    )
+
+    return {
+        "news": build_news_body,
+        "pre_market": build_pre_market_body,
+        "during_market": build_during_body,
+        "post_market_lunch": build_lunch_body,
+        "post_market_evening": build_evening_body,
+    }
 
 
 def _critical_failure_push(mode: str, reason: str) -> str:
@@ -50,7 +53,7 @@ def _critical_failure_push(mode: str, reason: str) -> str:
 
 
 async def run_market_job_async(mode: str, *, push: bool = True) -> str:
-    if mode not in _BUILDERS:
+    if mode not in _builders():
         raise ValueError(f"未知模式: {mode}")
     label = _LABELS[mode]
     settings = get_settings()
@@ -108,9 +111,9 @@ async def run_market_job_async(mode: str, *, push: bool = True) -> str:
     try:
         if ok:
             if mode == "news":
-                body = _BUILDERS[mode](raw_for_body)
+                body = _builders()[mode](raw_for_body)
             else:
-                body = _BUILDERS[mode]({"code": 0, "message": "ok", "data": payload})
+                body = _builders()[mode]({"code": 0, "message": "ok", "data": payload})
         else:
             body = _critical_failure_push(mode, "见上文")
     except Exception as e:

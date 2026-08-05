@@ -8,7 +8,6 @@ from typing import Any
 
 from fastapi.concurrency import run_in_threadpool
 
-from quant.data.sources.factory import get_info_source, get_market_source
 from quant.data.tools.market import (
     async_holding_rows,
     fetch_concept_boards,
@@ -50,7 +49,8 @@ class BuildResult:
 async def build_news_payload(settings: Any) -> BuildResult:
     scope = "news"
     log_progress(scope, "开始聚合新闻")
-    news = get_info_source().fetch_news()
+    from quant.data.sources.interface import try_with_fallback
+    news = try_with_fallback("info", "fetch_news")
     log_progress_done(scope, "新闻聚合完成", detail=f"共 {len(news)} 条")
     return BuildResult(payload=finalize_quant_payload(news))
 
@@ -246,7 +246,8 @@ async def build_evening_payload(settings: Any) -> BuildResult:
     gn_bk = merge_concept_boards(jrzfqsgn, jrzjlrqsgn, jrdfqsgn, jrzjlcqsgn)
     hy_bk = merge_industry_boards(hy_gain, hy_fund, hy_loss, hy_fund_out)
 
-    zt_full = await run_in_threadpool(get_market_source().fetch_ztgk_pool)
+    from quant.data.sources.interface import try_with_fallback
+    zt_full = await run_in_threadpool(lambda: try_with_fallback("market", "fetch_ztgk_pool"))
     zttj = await fetch_ztgk(settings, True, zt_full=zt_full if isinstance(zt_full, list) else [])
 
     payload_stub = theme_payload_stub(gn_bk, hy_bk)
