@@ -96,7 +96,7 @@ data:                          # 数据源并发限流
       fetch_index: [sina, akshare]
     market:
       fetch_industry_map: [sina, eastmoney]
-      fetch_em_concept_boards: [akshare, default]
+      fetch_concept_boards: [akshare, ths, default]
     enrich:
       fetch_stock_quote: [eastmoney, default]
       fetch_stock_fund_flow: [ths, default]

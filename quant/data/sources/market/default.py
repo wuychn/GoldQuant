@@ -43,7 +43,13 @@ class DefaultMarketSource:
         return await self._ths.fetch_hot_raw(limit)
 
     async def fetch_concept_boards(self) -> Any:
-        return await self._ths.fetch_concept_boards()
+        """统一接口：概念板块 → DataFrame(板块名称, 涨跌幅)。委托 akshare（东财）。"""
+        return await self._ak.fetch_concept_boards()
+
+    def fetch_em_concept_boards(self) -> Any:
+        """旧名兼容（统一用 fetch_concept_boards）。"""
+        return self._ak.fetch_em_concept_boards()
+
 
     async def fetch_industry_board(self, context: str, sort_key: str, desc: bool = True) -> Any:
         return await self._ths.fetch_industry_board(context, sort_key, desc)

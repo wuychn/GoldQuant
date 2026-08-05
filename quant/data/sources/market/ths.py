@@ -37,9 +37,28 @@ class ThsMarketSource:
         return await alimit("ths", lambda: hot_stock(limit))
 
     async def fetch_concept_boards(self) -> Any:
+        """同花顺概念板块 → 统一返回 DataFrame(板块名称, 涨跌幅)。
+
+        原始返回 tuple(4×list[dict])，含 `行业`/`行业-涨跌幅` 字段；此处合并四子列表
+        并归一到业务层统一 schema。
+        """
         from quant.data.sources.ths import concept_board_top_lists
 
-        return await alimit("ths", lambda: concept_board_top_lists("即时"))
+        import pandas as pd
+
+        result = await alimit("ths", lambda: concept_board_top_lists("即时"))
+        if not isinstance(result, tuple):
+            return pd.DataFrame(columns=["板块名称", "涨跌幅"])
+        rows: list[dict] = []
+        for sub in result:
+            if isinstance(sub, list):
+                for r in sub:
+                    if isinstance(r, dict):
+                        name = str(r.get("行业") or r.get("板块") or "").strip()
+                        pct = r.get("行业-涨跌幅")
+                        if name and pct is not None:
+                            rows.append({"板块名称": name, "涨跌幅": pct})
+        return pd.DataFrame(rows) if rows else pd.DataFrame(columns=["板块名称", "涨跌幅"])
 
     async def fetch_industry_board(self, context: str, sort_key: str, desc: bool = True) -> Any:
         from quant.data.sources.ths import hyylb

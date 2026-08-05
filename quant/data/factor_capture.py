@@ -134,7 +134,7 @@ def capture_theme_mom(as_of: str, spot: pd.DataFrame | None = None) -> int:
     try:
         from quant.data.sources.interface import try_with_fallback
 
-        boards = try_with_fallback("market", "fetch_em_concept_boards")
+        boards = try_with_fallback("market", "fetch_concept_boards")
         if boards is None or boards.empty:
             return 0
         name_col = "板块名称" if "板块名称" in boards.columns else boards.columns[0]

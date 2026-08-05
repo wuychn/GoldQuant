@@ -38,9 +38,29 @@ class AkshareMarketSource:
         return with_limit("akshare", lambda: ak.stock_hot_rank_em())
 
     def fetch_em_concept_boards(self) -> Any:
+        """东财概念板块 → 统一返回 DataFrame(板块名称, 涨跌幅)。"""
         import akshare as ak
+        import pandas as pd
 
-        return with_limit("akshare", lambda: ak.stock_board_concept_name_em())
+        df = with_limit("akshare", lambda: ak.stock_board_concept_name_em())
+        if df is None or df.empty:
+            return pd.DataFrame(columns=["板块名称", "涨跌幅"])
+        # 归一列名
+        name_col = "板块名称" if "板块名称" in df.columns else df.columns[1]
+        pct_col = next((c for c in df.columns if "涨跌幅" in str(c)), None)
+        if not pct_col:
+            return pd.DataFrame(columns=["板块名称", "涨跌幅"])
+        return df[[name_col, pct_col]].rename(columns={name_col: "板块名称", pct_col: "涨跌幅"}).reset_index(drop=True)
+
+    async def fetch_concept_boards(self) -> Any:
+        """东财概念板块 → 统一返回 DataFrame(板块名称, 涨跌幅)。
+
+        与 ``fetch_em_concept_boards`` 同实现；统一接口名，业务层用
+        ``try_with_fallback("market", "fetch_concept_boards")`` 即可。
+        """
+        from fastapi.concurrency import run_in_threadpool
+
+        return await run_in_threadpool(self.fetch_em_concept_boards)
 
     # ---- 未实现接口：显式报错 ----
     async def fetch_zqxy(self, *, market_phase: str = "intraday") -> Any:
@@ -54,9 +74,6 @@ class AkshareMarketSource:
 
     async def fetch_hot_raw(self, limit: int) -> Any:
         raise NotImplementedError("akshare 未实现 fetch_hot_raw（可用 ths/default）")
-
-    async def fetch_concept_boards(self) -> Any:
-        raise NotImplementedError("akshare 未实现 fetch_concept_boards（可用 ths/default）")
 
     async def fetch_industry_board(self, context: str, sort_key: str, desc: bool = True) -> Any:
         raise NotImplementedError("akshare 未实现 fetch_industry_board（可用 ths/default）")
