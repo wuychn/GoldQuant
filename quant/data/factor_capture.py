@@ -103,21 +103,19 @@ def _sum_flow_5d(recs: list) -> float | None:
 def _fetch_flows_5d_batch(codes: list[str]) -> dict[str, float]:
     """批量取 5 日主力净流入：一次 ``asyncio.run`` 并发拉取，避免 per-call 起事件循环。
 
-    走 ``EnrichSource.fetch_stock_fund_flow_daily``（经 source，可换源）；东财限流
-    (eastmoney_max_concurrent) 内部已串行化。返回 {code: 净流入}（拉取失败/不足的不含）。
+    走 ``try_with_fallback_async("enrich", "fetch_stock_fund_flow_daily")``（数据驱动
+    fallback，yml 配置源顺序）；东财断时自动换源。返回 {code: 净流入}（失败/不足的不含）。
     """
     if not codes:
         return {}
     try:
         import asyncio
 
-        from quant.data.sources.factory import get_enrich_source
-
-        src = get_enrich_source()
+        from quant.data.sources.interface import try_with_fallback_async
 
         async def _gather() -> list:
             return await asyncio.gather(
-                *[src.fetch_stock_fund_flow_daily(c, days=10) for c in codes]
+                *[try_with_fallback_async("enrich", "fetch_stock_fund_flow_daily", symbol=c, days=10) for c in codes]
             )
 
         recs_list = asyncio.run(_gather())

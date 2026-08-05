@@ -50,7 +50,27 @@ class AkshareEnrichSource:
         raise NotImplementedError("akshare 未实现 fetch_stock_fund_flow（可用 ths/default）")
 
     async def fetch_stock_fund_flow_daily(self, symbol: str, *, days: int = 10) -> list[dict] | None:
-        raise NotImplementedError("akshare 未实现 fetch_stock_fund_flow_daily（可用 eastmoney/default）")
+        """个股资金流日线历史（akshare ``stock_individual_fund_flow``）。
+
+        东财 ``stock_individual_fund_flow`` 走 push2his（非 clist），与 ``zj`` 不同端点，
+        作为东财 ``zj`` 断时的 fallback。返回与东财 ``zj`` 同结构的 list[dict]。
+        """
+        import akshare as ak
+
+        def _call() -> list[dict] | None:
+            try:
+                code = str(symbol).strip()
+                market = "sh" if code.startswith(("6", "9", "5")) else "sz" if code.startswith(("0", "2", "3")) else "bj"
+                df = ak.stock_individual_fund_flow(stock=code, market=market)
+                if df is None or df.empty:
+                    return None
+                recs = dataframe_to_records(df)
+                return recs[-days:] if recs else None
+            except Exception as exc:  # noqa: BLE001
+                log_caught_error(logger, f"stock_enrich [资金流日线 akshare symbol={symbol}]", exc)
+                return None
+
+        return await asyncio.to_thread(_call)
 
     async def fetch_concept_fit_rank(self, symbol: str) -> list[dict[str, Any]]:
         raise NotImplementedError("akshare 未实现 fetch_concept_fit_rank（可用 ths/default）")
