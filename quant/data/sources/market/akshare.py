@@ -33,19 +33,37 @@ class AkshareMarketSource:
         return await run_in_threadpool(fetch_market_fund_flow_last, n)
 
     def fetch_em_hot_rank(self) -> Any:
-        import akshare as ak
+        """东财人气榜 → 统一 DataFrame(code: str, rank: float)。
 
-        return with_limit("akshare", lambda: ak.stock_hot_rank_em())
-
-    def fetch_em_concept_boards(self) -> Any:
-        """东财概念板块 → 统一返回 DataFrame(板块名称, 涨跌幅)。"""
+        原始返回中文列名（代码/当前排名），此处归一化；业务层直接读 code/rank。
+        """
         import akshare as ak
         import pandas as pd
+
+        from quant.data.sources.rate_limit import with_limit
+
+        df = with_limit("akshare", lambda: ak.stock_hot_rank_em())
+        if df is None or df.empty:
+            return pd.DataFrame(columns=["code", "rank"])
+        # 归一列名
+        code_col = "代码" if "代码" in df.columns else df.columns[1] if len(df.columns) > 1 else df.columns[0]
+        rank_col = "当前排名" if "当前排名" in df.columns else None
+        out = pd.DataFrame()
+        out["code"] = df[code_col].astype(str).str.strip() if code_col in df.columns else ""
+        out["rank"] = df[rank_col] if rank_col else range(1, len(df) + 1)
+        out["rank"] = pd.to_numeric(out["rank"], errors="coerce")
+        return out[["code", "rank"]]
+
+    def fetch_em_concept_boards(self) -> Any:
+        """东财概念板块 → 统一 DataFrame(板块名称, 涨跌幅)。"""
+        import akshare as ak
+        import pandas as pd
+
+        from quant.data.sources.rate_limit import with_limit
 
         df = with_limit("akshare", lambda: ak.stock_board_concept_name_em())
         if df is None or df.empty:
             return pd.DataFrame(columns=["板块名称", "涨跌幅"])
-        # 归一列名
         name_col = "板块名称" if "板块名称" in df.columns else df.columns[1]
         pct_col = next((c for c in df.columns if "涨跌幅" in str(c)), None)
         if not pct_col:

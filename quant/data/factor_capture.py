@@ -1,42 +1,59 @@
-"""因子 PIT 快照采集：hot / flow / theme（基本面见 fundamental_pit）。"""
+"""PIT 因子快照采集：hot_rank / fund_flow / theme_mom。
+
+所有 facade 返回统一 schema——业务层不解析源差异：
+- fetch_em_hot_rank → DataFrame(code, rank)
+- fetch_spot → DataFrame(code, name, open, high, low, close, pre_close, volume, amount, turnover_rate, float_mv, total_mv)
+- fetch_concept_boards → DataFrame(板块名称, 涨跌幅)
+- fetch_stock_fund_flow_daily → list[dict]，每条含 'main_net_inflow'(元)
+"""
 
 from __future__ import annotations
 
-import sys
+import logging
+from typing import Any
 
 import numpy as np
 import pandas as pd
 
-from quant.data.factor_snapshots import write_fund_flow_snapshot, write_hot_rank_snapshot, write_theme_snapshot
+from quant.data.factor_snapshots import (
+    write_fund_flow_snapshot,
+    write_hot_rank_snapshot,
+    write_theme_snapshot,
+)
+
+logger = logging.getLogger(__name__)
 
 
-def _num(v: object) -> float | None:
+def _num(v) -> float | None:
     try:
+        if v is None or v == "":
+            return None
         f = float(v)
-        return f if f == f and abs(f) < 1e12 else None
+        return f if f == f else None
     except (TypeError, ValueError):
         return None
 
 
 def capture_hot_rank(as_of: str) -> int:
-    """东财人气榜 → 截面 rank z-score。"""
+    """东财人气榜 → 截面 rank z-score。
+
+    facade 返回 DataFrame(code, rank)，业务层直接用，不解析列名。
+    """
     try:
         from quant.data.sources.interface import try_with_fallback
 
         df = try_with_fallback("market", "fetch_em_hot_rank")
     except Exception as e:
-        print(f"[WARN] hot_rank 拉取失败: {e}", file=sys.stderr)
+        print(f"[WARN] hot_rank 拉取失败: {e}", file=sys.stderr if False else None) or logger.warning("hot_rank: %s", e)
         return 0
     if df is None or df.empty:
         return 0
-    code_col = "代码" if "代码" in df.columns else df.columns[1]
-    rank_col = "当前排名" if "当前排名" in df.columns else None
     rows_raw: list[tuple[str, float]] = []
-    for i, r in df.iterrows():
-        code = str(r.get(code_col, "")).strip()
+    for _, r in df.iterrows():
+        code = str(r.get("code", "")).strip()
         if not code:
             continue
-        rank = _num(r.get(rank_col)) if rank_col else float(i + 1)
+        rank = _num(r.get("rank"))
         if rank is None:
             continue
         rows_raw.append((code, rank))
@@ -50,15 +67,16 @@ def capture_hot_rank(as_of: str) -> int:
 
 
 def capture_fund_flow(as_of: str, spot: pd.DataFrame, universe_codes: list[str] | None = None) -> int:
-    """主力 5 日净流入 / 流通市值（universe 优先，限流保护）。"""
+    """主力 5 日净流入 / 流通市值（universe 优先，限流保护）。
+
+    spot 由 facade 统一返回 DataFrame(code, float_mv, ...)，业务层直接用。
+    """
     if spot is None or spot.empty:
         return 0
-    code_col = "code" if "code" in spot.columns else "代码"
-    mv_col = "float_mv" if "float_mv" in spot.columns else "流通市值"
     mv_map: dict[str, float] = {}
     for _, r in spot.iterrows():
-        code = str(r.get(code_col, "")).strip()
-        mv = _num(r.get(mv_col))
+        code = str(r.get("code", "")).strip()
+        mv = _num(r.get("float_mv"))
         if code and mv and mv > 0:
             mv_map[code] = mv
     targets = universe_codes or list(mv_map.keys())
@@ -82,29 +100,27 @@ def capture_fund_flow(as_of: str, spot: pd.DataFrame, universe_codes: list[str] 
 
 
 def _sum_flow_5d(recs: list) -> float | None:
-    """资金流日线近 5 根主力净流入合计（元）；不足 5 根或全 0 返回 None。"""
+    """资金流日线近 5 根主力净流入合计（元）；不足 5 根或全 0 返回 None。
+
+    facade 统一返回 list[dict]，每条含 'main_net_inflow'(元)。
+    """
     recs = recs or []
     if len(recs) < 5:
         return None
-    from quant.market.fund_flow import amount_to_yuan
-
     total = 0.0
     for r in recs[-5:]:
-        for k in ("主力净流入-净额", "净额", "净流入"):
-            v = r.get(k)
-            if v is not None:
-                yuan = amount_to_yuan(v)
-                if yuan is not None:
-                    total += yuan
-                    break
+        v = r.get("main_net_inflow")
+        if v is not None:
+            yuan = _num(v)
+            if yuan is not None:
+                total += yuan
     return total if total != 0 else None
 
 
 def _fetch_flows_5d_batch(codes: list[str]) -> dict[str, float]:
-    """批量取 5 日主力净流入：一次 ``asyncio.run`` 并发拉取，避免 per-call 起事件循环。
+    """批量取 5 日主力净流入：一次 asyncio.run 并发拉取，避免 per-call 起事件循环。
 
-    走 ``try_with_fallback_async("enrich", "fetch_stock_fund_flow_daily")``（数据驱动
-    fallback，yml 配置源顺序）；东财断时自动换源。返回 {code: 净流入}（失败/不足的不含）。
+    走 try_with_fallback_async，fallback 顺序由 yml 决定。
     """
     if not codes:
         return {}
@@ -130,21 +146,20 @@ def _fetch_flows_5d_batch(codes: list[str]) -> dict[str, float]:
 
 
 def capture_theme_mom(as_of: str, spot: pd.DataFrame | None = None) -> int:
-    """概念板块 5 日涨幅分位 → 个股 theme_mom（PIT 当日板块榜）。"""
+    """概念板块 5 日涨幅分位 → 个股 theme_mom（PIT 当日板块榜）。
+
+    facade 返回 DataFrame(板块名称, 涨跌幅)，业务层直接用。
+    """
     try:
         from quant.data.sources.interface import try_with_fallback
 
         boards = try_with_fallback("market", "fetch_concept_boards")
         if boards is None or boards.empty:
             return 0
-        name_col = "板块名称" if "板块名称" in boards.columns else boards.columns[0]
-        pct_col = next((c for c in boards.columns if "涨跌幅" in str(c)), None)
-        if not pct_col:
-            return 0
         board_pct = {
-            str(r[name_col]): _num(r[pct_col])
+            str(r["板块名称"]): _num(r["涨跌幅"])
             for _, r in boards.iterrows()
-            if _num(r[pct_col]) is not None
+            if _num(r["涨跌幅"]) is not None
         }
         if len(board_pct) < 5:
             return 0
@@ -158,10 +173,9 @@ def capture_theme_mom(as_of: str, spot: pd.DataFrame | None = None) -> int:
             from quant.data.fetch import fetch_spot_em
 
             spot = fetch_spot_em()
-        code_col = "code" if "code" in spot.columns else "代码"
         rows: list[dict] = []
         for _, r in spot.iterrows():
-            code = str(r.get(code_col, "")).strip()
+            code = str(r.get("code", "")).strip()
             if not code:
                 continue
             concepts = _stock_concepts(code)
@@ -176,21 +190,16 @@ def capture_theme_mom(as_of: str, spot: pd.DataFrame | None = None) -> int:
             write_theme_snapshot(as_of, rows)
         return len(rows)
     except Exception as e:
-        print(f"[WARN] theme_mom 采集失败: {e}", file=sys.stderr)
+        print(f"[WARN] theme_mom 失败: {e}", file=sys.stderr)
         return 0
 
 
 def _stock_concepts(code: str) -> list[str]:
     from quant.services.concept_cache import get_stock_concept_cache
 
-    try:
-        cache = get_stock_concept_cache()
-        hit, concepts = cache.lookup(code)
-        if hit and concepts:
-            return concepts
-    except Exception:
-        pass
-    return []
+    cache = get_stock_concept_cache()
+    concepts, _ = cache.lookup(code)
+    return concepts or []
 
 
 def capture_all_factor_snapshots(

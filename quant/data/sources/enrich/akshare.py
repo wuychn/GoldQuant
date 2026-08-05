@@ -52,8 +52,7 @@ class AkshareEnrichSource:
     async def fetch_stock_fund_flow_daily(self, symbol: str, *, days: int = 10) -> list[dict] | None:
         """个股资金流日线历史（akshare ``stock_individual_fund_flow``）。
 
-        东财 ``stock_individual_fund_flow`` 走 push2his（非 clist），与 ``zj`` 不同端点，
-        作为东财 ``zj`` 断时的 fallback。返回与东财 ``zj`` 同结构的 list[dict]。
+        facade 统一返回 list[dict]，每条含 main_net_inflow(元)。
         """
         import akshare as ak
 
@@ -65,6 +64,10 @@ class AkshareEnrichSource:
                 if df is None or df.empty:
                     return None
                 recs = dataframe_to_records(df)
+                # 归一：统一 main_net_inflow 键
+                for r in recs:
+                    if isinstance(r, dict):
+                        r["main_net_inflow"] = r.get("主力净流入-净额")
                 return recs[-days:] if recs else None
             except Exception as exc:  # noqa: BLE001
                 log_caught_error(logger, f"stock_enrich [资金流日线 akshare symbol={symbol}]", exc)

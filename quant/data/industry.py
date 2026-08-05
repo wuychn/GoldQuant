@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
 from pathlib import Path
-from typing import Any
 
 import pandas as pd
 
@@ -16,7 +14,7 @@ def _industry_dir() -> Path:
 
 
 def write_industry_snapshot(date_str: str, mapping: dict[str, str]) -> None:
-    """写某日行业 PIT 快照（{code: 行业} → parquet）。"""
+    """写某日行业 PIT 快照（{code: 行业} → parquet，列 date/code/industry）。"""
     if not mapping:
         return
     d = _industry_dir()
@@ -32,26 +30,26 @@ def read_industry_snapshot(as_of: str) -> dict[str, str]:
     d = _industry_dir()
     if not d.is_dir():
         return {}
-    # 同目录及更早年份中 date <= as_of 的最近文件
     candidates: list[Path] = []
     for p in sorted(d.rglob("*.parquet"), reverse=True):
-        stem = p.stem  # YYYY-MM-DD
+        stem = p.stem
         if stem <= as_of:
             candidates.append(p)
             break
     if not candidates:
         return {}
     df = pd.read_parquet(candidates[0])
-    if df.empty or "code" not in df.columns:
+    if df.empty or "code" not in df.columns or "industry" not in df.columns:
         return {}
-    return dict(zip(df["code"].astype(str).str.strip(), df.get("industry", df.get("行业", pd.Series())).astype(str).str.strip()))
+    return dict(zip(df["code"].astype(str).str.strip(), df["industry"].astype(str).str.strip()))
 
 
 def fetch_current_industry_map() -> dict[str, str]:
     """拉取全市场行业映射（供 update_daily 当日落库）。
 
-    走 ``try_with_fallback("market", "fetch_industry_map")``——fallback 顺序由 yml 决定
-    （如 ``[sina, eastmoney]``），不在业务层硬编码源名。全失败返回空记日志。
+    走 ``try_with_fallback("market", "fetch_industry_map")``——所有源实现
+    统一返回 ``dict[str, str]``（{code: 行业}），业务层直接用。
+    全失败返回空记日志。
     """
     from quant.data.sources.interface import try_with_fallback
 
@@ -62,14 +60,7 @@ def fetch_current_industry_map() -> dict[str, str]:
 
         logging.getLogger(__name__).error("行业映射全部源失败: %s", e)
         return {}
-    if isinstance(result, dict):  # 新浪等返回 {code: industry}
+    # facade 统一返回 dict[str, str]；做一次清洗保证格式
+    if isinstance(result, dict):
         return {str(k).strip(): str(v).strip() for k, v in result.items() if k and v}
-    if isinstance(result, list):  # 东财返回 rows
-        out: dict[str, str] = {}
-        for r in result:
-            code = str(r.get("代码") or r.get("code") or r.get("股票代码") or "").strip()
-            ind = str(r.get("行业") or r.get("class") or r.get("板块") or "").strip()
-            if code and ind:
-                out[code] = ind
-        return out
     return {}

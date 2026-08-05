@@ -32,12 +32,26 @@ class EastmoneyEnrichSource:
         return await asyncio.to_thread(_call)
 
     async def fetch_stock_fund_flow_daily(self, symbol: str, *, days: int = 10) -> list[dict] | None:
-        """个股资金流日线（东财 ``zj``）；返回最近 ``days`` 条；失败/空返回 ``None``。"""
+        """个股资金流日线（东财 ``zj``）；返回 list[dict]，每条含 main_net_inflow(元)。
+
+        facade 统一返回 list[dict]，业务层读 main_net_inflow，不解析源列名。
+        """
         try:
             rows = await asyncio.to_thread(zj, symbol)
             if not isinstance(rows, list) or not rows:
                 return None
-            return rows[-days:]
+            # 归一：各源行 dict 含不同键名 → 统一 main_net_inflow(元)
+            out: list[dict] = []
+            for r in rows:
+                if not isinstance(r, dict):
+                    continue
+                v = None
+                for k in ("主力净流入-净额", "净额", "净流入", "main_net_inflow"):
+                    if k in r:
+                        v = r[k]
+                        break
+                out.append({**r, "main_net_inflow": v})
+            return out[-days:] if out else None
         except Exception as exc:  # noqa: BLE001
             log_caught_error(logger, f"stock_enrich [资金流日线 symbol={symbol!r}]", exc)
             return None

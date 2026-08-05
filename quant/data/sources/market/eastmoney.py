@@ -30,7 +30,19 @@ class EastmoneyMarketSource:
         return fetch_em_industry_board()
 
     def fetch_industry_map(self) -> Any:
-        return self.fetch_em_industry_map()
+        """统一接口：行业映射 → dict[str, str]（{code: 行业}）。"""
+        from quant.data.sources.eastmoney.industry import fetch_em_industry_board
+
+        rows = fetch_em_industry_board()
+        out: dict[str, str] = {}
+        if not rows:
+            return out
+        for r in rows:
+            code = str(r.get("代码") or r.get("code") or r.get("股票代码") or "").strip()
+            ind = str(r.get("行业") or r.get("板块") or "").strip()
+            if code and ind:
+                out[code] = ind
+        return out
 
     def fetch_stop_resume(self, date: str) -> Any:
         """当日停复牌信息（东财 ``stock_tfp_em``）→ {代码: {停牌时间, 停牌截止, 停牌原因}}。"""
