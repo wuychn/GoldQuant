@@ -94,17 +94,12 @@ def build_news_body(raw: dict) -> str:
     else:
         news_list = [payload]
     user = json.dumps({"news": news_list}, ensure_ascii=False)[:140000]
-    summary = call_llm(prompt_news(), user, max_tokens=2500)
+    summary = call_llm(prompt_news(), user, max_tokens=8000)
     # 落摘要供盘前引用
     if "综合解读" in summary:
         tail = summary.split("综合解读", 1)[-1]
         write_news_summary(f"综合解读{tail.strip()[:800]}")
-    # 推送只保留精简版：截到合理长度
-    text = summary.strip()
-    if len(text) > 1800:
-        text = text[:1800] + "…"
-    return text
-
+    return summary.strip()
 
 def build_pre_market_body(raw: dict) -> str:
     payload = unwrap_payload(raw) if isinstance(raw, dict) else {}
