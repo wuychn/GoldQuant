@@ -527,6 +527,7 @@ def refresh_fundamental_pit_incremental(
     new_codes_only: bool = False,
     rotate: bool = False,
     codes: list[str] | None = None,
+    progress_every: int = 50,
 ) -> tuple[int, int]:
     """刷新 fundamental_pit。
 
@@ -552,7 +553,9 @@ def refresh_fundamental_pit_incremental(
         pending = codes if limit <= 0 else codes[:limit]
     ok, fail = 0, 0
     batch: list[dict] = []
-    for code in pending:
+    n = len(pending)
+    t0 = time.time()
+    for i, code in enumerate(pending, 1):
         rows: list[dict] = []
         for attempt in range(retries):
             try:
@@ -570,6 +573,15 @@ def refresh_fundamental_pit_incremental(
             batch = []
         if sleep > 0:
             time.sleep(sleep)
+        if progress_every > 0 and (i == 1 or i % progress_every == 0 or i == n):
+            elapsed = max(time.time() - t0, 1e-6)
+            rate = i / elapsed
+            eta = (n - i) / rate if rate > 0 else 0.0
+            print(
+                f"  [fundamental_pit] 进度 {i}/{n} ({i / max(n, 1):.1%})  "
+                f"ok={ok} fail={fail}  {elapsed:.0f}s  {rate:.2f}码/s  ETA {eta:.0f}s",
+                flush=True,
+            )
     if batch:
         write_fundamental_pit(batch)
     return ok, fail

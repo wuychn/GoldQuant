@@ -538,6 +538,8 @@ def main() -> None:
     )
     args = ap.parse_args()
 
+    from common.progress_log import log_progress, log_progress_done, log_progress_error, log_progress_start
+
     if args.req_interval:
         from common.utils.source_headers import set_eastmoney_interval
 
@@ -547,9 +549,14 @@ def main() -> None:
         else:
             lo, hi = int(parts[0]), int(parts[1])
         set_eastmoney_interval(lo, hi)
-        print(f"东财请求间隔: {lo},{hi}s")
+        print(f"东财请求间隔: {lo},{hi}s", flush=True)
 
     end = args.end or cn_now().strftime("%Y-%m-%d")
+    log_progress_start(
+        "build_daily",
+        "开始",
+        detail=f"start={args.start} end={end} workers={args.workers}",
+    )
     do_gap_fill = False
     plans: list[tuple[str, str, str]] = []
 
@@ -561,7 +568,7 @@ def main() -> None:
             f"重试 {len(todo)} 只"
         )
         if not todo:
-            print("无待重试 code，退出")
+            log_progress_done("build_daily", "成功", detail="无待重试 code，跳过")
             return
         codes = list(todo)
         plans = [(c, args.start, end) for c in todo]
@@ -712,12 +719,12 @@ def main() -> None:
 
     # 后复权因子（默认开；--no-adj 跳过）：增量补拉缺失码
     if not args.no_adj:
-        print(f"\n=== 检查复权因子 ===")
+        print("\n=== 检查复权因子 ===", flush=True)
         _refresh_adj_all(codes)
-        print("=== build_daily 全部完成 ===")
+        log_progress_done("build_daily", "成功", detail="含复权因子")
     else:
-        print("\n=== --no-adj 跳过复权因子 ===")
-        print("=== build_daily 全部完成（不含复权因子）===")
+        print("\n=== --no-adj 跳过复权因子 ===", flush=True)
+        log_progress_done("build_daily", "成功", detail="不含复权因子（--no-adj）")
 
 
 if __name__ == "__main__":

@@ -16,12 +16,15 @@ from pathlib import Path
 
 import pandas as pd
 
+from common.progress_log import log_progress, log_progress_done, log_progress_error, log_progress_start
 from quant.data.adjust import detect_ex_dividend_codes, refresh_adj_for_codes
 from quant.data.calendar import is_trading_day
 from quant.data.fetch import fetch_index, fetch_spot_em, fetch_trade_calendar
 from quant.data.store import read_daily_raw, write_calendar, write_daily_raw, write_index_daily
 from quant.store.paths import quant_home
 from common.timeutil import cn_now
+
+_SCOPE = "update_daily"
 
 
 def _pending_path() -> Path:
@@ -164,17 +167,19 @@ def main() -> None:
 
     today = args.date or cn_now().strftime("%Y-%m-%d")
     if not is_trading_day(__import__("datetime").date.fromisoformat(today)):
-        print(f"{today} 非交易日，跳过")
+        log_progress(_SCOPE, "非交易日，跳过", detail=today)
+        log_progress_done(_SCOPE, "成功", detail="skipped non-trading day")
         return
 
-    print(f"=== update_daily {today} 开始 ===")
+    log_progress_start(_SCOPE, "开始", detail=today)
 
     # 1. 全市场当日 spot（经 DailySource facade；默认新浪直连 20s 全量含市值，东财 spot_em
     #    走 clist 58 页易断——换源只改 quant.yml data.sources.daily）
     try:
+        log_progress(_SCOPE, "拉取 spot …")
         spot = fetch_spot_em()
     except Exception as e:
-        print(f"[FATAL] spot 拉取失败（{type(e).__name__}: {e}），当日数据将缺失且无法补回", file=sys.stderr)
+        log_progress_error(_SCOPE, "spot 拉取失败", detail=f"{type(e).__name__}: {e}")
         sys.exit(2)
 
     spot["date"] = today
@@ -238,8 +243,9 @@ def main() -> None:
     try:
         cal = fetch_trade_calendar()
         write_calendar(cal)
-    except Exception:
-        pass
+        log_progress(_SCOPE, "交易日历已刷新", detail=f"{len(cal)} 天")
+    except Exception as e:  # noqa: BLE001
+        print(f"[WARN] 交易日历刷新失败: {e}", file=sys.stderr, flush=True)
 
     # 5. 行业 PIT 快照（供中性化 / 组合约束）——失败即时记 pending，下次运行先重试
     _update_industry(today, pend)
@@ -305,7 +311,7 @@ def main() -> None:
     if n_pend:
         print(f"[INFO] 待重试 {n_pend} 项（指数 {pend.get('indices')}，行业 "
               f"{pend.get('industry')}）→ 下次 update_daily 自动补", file=sys.stderr)
-    print(f"=== update_daily {today} 完成 ===")
+    log_progress_done(_SCOPE, "成功", detail=today)
 
 
 if __name__ == "__main__":

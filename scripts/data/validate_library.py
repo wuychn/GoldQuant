@@ -28,6 +28,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from common.progress_log import log_progress_done, log_progress_error, log_progress_start
 from quant.data.schema import INDEX_DAILY_COLUMNS
 from quant.data.store import (
     read_adj_factor,
@@ -41,6 +42,7 @@ JUMP_PCT = 28.0          # 后复权单日跳空阈值：合法 A 股涨停/跌�
 ADJ_COVER_MIN = 0.90     # adj_factor 覆盖率红线
 CAL_COVER_MIN = 0.90     # per-code 日历覆盖 WARN 线
 INDEX_CODES = ("000300", "000905", "000852")
+_SCOPE = "validate_library"
 
 FAILS: list[str] = []
 WARNS: list[str] = []
@@ -162,85 +164,94 @@ def main() -> None:
     args = ap.parse_args()
 
     home = Path(args.home).expanduser() if args.home else None
+    log_progress_start(_SCOPE, "开始", detail=f"home={home or '当前'} [{args.start},{args.end}]")
     # 全部检查（含 read_index_daily / read_adj_factor / load_no_bar_map）都须在
     # override 上下文内，否则 --home 只作用于前三读、其余读错目录。
     ctx = override_quant_home(home) if home else __import__("contextlib").nullcontext()
-    with ctx:
-        daily = read_daily_raw()
-        adj = read_adj_factor()
-        cal = read_calendar()
+    try:
+        with ctx:
+            daily = read_daily_raw()
+            adj = read_adj_factor()
+            cal = read_calendar()
 
-        print(f"=== 校验 home: {home or '当前'}  窗口 [{args.start}, {args.end}] ===\n")
+            print(f"=== 校验 home: {home or '当前'}  窗口 [{args.start}, {args.end}] ===\n")
 
-        # [1] 基础
-        print("[1] 基础")
-        if daily.empty:
-            _note("FAIL", "daily_raw 为空")
-        else:
-            n_code = daily["code"].astype(str).nunique()
-            if "name" in daily.columns:
-                name_fill = daily["name"].fillna("").astype(str).str.strip().ne("").mean()
+            # [1] 基础
+            print("[1] 基础")
+            if daily.empty:
+                _note("FAIL", "daily_raw 为空")
             else:
-                name_fill = 0.0  # build_daily 的 stock_zh_a_hist 行无 name 列
-            print(f"  [OK]   daily_raw: {len(daily):,} 行 / {n_code} 码 / "
-                  f"{daily['date'].min()} ~ {daily['date'].max()}")
-            print(f"  [INF]  name 非空率 {name_fill:.1%}（ST 过滤健康度；低则依赖 name_snapshot）")
-        print(f"  [INF]  calendar {len(cal)} 天 · adj_factor {0 if adj is None or adj.empty else len(adj)} 行")
-
-        # [2] 完整性
-        print("\n[2] 完整性")
-        if not daily.empty and adj is not None and not adj.empty:
-            adj_codes = set(adj["code"].astype(str))
-            raw_codes = set(daily["code"].astype(str))
-            cov = len(adj_codes & raw_codes) / max(len(raw_codes), 1)
-            if cov >= ADJ_COVER_MIN:
-                print(f"  [OK]   adj_factor 覆盖 {cov:.1%} ({len(adj_codes & raw_codes)}/{len(raw_codes)})")
-            else:
-                _note("FAIL", f"adj_factor 覆盖 {cov:.1%} <{ADJ_COVER_MIN:.0%}（须先补复权因子，否则除权假跳空）")
-        elif daily.empty:
-            pass
-        else:
-            _note("FAIL", "adj_factor 为空（须先跑 build_daily 的 _refresh_adj_all 或 refresh_adj_for_codes）")
-        # 历史段缺列覆盖（build_daily 的 stock_zh_a_hist 行缺；backfill_daily_meta 补）
-        for c, label, min_ok in (
-            ("float_mv", "市值(float_mv)覆盖", 0.5),
-            ("pre_close", "pre_close 覆盖", 0.9),
-        ):
-            if c in daily.columns:
-                cov = daily[c].notna().mean()
-                if cov >= min_ok:
-                    print(f"  [OK]   {label} {cov:.1%}")
+                n_code = daily["code"].astype(str).nunique()
+                if "name" in daily.columns:
+                    name_fill = daily["name"].fillna("").astype(str).str.strip().ne("").mean()
                 else:
-                    _note("WARN", f"{label} {cov:.1%} <{min_ok:.0%}（历史段缺列，可跑 backfill_daily_meta）")
-            else:
-                _note("WARN", f"{label} 列缺失（可跑 backfill_daily_meta 补）")
-        _check_index()
-        if not daily.empty and cal:
-            _check_calendar_coverage(daily, cal, args.start, args.end)
+                    name_fill = 0.0  # build_daily 的 stock_zh_a_hist 行无 name 列
+                print(f"  [OK]   daily_raw: {len(daily):,} 行 / {n_code} 码 / "
+                      f"{daily['date'].min()} ~ {daily['date'].max()}")
+                print(f"  [INF]  name 非空率 {name_fill:.1%}（ST 过滤健康度；低则依赖 name_snapshot）")
+            print(f"  [INF]  calendar {len(cal)} 天 · adj_factor {0 if adj is None or adj.empty else len(adj)} 行")
 
-        # [3] 正确性
-        print("\n[3] 正确性")
-        if daily.empty:
-            pass
-        else:
-            dup = daily.duplicated(subset=["code", "date"]).sum()
-            if dup == 0:
-                print("  [OK]   重复 (code,date): 0")
+            # [2] 完整性
+            print("\n[2] 完整性")
+            if not daily.empty and adj is not None and not adj.empty:
+                adj_codes = set(adj["code"].astype(str))
+                raw_codes = set(daily["code"].astype(str))
+                cov = len(adj_codes & raw_codes) / max(len(raw_codes), 1)
+                if cov >= ADJ_COVER_MIN:
+                    print(f"  [OK]   adj_factor 覆盖 {cov:.1%} ({len(adj_codes & raw_codes)}/{len(raw_codes)})")
+                else:
+                    _note("FAIL", f"adj_factor 覆盖 {cov:.1%} <{ADJ_COVER_MIN:.0%}（须先补复权因子，否则除权假跳空）")
+            elif daily.empty:
+                pass
             else:
-                _note("FAIL", f"重复 (code,date): {dup}")
-            _check_price_sanity(daily)
-            _check_adj_jumps(daily)
+                _note("FAIL", "adj_factor 为空（须先跑 build_daily 的 _refresh_adj_all 或 refresh_adj_for_codes）")
+            # 历史段缺列覆盖（build_daily 的 stock_zh_a_hist 行缺；backfill_daily_meta 补）
+            for c, label, min_ok in (
+                ("float_mv", "市值(float_mv)覆盖", 0.5),
+                ("pre_close", "pre_close 覆盖", 0.9),
+            ):
+                if c in daily.columns:
+                    cov = daily[c].notna().mean()
+                    if cov >= min_ok:
+                        print(f"  [OK]   {label} {cov:.1%}")
+                    else:
+                        _note("WARN", f"{label} {cov:.1%} <{min_ok:.0%}（历史段缺列，可跑 backfill_daily_meta）")
+                else:
+                    _note("WARN", f"{label} 列缺失（可跑 backfill_daily_meta 补）")
+            _check_index()
+            if not daily.empty and cal:
+                _check_calendar_coverage(daily, cal, args.start, args.end)
 
-    # 汇总
-    print("\n=== 结果 ===")
-    if FAILS:
-        print(f"发现问题: {len(FAILS)} 项 FAIL（需处理）+ {len(WARNS)} 项 WARN（可查）")
-        for f in FAILS:
-            print(f"  FAIL  {f}")
-        sys.exit(1)
-    print(f"通过 ✓（{len(WARNS)} 项 WARN 提示，可查可不查）")
-    for w in WARNS:
-        print(f"  WARN  {w}")
+            # [3] 正确性
+            print("\n[3] 正确性")
+            if daily.empty:
+                pass
+            else:
+                dup = daily.duplicated(subset=["code", "date"]).sum()
+                if dup == 0:
+                    print("  [OK]   重复 (code,date): 0")
+                else:
+                    _note("FAIL", f"重复 (code,date): {dup}")
+                _check_price_sanity(daily)
+                _check_adj_jumps(daily)
+
+        # 汇总
+        print("\n=== 结果 ===")
+        if FAILS:
+            print(f"发现问题: {len(FAILS)} 项 FAIL（需处理）+ {len(WARNS)} 项 WARN（可查）")
+            for f in FAILS:
+                print(f"  FAIL  {f}")
+            log_progress_error(_SCOPE, "失败", detail=f"{len(FAILS)} FAIL + {len(WARNS)} WARN")
+            sys.exit(1)
+        print(f"通过 ✓（{len(WARNS)} 项 WARN 提示，可查可不查）")
+        for w in WARNS:
+            print(f"  WARN  {w}")
+        log_progress_done(_SCOPE, "成功", detail=f"{len(WARNS)} WARN")
+    except SystemExit:
+        raise
+    except Exception as e:
+        log_progress_error(_SCOPE, "失败", detail=f"{type(e).__name__}: {e}")
+        raise
 
 
 if __name__ == "__main__":

@@ -163,7 +163,7 @@ QUANT_HOME=~/.quant/daily poetry run python -m scripts.data.update_daily
 poetry run python -m scripts.data.merge_library --offline ~/.quant/offline --daily ~/.quant/daily --out ~/.quant
 ```
 
-**③ 补缺**（合并后跑；默认可重跑且只拉仍缺市值的码）— 补历史段 `float_mv/total_mv`（精确市值）+ `pre_close`：
+**③ 补缺**（合并后跑；默认可重跑且只拉仍缺市值的码；边拉边落盘可断点续传）— 补历史段 `float_mv/total_mv`（精确市值）+ `pre_close`：
 
 ```powershell
 poetry run python -m scripts.data.backfill_daily_meta --home ~/.quant
@@ -305,7 +305,7 @@ poetry run python -m scripts.data.maintain --start 2021-01-01
 | `poetry run python -m scripts.data.verify_daily` | `--sample` `--start` `--end` | 数据校验 |
 | `poetry run python -m scripts.data.audit_data_health` | `--probe-code` | 健康审计 |
 | `poetry run python -m scripts.data.merge_library` | `--offline` `--daily` `--out` | 合并离线库与每日增量 |
-| `poetry run python -m scripts.data.backfill_daily_meta` | `--home` `--codes` `--workers` `--req-interval` `--force` | 补历史段 float_mv/total_mv/pre_close（默认只拉缺市值码） |
+| `poetry run python -m scripts.data.backfill_daily_meta` | `--home` `--codes` `--workers` `--req-interval` `--force` `--flush-every` | 补历史段 float_mv/total_mv/pre_close（默认只拉缺市值码；边拉边落盘可续传） |
 | `poetry run python -m scripts.data.validate_library` | `--home` `--start` `--end` | 离线库完整性与正确性校验（含复权连续性） |
 
 ### 5.6a 离线库与每日增量合并（`merge_library`）
@@ -340,8 +340,9 @@ poetry run python -m scripts.data.validate_library --home ~/.quant
 **`backfill_daily_meta`**：用 `stock_value_em`（东财估值分析，逐日历史）把历史段 `float_mv/total_mv`
 **精确**补上、`pre_close` 用 `close[t-1]` 推导。参数 `--home`（quant-home 根）/ `--codes`
 （只补指定码）/ `--workers` / `--req-interval` / `--force`（默认只拉仍缺市值的码；`--force`
-才全量重拉）。写回对已有非空值 `fillna` 不覆盖。运行时会打印计划（总共/已齐跳过/待执行）
-与周期性进度（ok/fail/速率/ETA），失败码带原因。**name 刻意不灌历史**（当前名灌历史 = ST 过滤前视），PIT 名靠 `update_daily` 的
+才全量重拉）/ `--flush-every`（默认 50：每成功 N 只落盘，中断后重跑只补未落盘缺码）。
+写回对已有非空值 `fillna` 不覆盖。运行时会打印计划（总共/已齐跳过/待执行）
+与周期性进度（ok/fail/flushed/速率/ETA），失败码带原因。**name 刻意不灌历史**（当前名灌历史 = ST 过滤前视），PIT 名靠 `update_daily` 的
 `name_snapshot` 逐日积累；确需当前名兜底用 `--fill-name`。日常增量不需要补（spot 当天自带这些列）；
 每周五 `maintain` 后可选重跑兜住新入库票。
 

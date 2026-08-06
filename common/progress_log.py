@@ -45,6 +45,11 @@ def log_progress(scope: str, message: str, *, detail: str = "") -> None:
     _logger.info(line)
 
 
+def log_progress_start(scope: str, message: str = "开始", *, detail: str = "") -> None:
+    """任务起点（有始有终的「始」）。"""
+    log_progress(scope, message, detail=detail)
+
+
 def log_progress_count(scope: str, message: str, current: int, total: int, *, detail: str = "") -> None:
     """带 ``current/total`` 的进度行。"""
     suffix = f" ({current}/{total})"
@@ -52,7 +57,8 @@ def log_progress_count(scope: str, message: str, current: int, total: int, *, de
     log_progress(scope, message, detail=extra)
 
 
-def log_progress_done(scope: str, message: str = "完成", *, detail: str = "") -> None:
+def log_progress_done(scope: str, message: str = "成功", *, detail: str = "") -> None:
+    """任务终点成功（有始有终的「终」）。"""
     log_progress(scope, message, detail=detail)
 
 

@@ -24,12 +24,19 @@ import sys
 from datetime import date, timedelta
 from pathlib import Path
 
+from common.progress_log import (
+    log_progress,
+    log_progress_done,
+    log_progress_error,
+    log_progress_start,
+)
+from common.timeutil import cn_now
 from quant.data.calendar import is_trading_day
 from quant.data.store import read_calendar, read_daily_raw
-from common.timeutil import cn_now
 
 DEFAULT_START = "2021-01-01"
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_SCOPE = "maintain"
 
 
 def _prev_trading_day(d: date) -> date | None:
@@ -50,32 +57,25 @@ def scan_missing_dates(as_of: str) -> list[str]:
 
 
 def _invoke_module(module: str, extra: list[str]) -> int:
-    """子进程跑 ``python -m <module> <extra>``，返回退出码；失败不抛。"""
+    """子进程跑 ``python -m <module> <extra>``，实时透传输出；返回退出码。"""
     cmd = [sys.executable, "-m", module, *extra]
-    print(f"[maintain] 执行: {' '.join(cmd)}")
+    log_progress(_SCOPE, "执行子任务", detail=" ".join(cmd))
     env = os.environ.copy()
     env.setdefault("PYTHONIOENCODING", "utf-8")
     try:
-        proc = subprocess.run(
-            cmd,
-            cwd=str(_PROJECT_ROOT),
-            env=env,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
+        # 不 capture：子进程进度实时可见（build_daily 长跑尤其需要）
+        proc = subprocess.run(cmd, cwd=str(_PROJECT_ROOT), env=env)
     except Exception as e:  # noqa: BLE001
-        print(f"[maintain][FATAL] 子进程启动失败 {module}: {e}", file=sys.stderr)
+        log_progress_error(_SCOPE, "子进程启动失败", detail=f"{module}: {e}")
         return -1
-    if proc.stdout:
-        print(proc.stdout)
     if proc.returncode != 0:
-        tail = " | ".join(
-            line.strip() for line in (proc.stderr or proc.stdout or "").strip().splitlines()[-3:]
-            if line.strip()
-        ) or "(无输出)"
-        print(f"[maintain][WARN] {module} 退出码={proc.returncode} — {tail}", file=sys.stderr)
+        log_progress_error(
+            _SCOPE,
+            "子任务失败",
+            detail=f"{module} 退出码={proc.returncode}",
+        )
+    else:
+        log_progress(_SCOPE, "子任务成功", detail=module)
     return proc.returncode
 
 
@@ -89,39 +89,51 @@ def main() -> None:
     if not is_trading_day(today):
         prev = _prev_trading_day(today)
         if prev is None:
-            print("找不到交易日，退出")
+            log_progress_error(_SCOPE, "找不到交易日，退出")
             sys.exit(1)
         today = prev
     as_of = today.isoformat()
-    print(f"[maintain] 维护日 as_of={as_of}")
+    log_progress_start(_SCOPE, "开始", detail=f"as_of={as_of} start={args.start}")
 
+    fails: list[str] = []
     daily = read_daily_raw(end=as_of)
     if daily.empty:
-        print(f"[maintain] 离线库为空 → 全量建库 build_daily --start {args.start} --end {as_of}")
-        _invoke_module("scripts.data.build_daily", ["--start", args.start, "--end", as_of])
+        log_progress(_SCOPE, "离线库为空 → 全量建库", detail=f"build_daily --start {args.start} --end {as_of}")
+        rc = _invoke_module("scripts.data.build_daily", ["--start", args.start, "--end", as_of])
+        if rc != 0:
+            fails.append("build_daily(全量)")
     else:
+        log_progress(_SCOPE, "扫描交易日缺口 …")
         missing = scan_missing_dates(as_of)
         if missing:
-            print(
-                f"[maintain] 检测到 {len(missing)} 个缺口交易日: "
-                f"{missing[0]} ~ {missing[-1]} → 回补（--ignore-existing）"
+            log_progress(
+                _SCOPE,
+                "检测到缺口，回补",
+                detail=f"{len(missing)} 日 {missing[0]}~{missing[-1]}",
             )
-            _invoke_module(
+            rc = _invoke_module(
                 "scripts.data.build_daily",
                 ["--start", missing[0], "--end", missing[-1], "--ignore-existing"],
             )
+            if rc != 0:
+                fails.append("build_daily(补漏)")
         else:
-            print("[maintain] 历史数据完整，无缺口")
+            log_progress(_SCOPE, "历史数据完整，无缺口")
 
-    print(f"[maintain] 当日增量 update_daily --date {as_of}")
-    _invoke_module("scripts.data.update_daily", ["--date", as_of])
+    log_progress(_SCOPE, "当日增量", detail=f"update_daily --date {as_of}")
+    rc = _invoke_module("scripts.data.update_daily", ["--date", as_of])
+    if rc != 0:
+        fails.append("update_daily")
 
-    # 重试失败清单（按 code 维度）：scan_missing_dates 按"日期缺口"补不到单只 code 的偶发失败，
-    # 这里把 build_failed.jsonl 里的失败 code 也纳入自愈（成功移除、失败 retries+1、达阈值 dead）。
-    print("[maintain] 重试失败清单 build_daily --retry-failed")
-    _invoke_module("scripts.data.build_daily", ["--retry-failed"])
+    log_progress(_SCOPE, "重试失败清单", detail="build_daily --retry-failed")
+    rc = _invoke_module("scripts.data.build_daily", ["--retry-failed"])
+    if rc != 0:
+        fails.append("build_daily(retry-failed)")
 
-    print("[maintain] 完成")
+    if fails:
+        log_progress_error(_SCOPE, "完成但有失败步骤", detail=", ".join(fails))
+        sys.exit(1)
+    log_progress_done(_SCOPE, "成功", detail=f"as_of={as_of}")
 
 
 if __name__ == "__main__":

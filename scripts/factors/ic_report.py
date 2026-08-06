@@ -8,13 +8,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
 
+from common.progress_log import log_progress_done, log_progress_error, log_progress_start
 from quant.factors.ic import factor_ic_report, ic_decay
 from quant.factors.registry import REGISTRY
+
+_SCOPE = "ic_report"
 
 
 def _factor_corr_matrix(rows, names: list[str]) -> dict[str, dict[str, float]]:
@@ -85,66 +89,74 @@ def main() -> None:
     ap.add_argument("--out", default=None, help="默认 $QUANT_HOME/reports/ic/ic.json")
     args = ap.parse_args()
 
+    log_progress_start(_SCOPE, "开始", detail=args.panel)
     try:
-        import pandas as pd
+        try:
+            import pandas as pd
 
-        df = pd.read_parquet(args.panel)
-    except ImportError:
-        print("需要 pyarrow")
-        return
+            df = pd.read_parquet(args.panel)
+        except ImportError:
+            log_progress_error(_SCOPE, "失败", detail="需要 pyarrow")
+            sys.exit(1)
 
-    from quant.factors.base import FactorRow
+        from quant.factors.base import FactorRow
 
-    rows: list[FactorRow] = []
-    for _, r in df.iterrows():
-        meta = {}
-        if "meta" in r and r["meta"] is not None:
-            meta = json.loads(r["meta"]) if isinstance(r["meta"], str) else dict(r["meta"])
-        # 读取序列化的多档前瞻收益（build_panel.py 写为独立 fwd 列），供 ic_decay 使用
-        if "fwd" in r and r["fwd"] is not None:
-            fwd = json.loads(r["fwd"]) if isinstance(r["fwd"], str) else dict(r["fwd"])
-            if fwd:
-                meta["fwd"] = {int(k): float(v) for k, v in fwd.items()}
-        rows.append(
-            FactorRow(
-                date=str(r["date"]),
-                code=str(r["code"]),
-                name=str(r.get("name", "")),
-                industry=str(r.get("industry", "")),
-                log_mcap=float(r["log_mcap"]) if r.get("log_mcap") is not None else None,
-                raw=json.loads(r["raw"]) if isinstance(r["raw"], str) else dict(r["raw"]),
-                neutral=json.loads(r["neutral"]) if isinstance(r["neutral"], str) else dict(r["neutral"]),
-                forward_return_pct=float(r["forward_return_pct"]) if r.get("forward_return_pct") is not None else None,
-                meta=meta,
+        rows: list[FactorRow] = []
+        for _, r in df.iterrows():
+            meta = {}
+            if "meta" in r and r["meta"] is not None:
+                meta = json.loads(r["meta"]) if isinstance(r["meta"], str) else dict(r["meta"])
+            # 读取序列化的多档前瞻收益（build_panel.py 写为独立 fwd 列），供 ic_decay 使用
+            if "fwd" in r and r["fwd"] is not None:
+                fwd = json.loads(r["fwd"]) if isinstance(r["fwd"], str) else dict(r["fwd"])
+                if fwd:
+                    meta["fwd"] = {int(k): float(v) for k, v in fwd.items()}
+            rows.append(
+                FactorRow(
+                    date=str(r["date"]),
+                    code=str(r["code"]),
+                    name=str(r.get("name", "")),
+                    industry=str(r.get("industry", "")),
+                    log_mcap=float(r["log_mcap"]) if r.get("log_mcap") is not None else None,
+                    raw=json.loads(r["raw"]) if isinstance(r["raw"], str) else dict(r["raw"]),
+                    neutral=json.loads(r["neutral"]) if isinstance(r["neutral"], str) else dict(r["neutral"]),
+                    forward_return_pct=float(r["forward_return_pct"]) if r.get("forward_return_pct") is not None else None,
+                    meta=meta,
+                )
             )
-        )
 
-    names = REGISTRY.names()
-    if not args.out:
-        from quant.store.paths import reports_dir
+        names = REGISTRY.names()
+        if not args.out:
+            from quant.store.paths import reports_dir
 
-        args.out = str(reports_dir("ic") / "ic.json")
+            args.out = str(reports_dir("ic") / "ic.json")
 
-    report = {
-        "factors": factor_ic_report(rows, names),
-        "ic_decay": {f: ic_decay(rows, f) for f in names},
-        "corr_matrix": _factor_corr_matrix(rows, names),
-        "autocorr_lag1": _factor_autocorr(rows, names, lag=1),
-    }
-    # 高相关对告警
-    high_corr = []
-    mat = report["corr_matrix"]
-    for i, a in enumerate(names):
-        for b in names[i + 1 :]:
-            c = abs(mat.get(a, {}).get(b, 0.0))
-            if c > 0.8:
-                high_corr.append({"a": a, "b": b, "corr": c})
-    report["high_corr_pairs"] = high_corr
+        report = {
+            "factors": factor_ic_report(rows, names),
+            "ic_decay": {f: ic_decay(rows, f) for f in names},
+            "corr_matrix": _factor_corr_matrix(rows, names),
+            "autocorr_lag1": _factor_autocorr(rows, names, lag=1),
+        }
+        # 高相关对告警
+        high_corr = []
+        mat = report["corr_matrix"]
+        for i, a in enumerate(names):
+            for b in names[i + 1 :]:
+                c = abs(mat.get(a, {}).get(b, 0.0))
+                if c > 0.8:
+                    high_corr.append({"a": a, "b": b, "corr": c})
+        report["high_corr_pairs"] = high_corr
 
-    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
-    with open(args.out, "w", encoding="utf-8") as f:
-        json.dump(report, f, ensure_ascii=False, indent=2)
-    print(json.dumps(report, ensure_ascii=False, indent=2))
+        Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+        with open(args.out, "w", encoding="utf-8") as f:
+            json.dump(report, f, ensure_ascii=False, indent=2)
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        log_progress_done(_SCOPE, "成功", detail=args.out)
+    except SystemExit:
+        raise
+    except Exception as e:
+        log_progress_error(_SCOPE, "失败", detail=f"{type(e).__name__}: {e}")
+        raise
 
 
 if __name__ == "__main__":

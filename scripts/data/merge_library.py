@@ -34,6 +34,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from common.progress_log import log_progress, log_progress_done, log_progress_error, log_progress_start
 from quant.data.schema import ADJ_FACTOR_COLUMNS, DAILY_RAW_COLUMNS
 from quant.data.store import (
     read_adj_factor,
@@ -45,6 +46,8 @@ from quant.data.store import (
     write_index_daily,
 )
 from quant.store.paths import override_quant_home, quant_home
+
+_SCOPE = "merge_library"
 
 # 这四个由专门的合并逻辑处理；其余 store 下产物（universe/industry/name_snapshot/
 # fundamental_pit/fund_flow/hot_rank/theme_mom/listing_dates...）走目录并集复制。
@@ -165,21 +168,35 @@ def main() -> None:
     args = ap.parse_args()
 
     offline, daily, out = Path(args.offline).expanduser(), Path(args.daily).expanduser(), Path(args.out).expanduser()
+    log_progress_start(
+        _SCOPE,
+        "开始",
+        detail=f"offline={offline} daily={daily} out={out}",
+    )
     for name, p in (("offline", offline), ("daily", daily)):
         if not (p / "store").is_dir():
-            print(f"[FATAL] {name} 不是有效的 quant-home（缺 store/）: {p}", file=sys.stderr)
+            log_progress_error(_SCOPE, "失败", detail=f"{name} 不是有效 quant-home（缺 store/）: {p}")
             sys.exit(1)
-    out.mkdir(parents=True, exist_ok=True)
-    print(f"[merge] offline={offline}  daily={daily}  out={out}")
-
-    _merge_daily_raw(offline, daily, out)
-    _merge_adj(offline, daily, out)
-    _merge_index(offline, daily, out)
-    _merge_calendar(offline, daily, out)
-    _copy_snapshots(offline, daily, out)
-
-    print("\n合并完成。建议随后运行校验：")
-    print(f"    python -m scripts.data.validate_library --home {out}")
+    try:
+        out.mkdir(parents=True, exist_ok=True)
+        log_progress(_SCOPE, "合并 daily_raw …")
+        _merge_daily_raw(offline, daily, out)
+        log_progress(_SCOPE, "合并 adj_factor …")
+        _merge_adj(offline, daily, out)
+        log_progress(_SCOPE, "合并 index_daily …")
+        _merge_index(offline, daily, out)
+        log_progress(_SCOPE, "合并 calendar …")
+        _merge_calendar(offline, daily, out)
+        log_progress(_SCOPE, "复制 snapshot …")
+        _copy_snapshots(offline, daily, out)
+        log_progress_done(
+            _SCOPE,
+            "成功",
+            detail=f"out={out}；建议 validate_library --home {out}",
+        )
+    except Exception as e:
+        log_progress_error(_SCOPE, "失败", detail=f"{type(e).__name__}: {e}")
+        raise
 
 
 if __name__ == "__main__":

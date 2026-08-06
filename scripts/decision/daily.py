@@ -39,7 +39,10 @@ from quant.ops.push import push_text
 from quant.portfolio.target import TargetPortfolio
 from quant.store.paths import reports_dir
 from quant.store.state import get_account, get_holdings, update_holding_exit_meta
+from common.progress_log import log_progress, log_progress_done, log_progress_error, log_progress_start
 from common.timeutil import cn_now
+
+_SCOPE = "decision.daily"
 
 
 def _prev_trading_day(d: date) -> date | None:
@@ -78,6 +81,7 @@ def build_today_card(
     print(f"决策日 {as_of} | universe={len(uni)}")
 
     panel_dates = hist_dates[-5:] if len(hist_dates) > 5 else hist_dates
+    log_progress(_SCOPE, "构建因子面板 …", detail=f"{len(panel_dates)} 日")
     panel = build_panel(panel_dates, daily=daily)
     rows_today = [r for r in panel if r.date == as_of]
     if not rows_today:
@@ -270,114 +274,123 @@ def main() -> None:
 
     do_paper = not args.no_paper
     as_of = _resolve_as_of(args.date)
-    card, daily, prices, names, uni, _alpha, _attribution = build_today_card(
-        as_of,
-        n_enter=args.n_enter,
-        n_exit=args.n_exit,
-        max_positions=args.max_positions,
-        use_paper_holdings=do_paper,
-    )
-
-    text = card_to_text(card)
-    print(text)
-
-    funnel = FunnelTracker()
-    funnel.observe_universe(as_of, uni)
-    funnel.observe_target(as_of, list(card.target_weights.keys()))
-    for a in card.actions:
-        if a.side == "buy":
-            funnel.observe_buy(as_of, a.code)
-    fsum = funnel.summary()
-    print("\n漏斗:", fsum)
-
-    # 作战池：alpha top N → 落盘供 T+1 盘中择时买入（T 晚不撮合买入）
-    alpha_ranked = sorted(_alpha.items(), key=lambda kv: -kv[1])
-    _tgt = card.target_weights or {}
-    _uncalibrated = card.weights_source not in ("walk_forward", "static")
-    _alpha_note = " [默认权重，未校准]" if _uncalibrated else ""
-    battle_pool = [
-        {
-            "code": c,
-            "name": names.get(c) or c,
-            "alpha": round(float(a), 4),
-            "alpha_note": _alpha_note.strip() or None,
-            "rank": i + 1,
-            "target_weight": round(float(_tgt.get(c, 0.0)), 4),
-            "why": attribution_summary(_attribution.get(c, [])),
-        }
-        for i, (c, a) in enumerate(alpha_ranked[: args.battle_pool_size])
-    ]
-    nxt = next_trading_day(date.fromisoformat(as_of))
-    target_date = nxt.isoformat() if nxt else as_of
-    if do_paper:
-        with paper_home_context():
-            _pool_path = write_battle_pool(target_date, battle_pool)
-        print(f"作战池({target_date}): {len(battle_pool)} 只 → {_pool_path}")
-
-    out_dir = Path(args.out) if args.out else reports_dir("decision")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / f"decision_{as_of}.txt").write_text(text, encoding="utf-8")
-
-    payload: dict = {
-        "date": as_of,
-        "weights_source": card.weights_source,
-        "target": card.target_weights,
-        "actions": [
-            {
-                "code": a.code,
-                "name": names.get(a.code) or a.code,
-                "side": a.side,
-                "target_weight": a.target_weight,
-                "current_weight": a.current_weight,
-                "delta_weight": a.delta_weight,
-                "reason": a.reason,
-            }
-            for a in card.actions
-            if a.side != "hold"
-        ],
-        "exit_signals": card.exit_signals,
-        "funnel": fsum,
-        "alpha_top": card.alpha_top[:10],
-        "battle_pool": battle_pool,
-        "battle_pool_date": target_date,
-    }
-
-    if do_paper:
-        # 晚间只定计划，不撮合任何交易：算持仓 stop 价 → sell_watch（T+1 盘中监控）
-        with paper_home_context():
-            holdings = get_holdings()
-        sell_rows = _build_sell_watch(card, daily, names, as_of, holdings)
-        with paper_home_context():
-            _sw_path = write_sell_watch(target_date, sell_rows)
-        print(f"卖出监控({target_date}): {len(sell_rows)} 只 → {_sw_path}")
-        payload["sell_watch"] = sell_rows
-        # 账户/持仓快照（只读，不撮合）
-        with paper_home_context():
-            _acc = get_account()
-        # 写 T+1 风控日内基准（T 晚总资产 ≈ T+1 开盘前），避免盘中首次调用把带亏总资产当基准
-        with paper_home_context():
-            from quant.execution.risk_gate import set_day_start_equity
-
-            set_day_start_equity(float(_acc.get("总资产") or 0), target_date=target_date)
-        payload["paper"] = {
-            "account": _acc,
-            "holdings": [
-                {"code": str(h.get("股票代码")), "name": h.get("股票名称"),
-                 "shares": h.get("持仓股数"), "cost": h.get("买入价")}
-                for h in holdings
-            ],
-        }
-        (out_dir / f"paper_{as_of}.json").write_text(
-            json.dumps(payload["paper"], ensure_ascii=False, indent=2), encoding="utf-8"
+    log_progress_start(_SCOPE, "开始", detail=f"as_of={as_of}")
+    try:
+        card, daily, prices, names, uni, _alpha, _attribution = build_today_card(
+            as_of,
+            n_enter=args.n_enter,
+            n_exit=args.n_exit,
+            max_positions=args.max_positions,
+            use_paper_holdings=do_paper,
         )
-        if not args.no_push and not args.dry_run:
-            body = build_decision_push_body(payload)
-            push_text("晚间复盘", body, mode="daily_decision", push=True)
 
-    (out_dir / f"decision_{as_of}.json").write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    print(f"已写入 {out_dir}")
+        text = card_to_text(card)
+        print(text)
+
+        funnel = FunnelTracker()
+        funnel.observe_universe(as_of, uni)
+        funnel.observe_target(as_of, list(card.target_weights.keys()))
+        for a in card.actions:
+            if a.side == "buy":
+                funnel.observe_buy(as_of, a.code)
+        fsum = funnel.summary()
+        print("\n漏斗:", fsum)
+
+        # 作战池：alpha top N → 落盘供 T+1 盘中择时买入（T 晚不撮合买入）
+        alpha_ranked = sorted(_alpha.items(), key=lambda kv: -kv[1])
+        _tgt = card.target_weights or {}
+        _uncalibrated = card.weights_source not in ("walk_forward", "static")
+        _alpha_note = " [默认权重，未校准]" if _uncalibrated else ""
+        battle_pool = [
+            {
+                "code": c,
+                "name": names.get(c) or c,
+                "alpha": round(float(a), 4),
+                "alpha_note": _alpha_note.strip() or None,
+                "rank": i + 1,
+                "target_weight": round(float(_tgt.get(c, 0.0)), 4),
+                "why": attribution_summary(_attribution.get(c, [])),
+            }
+            for i, (c, a) in enumerate(alpha_ranked[: args.battle_pool_size])
+        ]
+        nxt = next_trading_day(date.fromisoformat(as_of))
+        target_date = nxt.isoformat() if nxt else as_of
+        if do_paper:
+            with paper_home_context():
+                _pool_path = write_battle_pool(target_date, battle_pool)
+            print(f"作战池({target_date}): {len(battle_pool)} 只 → {_pool_path}")
+
+        out_dir = Path(args.out) if args.out else reports_dir("decision")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / f"decision_{as_of}.txt").write_text(text, encoding="utf-8")
+
+        payload: dict = {
+            "date": as_of,
+            "weights_source": card.weights_source,
+            "target": card.target_weights,
+            "actions": [
+                {
+                    "code": a.code,
+                    "name": names.get(a.code) or a.code,
+                    "side": a.side,
+                    "target_weight": a.target_weight,
+                    "current_weight": a.current_weight,
+                    "delta_weight": a.delta_weight,
+                    "reason": a.reason,
+                }
+                for a in card.actions
+                if a.side != "hold"
+            ],
+            "exit_signals": card.exit_signals,
+            "funnel": fsum,
+            "alpha_top": card.alpha_top[:10],
+            "battle_pool": battle_pool,
+            "battle_pool_date": target_date,
+        }
+
+        if do_paper:
+            # 晚间只定计划，不撮合任何交易：算持仓 stop 价 → sell_watch（T+1 盘中监控）
+            with paper_home_context():
+                holdings = get_holdings()
+            sell_rows = _build_sell_watch(card, daily, names, as_of, holdings)
+            with paper_home_context():
+                _sw_path = write_sell_watch(target_date, sell_rows)
+            print(f"卖出监控({target_date}): {len(sell_rows)} 只 → {_sw_path}")
+            payload["sell_watch"] = sell_rows
+            # 账户/持仓快照（只读，不撮合）
+            with paper_home_context():
+                _acc = get_account()
+            # 写 T+1 风控日内基准（T 晚总资产 ≈ T+1 开盘前），避免盘中首次调用把带亏总资产当基准
+            with paper_home_context():
+                from quant.execution.risk_gate import set_day_start_equity
+
+                set_day_start_equity(float(_acc.get("总资产") or 0), target_date=target_date)
+            payload["paper"] = {
+                "account": _acc,
+                "holdings": [
+                    {"code": str(h.get("股票代码")), "name": h.get("股票名称"),
+                     "shares": h.get("持仓股数"), "cost": h.get("买入价")}
+                    for h in holdings
+                ],
+            }
+            (out_dir / f"paper_{as_of}.json").write_text(
+                json.dumps(payload["paper"], ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            if not args.no_push and not args.dry_run:
+                body = build_decision_push_body(payload)
+                push_text("晚间复盘", body, mode="daily_decision", push=True)
+
+        (out_dir / f"decision_{as_of}.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        print(f"已写入 {out_dir}")
+        log_progress_done(_SCOPE, "成功", detail=as_of)
+    except SystemExit as e:
+        log_progress_error(_SCOPE, "失败", detail=str(e) or f"exit={e.code}")
+        raise
+    except Exception as e:
+        log_progress_error(_SCOPE, "失败", detail=f"{type(e).__name__}: {e}")
+        raise
 
 
 if __name__ == "__main__":

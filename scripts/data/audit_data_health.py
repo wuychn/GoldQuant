@@ -13,6 +13,10 @@ from __future__ import annotations
 import argparse
 import sys
 
+from common.progress_log import log_progress, log_progress_done, log_progress_error, log_progress_start
+
+_SCOPE = "audit_data_health"
+
 
 def _line(k: str, v) -> None:
     print(f"  {k:<30} {v}")
@@ -143,15 +147,26 @@ def main() -> None:
     ap.add_argument("--probe-code", default="000001", help="akshare name 列探测代码")
     args = ap.parse_args()
 
-    audit_dailies()
-    print()
-    audit_name_snapshot()
-    print()
-    audit_industry()
-    print()
-    audit_universe()
-    print()
-    probe_akshare_name(args.probe_code)
+    log_progress_start(_SCOPE, "开始", detail=f"probe-code={args.probe_code}")
+    try:
+        log_progress(_SCOPE, "审计 daily_raw / adj_factor …")
+        audit_dailies()
+        print()
+        log_progress(_SCOPE, "审计 name_snapshot …")
+        audit_name_snapshot()
+        print()
+        log_progress(_SCOPE, "审计 industry …")
+        audit_industry()
+        print()
+        log_progress(_SCOPE, "审计 universe …")
+        audit_universe()
+        print()
+        log_progress(_SCOPE, "探测 akshare name 列 …")
+        probe_akshare_name(args.probe_code)
+        log_progress_done(_SCOPE, "成功")
+    except Exception as e:
+        log_progress_error(_SCOPE, "失败", detail=f"{type(e).__name__}: {e}")
+        raise
 
 
 if __name__ == "__main__":
