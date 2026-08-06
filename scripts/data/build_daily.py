@@ -702,7 +702,12 @@ def main() -> None:
 
     # 后复权因子全量初始化（默认开；--no-adj 跳过）
     if not args.no_adj:
+        print(f"\n=== 开始拉复权因子（{len(codes)} 只，约 {len(codes) * 1.5 / 60:.0f} 分钟）===")
         _refresh_adj_all(codes)
+        print("=== build_daily 全部完成 ===")
+    else:
+        print("\n=== --no-adj 跳过复权因子 ===")
+        print("=== build_daily 全部完成（不含复权因子）===")
 
 
 if __name__ == "__main__":

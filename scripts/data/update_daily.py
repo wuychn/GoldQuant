@@ -156,6 +156,8 @@ def main() -> None:
         print(f"{today} 非交易日，跳过")
         return
 
+    print(f"=== update_daily {today} 开始 ===")
+
     # 1. 全市场当日 spot（经 DailySource facade；默认新浪直连 20s 全量含市值，东财 spot_em
     #    走 clist 58 页易断——换源只改 quant.yml data.sources.daily）
     try:
@@ -293,6 +295,7 @@ def main() -> None:
     if n_pend:
         print(f"[INFO] 待重试 {n_pend} 项（指数 {pend.get('indices')}，行业 "
               f"{pend.get('industry')}）→ 下次 update_daily 自动补", file=sys.stderr)
+    print(f"=== update_daily {today} 完成 ===")
 
 
 if __name__ == "__main__":
