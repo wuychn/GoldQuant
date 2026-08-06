@@ -15,26 +15,22 @@ from quant.data.schema import INDEX_DAILY_COLUMNS
 _LIMIT_MARKERS = ("429", "限流", "too many", "rate limit", "ratelimit", "throttl")
 
 
-def _retry(fn, *, retries: int = 4, base: float = 1.0, label: str = "", empty_ok: bool = False):
-    """指数退避重试：空数据或异常都重试；限流（异常消息含标记）退避加倍。
+def _retry(fn, *, retries: int = 4, base: float = 1.0, label: str = ""):
+    """指数退避重试：仅对**异常**重试；``fn()`` 成功返回空 → 直接返回空（不重试）。
 
-    第 i 次失败后 sleep ``base * 2**i``（1/2/4/8s），命中限流标记再 ×2。
-    成功返回非空 df；重试耗尽：
-      - 末次为真实异常 → 抛出
-      - 末次仅为空数据且 ``empty_ok=True`` → 返回空 DataFrame（供 hist 走退市回退）
-      - 末次为空且 ``empty_ok=False`` → 抛 ``返回空数据``
+    空数据是 API 的正常响应（新股在上市日前、停牌期间、退市股），不是错误，
+    重试毫无意义且浪费时间。只有网络异常/限流才重试。
+
+    第 i 次异常后 sleep ``base * 2**i``（1/2/4/8s），命中限流标记再 ×2。
+    返回：非空 df = 成功；空 df = API 正常但无数据；抛异常 = 重试耗尽仍失败。
     """
     last_exc: Exception | None = None
-    last_was_empty = False
     for i in range(retries + 1):
         try:
             df = fn()
-            if df is not None and not df.empty:
-                return df
-            last_was_empty = True
-            last_exc = RuntimeError(f"{label or 'fetch'} 返回空数据")
+            # API 成功：有数据就返回，空数据也直接返回（新股/停牌/退市 = 正常空）
+            return df if df is not None else pd.DataFrame()
         except Exception as e:  # noqa: BLE001
-            last_was_empty = False
             last_exc = e
         if i >= retries:
             break
@@ -42,8 +38,6 @@ def _retry(fn, *, retries: int = 4, base: float = 1.0, label: str = "", empty_ok
         mult = 2.0 if any(m in msg for m in _LIMIT_MARKERS) else 1.0
         time.sleep(base * (2 ** i) * mult)
     assert last_exc is not None
-    if empty_ok and last_was_empty:
-        return pd.DataFrame()
     raise last_exc
 
 

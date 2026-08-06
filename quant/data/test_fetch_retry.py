@@ -25,27 +25,26 @@ def test_retry_success_first_try(monkeypatch):
 
 
 def test_retry_empty_then_ok(monkeypatch):
-    """前几次返回空，最后非空 → 返回非空，中间有 sleep。"""
+    """空数据直接返回（不重试）——空是 API 正常响应（新股/停牌），不是错误。"""
     sleeps: list[float] = []
     monkeypatch.setattr("quant.data.sources.daily._shared.time.sleep", lambda s: sleeps.append(s))
-    seq = iter([pd.DataFrame(), pd.DataFrame(), pd.DataFrame({"a": [1]})])
 
-    df = _retry(lambda: next(seq), retries=4, base=1.0, label="t")
-    assert not df.empty
-    assert sleeps == [1.0, 2.0]  # i=0, i=1 各一次
+    df = _retry(lambda: pd.DataFrame(), retries=4, base=1.0, label="t")
+    assert df.empty
+    assert sleeps == []  # 空数据不重试
 
 
-def test_retry_exhausted_raises(monkeypatch):
-    """始终空 → 重试耗尽抛异常。"""
+def test_retry_empty_returns_empty_not_raises(monkeypatch):
+    """空数据直接返回空帧，不抛异常（空 = API 正常响应）。"""
     monkeypatch.setattr("quant.data.sources.daily._shared.time.sleep", lambda s: None)
-    with pytest.raises(Exception):
-        _retry(lambda: pd.DataFrame(), retries=2, base=0, label="t")
+    df = _retry(lambda: pd.DataFrame(), retries=2, base=0, label="t")
+    assert df.empty
 
 
 def test_retry_empty_ok_returns_empty(monkeypatch):
-    """empty_ok=True 时空数据耗尽返回空帧，不抛。"""
+    """empty_ok 参数已废弃（空数据不再重试，直接返回）。此测试验证兼容。"""
     monkeypatch.setattr("quant.data.sources.daily._shared.time.sleep", lambda s: None)
-    df = _retry(lambda: pd.DataFrame(), retries=2, base=0, label="hist x", empty_ok=True)
+    df = _retry(lambda: pd.DataFrame(), retries=2, base=0, label="hist x")
     assert df is not None and df.empty
 
 
