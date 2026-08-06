@@ -522,6 +522,23 @@ def main() -> None:
             return
         codes = list(todo)
         plans = [(c, args.start, end) for c in todo]
+        # 增量更新 listing_dates（retry 成功的码下次跑需要）
+        try:
+            from quant.data.listing import read_listing_map, build_listing_map_from_daily, write_listing_table
+
+            listing_map = read_listing_map()
+            daily = read_daily_raw(start=args.start, end=end)
+            if not daily.empty:
+                raw_codes = set(daily["code"].astype(str).str.strip())
+                missing = raw_codes - set(listing_map.keys())
+                if missing:
+                    new_map = build_listing_map_from_daily(
+                        daily[daily["code"].astype(str).str.strip().isin(missing)]
+                    )
+                    listing_map.update(new_map)
+                    write_listing_table(listing_map)
+        except Exception:  # noqa: BLE001
+            pass
     else:
         # 交易日历
         try:
