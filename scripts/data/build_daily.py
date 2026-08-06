@@ -571,20 +571,25 @@ def main() -> None:
             cal_local = read_calendar()
             listing_map: dict[str, str] = {}
             try:
-                from quant.data.listing import read_listing_map, write_listing_table
+                from quant.data.listing import read_listing_map
 
                 listing_map = read_listing_map()
             except Exception as e:  # noqa: BLE001
                 print(f"[WARN] 读取 listing_dates 失败: {e}", file=sys.stderr)
-            # listing_dates 为空 → 从 daily_raw 库首日构建并持久化
-            # （库首日 = 该码在离线库的首条行情日，精确度足够 build_daily 用：
-            #   早于 start 的码首日 = start，晚于 start 的码首日 ≈ 实际上市日）
-            if not listing_map and not daily.empty:
+            # listing_dates 增量更新：只补 daily_raw 中尚未记录的码（库首日 = 上市日近似）
+            # 避免每次全量重建（与 build_daily 的断点续传理念一致）
+            if not daily.empty:
                 from quant.data.listing import build_listing_map_from_daily, write_listing_table
 
-                listing_map = build_listing_map_from_daily(daily)
-                write_listing_table(listing_map)
-                print(f"listing_dates 从库首日构建: {len(listing_map)} 只（已持久化）")
+                raw_codes = set(daily["code"].astype(str).str.strip())
+                missing = raw_codes - set(listing_map.keys())
+                if missing:
+                    new_map = build_listing_map_from_daily(
+                        daily[daily["code"].astype(str).str.strip().isin(missing)]
+                    )
+                    listing_map.update(new_map)
+                    write_listing_table(listing_map)
+                    print(f"listing_dates 增量更新: +{len(new_map)} 只 → 共 {len(listing_map)} 只")
             plans = incomplete_fetch_plans(
                 codes,
                 start=args.start,
