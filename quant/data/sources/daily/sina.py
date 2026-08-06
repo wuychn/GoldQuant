@@ -97,17 +97,25 @@ def fetch_spot_sina() -> pd.DataFrame:
 
 
 def fetch_hist_sina(code: str, *, start: str, end: str, adjust: str = "") -> pd.DataFrame:
-    """新浪历史日 K（``stock_zh_a_daily``）→ daily_raw schema（无 name/pre_close/市值）。"""
+    """新浪历史日 K（``stock_zh_a_daily``）→ daily_raw schema（无 name/pre_close/市值）。
+
+    ``stock_zh_a_daily`` 内部拉 amount（流通股本）时对某些票（新股/退市/B股/三板）
+    返回非 JSON → demjson.decode 抛 'No value to decode'。这是确定性失败（非网络抖动），
+    不走 _retry 重试，直接返回空让 try_with_fallback fallback 到下一个源。
+    """
     import akshare as ak
 
-    df = _retry(
-        lambda: ak.stock_zh_a_daily(
+    _empty = pd.DataFrame(columns=["code", "date", "open", "high", "low", "close", "volume", "amount"])
+    try:
+        df = ak.stock_zh_a_daily(
             symbol=_sina_symbol(code),
             start_date=start.replace("-", ""), end_date=end.replace("-", ""),
             adjust=adjust,
-        ),
-        label=f"hist_sina {code}", retries=3,
-    )
+        )
+    except Exception:
+        return _empty
+    if df is None or df.empty:
+        return _empty
     n = len(df)
     out = pd.DataFrame()
     out["code"] = [str(code).strip()] * n
@@ -136,15 +144,19 @@ class SinaDailySource:
         """新浪指数日线（``stock_zh_index_daily``）→ INDEX_DAILY_COLUMNS。
 
         新浪一次返回全历史，这里按 [start,end] 裁剪。amount 新浪指数不含 → NaN。
+        与 fetch_hist 同理：确定性失败直接返回空，不走 _retry。
         """
         import akshare as ak
 
         from quant.data.schema import INDEX_DAILY_COLUMNS
 
-        df = _retry(
-            lambda: ak.stock_zh_index_daily(symbol=_index_symbol(code)),
-            label=f"index_sina {code}", retries=3,
-        )
+        _empty = pd.DataFrame(columns=list(INDEX_DAILY_COLUMNS))
+        try:
+            df = ak.stock_zh_index_daily(symbol=_index_symbol(code))
+        except Exception:
+            return _empty
+        if df is None or df.empty:
+            return _empty
         out = pd.DataFrame()
         n = len(df)
         out["code"] = [str(code).strip()] * n
