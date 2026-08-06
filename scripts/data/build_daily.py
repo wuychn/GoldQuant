@@ -133,30 +133,22 @@ def incomplete_fetch_plans(
     listing = listing_map or {}
     no_bar = no_bar_map if no_bar_map is not None else load_no_bar_map()
 
-    # 库内每只票的实际首日（上市日 fallback）：listing_map 有则用 listing_map，
-    # 没有则用 daily_raw 中的首条日期（新股上市前的日期不该当"缺日"）。
+    # 库内每只票的实际首日（listing_map 的 fallback）：
+    # listing_map 为空时，用 daily_raw 中该码首条日期作为期望下界。
     first_date_by_code: dict[str, str] = {}
     if daily is not None and not daily.empty:
         for c, g in daily.groupby(daily["code"].astype(str).str.strip()):
             first_date_by_code[c] = str(g["date"].min())
 
     def _lo(code: str) -> str:
-        # 优先 listing_map（精确 IPO 日），其次库首日（上市后的首条行情日）
+        # listing_map 有该码 → 以上市日为准（终决，不再 fallback）
         ld = listing.get(code)
-        if ld and ld > start:
-            return ld
+        if ld is not None:
+            return ld if ld > start else start
+        # listing_map 没有（新码/未入库）→ 用库首日
         fd = first_date_by_code.get(code)
-        # 库首日晚于 start 超过 7 个日历日 → 大概率新股（无 listing_map 时），
-        # 从库首日起算期望日，避免把上市前当"缺日"。小偏差（停牌/偶发缺日）仍按 start。
         if fd and fd > start:
-            from datetime import date, timedelta
-
-            try:
-                delta = (date.fromisoformat(fd[:10]) - date.fromisoformat(start[:10])).days
-            except ValueError:
-                delta = 0
-            if delta > 7:
-                return fd
+            return fd
         return start
 
     if not expected_all:
@@ -579,11 +571,20 @@ def main() -> None:
             cal_local = read_calendar()
             listing_map: dict[str, str] = {}
             try:
-                from quant.data.listing import read_listing_map
+                from quant.data.listing import read_listing_map, write_listing_table
 
                 listing_map = read_listing_map()
             except Exception as e:  # noqa: BLE001
-                print(f"[WARN] 读取 listing_dates 失败（按 start 起算）: {e}", file=sys.stderr)
+                print(f"[WARN] 读取 listing_dates 失败: {e}", file=sys.stderr)
+            # listing_dates 为空 → 从 daily_raw 库首日构建并持久化
+            # （库首日 = 该码在离线库的首条行情日，精确度足够 build_daily 用：
+            #   早于 start 的码首日 = start，晚于 start 的码首日 ≈ 实际上市日）
+            if not listing_map and not daily.empty:
+                from quant.data.listing import build_listing_map_from_daily, write_listing_table
+
+                listing_map = build_listing_map_from_daily(daily)
+                write_listing_table(listing_map)
+                print(f"listing_dates 从库首日构建: {len(listing_map)} 只（已持久化）")
             plans = incomplete_fetch_plans(
                 codes,
                 start=args.start,

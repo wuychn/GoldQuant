@@ -85,6 +85,10 @@ class IncompleteCodesTests(unittest.TestCase):
         self.assertEqual(got, ["000001"])
 
     def test_missing_head_days(self):
+        """库首日晚于 start → 视为新股上市日，上市前不计缺日（无 listing_map 时用库首日 fallback）。
+
+        若需检查 head 缺日，应传 listing_map 明确上市日 = start。
+        """
         rows = [("000001", d) for d in CAL[2:]]
         got = incomplete_codes(
             ["000001"],
@@ -92,6 +96,18 @@ class IncompleteCodesTests(unittest.TestCase):
             end="2026-07-24",
             daily=_daily(rows),
             calendar=CAL,
+        )
+        # 无 listing_map → 库首日 CAL[2] > start → 从 CAL[2] 起算 → 不缺
+        self.assertEqual(got, [])
+
+        # 传 listing_map 明确上市日 = start → head 缺日被检出
+        got = incomplete_codes(
+            ["000001"],
+            start="2026-07-20",
+            end="2026-07-24",
+            daily=_daily(rows),
+            calendar=CAL,
+            listing_map={"000001": "2026-07-20"},
         )
         self.assertEqual(got, ["000001"])
 
