@@ -259,20 +259,37 @@ def _probe_start(start: str, *, lookback_days: int = 90) -> str:
 
 
 def _mark_holes_as_no_bar(code: str, *, start: str, end: str, returned_dates: set[str]) -> int:
-    """成功拉到数据后：在返回区间内、日历有但源站未返回的交易日记为无行情豁免。"""
+    """成功拉到数据后：标记无行情豁免日。
+
+    两部分：
+    1. 数据跨度内部空洞（停牌日）——与旧逻辑一致。
+    2. 数据末尾到 end 的日期（退市/长期停牌后不再有数据）——如果 fetch_hist 返回的
+       max_date 远早于 end（>30 日历日），说明该码在 max_date 之后已无行情（退市或
+       长期停牌），标为豁免避免下次重复拉。30 天阈值排除限流截断（API 一次返回全量）。
+    """
     if not returned_dates:
         return 0
+    from datetime import date as _date
+
     cal = read_calendar()
     lo, hi = min(returned_dates), max(returned_dates)
-    # 仅标记「有返回覆盖的跨度」内部空洞，避免限流截断时误伤首尾
+    # 1. 跨度内部空洞（停牌）
     span_lo = max(start, lo)
     span_hi = min(end, hi)
     holes = {d for d in cal if span_lo <= d <= span_hi} - returned_dates
+    # 2. 尾部豁免：max_date 到 end 之间（退市/长期停牌后无数据）
+    try:
+        tail_gap = (_date.fromisoformat(end[:10]) - _date.fromisoformat(hi[:10])).days
+    except ValueError:
+        tail_gap = 0
+    if tail_gap > 30:
+        tail = {d for d in cal if hi < d <= end}
+        holes |= tail
     n = add_no_bar_dates(code, holes)
     if n:
         print(
             f"[INFO] {code} 检查区间 {start}~{end} 内记入无行情豁免 {n} 天"
-            f"（源站未返回，多为停牌）",
+            f"（数据末日 {hi}，停牌/退市后无数据）",
             file=sys.stderr,
         )
     return n
