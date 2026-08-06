@@ -149,12 +149,14 @@ def capture_theme_mom(as_of: str, spot: pd.DataFrame | None = None) -> int:
     """概念板块 5 日涨幅分位 → 个股 theme_mom（PIT 当日板块榜）。
 
     facade 返回 DataFrame(板块名称, 涨跌幅)，业务层直接用。
+    fetch_concept_boards 是 async 接口 → 用 try_with_fallback_async + asyncio.run。
     """
     try:
-        from quant.data.sources.interface import try_with_fallback
+        import asyncio
+        from quant.data.sources.interface import try_with_fallback_async
 
-        boards = try_with_fallback("market", "fetch_concept_boards")
-        if boards is None or boards.empty:
+        boards = asyncio.run(try_with_fallback_async("market", "fetch_concept_boards"))
+        if boards is None or (hasattr(boards, "empty") and boards.empty):
             return 0
         board_pct = {
             str(r["板块名称"]): _num(r["涨跌幅"])
