@@ -455,19 +455,29 @@ def _run_pull(
 
 
 def _refresh_adj_all(codes: list[str]) -> None:
-    """对所有代码全量拉后复权因子并体检覆盖率（修复 build_daily 不写 adj_factor 的 P0）。
+    """对缺少复权因子的代码补拉，已有则跳过（增量，不全量重拉）。
 
-    旧版 ``_build_one`` 只写不复权 daily_raw，导致 ``load_adjusted_daily`` 在新库返回
-    未复权价，除权日 raw close 假跳空（10 送 10 → 10 跌到 5）污染 mom/IC/ATR/回测。
+    旧版每次全量拉所有码（~5200 × 1.5s = 2 小时），即使库里已有也不跳过。
+    新版：读已有 adj_factor，只拉缺失的码。
     """
     from quant.data.adjust import refresh_adj_for_codes
     from quant.data.store import read_adj_factor, read_daily_raw
 
+    # 已有 adj 的码 → 跳过
     try:
-        n = refresh_adj_for_codes(codes)
-        print(f"复权因子: {n} 条")
+        existing = set(read_adj_factor()["code"].astype(str).str.strip().unique())
+    except Exception:  # noqa: BLE001
+        existing = set()
+    missing = [c for c in codes if c not in existing]
+    if not missing:
+        print(f"复权因子: 已全部有（{len(existing)} 只），跳过")
+        return
+    print(f"复权因子: 补拉缺失 {len(missing)}/{len(codes)} 只（已有 {len(existing)}）")
+    try:
+        n = refresh_adj_for_codes(missing)
+        print(f"复权因子: 新增 {n} 条")
     except Exception as e:  # noqa: BLE001
-        print(f"[WARN] 复权因子全量拉取失败: {e}", file=sys.stderr)
+        print(f"[WARN] 复权因子拉取失败: {e}", file=sys.stderr)
         return
     try:
         adj_codes = set(read_adj_factor()["code"].astype(str).unique())
@@ -700,9 +710,9 @@ def main() -> None:
         else:
             print("[轮2] 市场级日期完整，无缺口")
 
-    # 后复权因子全量初始化（默认开；--no-adj 跳过）
+    # 后复权因子（默认开；--no-adj 跳过）：增量补拉缺失码
     if not args.no_adj:
-        print(f"\n=== 开始拉复权因子（{len(codes)} 只，约 {len(codes) * 1.5 / 60:.0f} 分钟）===")
+        print(f"\n=== 检查复权因子 ===")
         _refresh_adj_all(codes)
         print("=== build_daily 全部完成 ===")
     else:
