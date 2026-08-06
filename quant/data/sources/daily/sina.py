@@ -97,10 +97,7 @@ def fetch_spot_sina() -> pd.DataFrame:
 
 
 def fetch_hist_sina(code: str, *, start: str, end: str, adjust: str = "") -> pd.DataFrame:
-    """新浪历史日 K（``stock_zh_a_daily``）→ daily_raw schema（无 name/pre_close/市值）。
-
-    兼容不同 akshare 版本：``date`` 可能是列也可能是索引（旧版设为索引）。
-    """
+    """新浪历史日 K（``stock_zh_a_daily``）→ daily_raw schema（无 name/pre_close/市值）。"""
     import akshare as ak
 
     df = _retry(
@@ -111,24 +108,18 @@ def fetch_hist_sina(code: str, *, start: str, end: str, adjust: str = "") -> pd.
         ),
         label=f"hist_sina {code}", retries=3,
     )
-    if df is None or df.empty:
-        return pd.DataFrame(columns=["code", "date", "open", "high", "low", "close", "volume", "amount"])
-    # 兼容：date 可能是列也可能是索引
-    if "date" not in df.columns:
-        df = df.reset_index()
-    if "date" not in df.columns:
-        # 仍无 date 列 → 数据异常，返回空
-        return pd.DataFrame(columns=["code", "date", "open", "high", "low", "close", "volume", "amount"])
     n = len(df)
     out = pd.DataFrame()
     out["code"] = [str(code).strip()] * n
     out["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
-    out["open"] = pd.to_numeric(df["open"], errors="coerce") if "open" in df.columns else pd.NA
-    out["high"] = pd.to_numeric(df["high"], errors="coerce") if "high" in df.columns else pd.NA
-    out["low"] = pd.to_numeric(df["low"], errors="coerce") if "low" in df.columns else pd.NA
-    out["close"] = pd.to_numeric(df["close"], errors="coerce") if "close" in df.columns else pd.NA
-    out["volume"] = pd.to_numeric(df["volume"], errors="coerce") if "volume" in df.columns else pd.NA
-    out["amount"] = pd.to_numeric(df["amount"], errors="coerce") if "amount" in df.columns else pd.NA
+    out["open"] = df["open"]
+    out["high"] = df["high"]
+    out["low"] = df["low"]
+    out["close"] = df["close"]
+    out["volume"] = df["volume"]
+    out["amount"] = df["amount"]
+    for c in ("open", "high", "low", "close", "volume", "amount"):
+        out[c] = pd.to_numeric(out[c], errors="coerce")
     return out
 
 
@@ -154,13 +145,6 @@ class SinaDailySource:
             lambda: ak.stock_zh_index_daily(symbol=_index_symbol(code)),
             label=f"index_sina {code}", retries=3,
         )
-        if df is None or df.empty:
-            return pd.DataFrame(columns=list(INDEX_DAILY_COLUMNS))
-        # 兼容：date 可能是列也可能是索引
-        if "date" not in df.columns:
-            df = df.reset_index()
-        if "date" not in df.columns:
-            return pd.DataFrame(columns=list(INDEX_DAILY_COLUMNS))
         out = pd.DataFrame()
         n = len(df)
         out["code"] = [str(code).strip()] * n
