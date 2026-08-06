@@ -43,12 +43,19 @@ def detect_ex_dividend_codes(latest_spot: pd.DataFrame, prev_close_map: dict[str
 
 
 def fetch_hfq_factor(code: str) -> pd.DataFrame:
-    """拉取单只后复权因子序列（新浪源，仅在除权时按需调用）。"""
+    """拉取单只后复权因子序列（新浪源，仅在除权时按需调用）。
+
+    兼容不同 akshare 版本：``date`` 可能是列也可能是索引；factor 列名可能不同。
+    """
     import akshare as ak
 
     df = ak.stock_zh_a_daily(symbol=_sina_symbol(code), adjust="hfq-factor")
     if df is None or df.empty:
         return pd.DataFrame(columns=["code", "date", "hfq_factor"])
+
+    # 兼容：date 可能是列也可能是索引（旧版 akshare 设为索引）
+    if "date" not in df.columns and "日期" not in df.columns:
+        df = df.reset_index()
 
     date_col = None
     factor_col = None
