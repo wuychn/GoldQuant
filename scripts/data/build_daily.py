@@ -221,6 +221,15 @@ def market_missing_dates(*, start: str, end: str) -> list[str]:
     return [d for d in scan_missing_dates(end) if d >= start]
 
 
+def _load_prefixes() -> list[str]:
+    """读 gates.symbol_pool.prefixes 配置。"""
+    from quant.config import load_quant_config
+
+    return (
+        (load_quant_config().get("gates") or {}).get("symbol_pool", {}).get("prefixes", ["60", "00", "30", "688"])
+    )
+
+
 # 代码表来源：stock_info_a_code_name（stockapi 稳定，不走 clist）；失败回退 spot_em
 def _all_codes() -> list[str]:
     from quant.data.fetch import fetch_a_code_name, fetch_spot_em
@@ -237,13 +246,7 @@ def _all_codes() -> list[str]:
         codes = df["code"].astype(str).str.strip().tolist()
 
     # 按配置的标的池前缀过滤（排除北交所 8xx/920、三板退市 4xx、B股 9xx）
-    from quant.config import load_quant_config
-
-    prefixes = (
-        (load_quant_config().get("gates") or {})
-        .get("symbol_pool", {})
-        .get("prefixes", ["60", "00", "30", "688"])
-    )
+    prefixes = _load_prefixes()
     filtered = [c for c in codes if str(c).strip().startswith(tuple(prefixes))]
     if len(filtered) < len(codes):
         print(f"前缀过滤: {len(codes)} → {len(filtered)} 只（保留 {prefixes}）")
@@ -599,6 +602,8 @@ def main() -> None:
             if not args.no_delisted:
                 try:
                     del_codes = fetch_delisted_codes()["code"].astype(str).str.strip().tolist()
+                    # 退市股也按前缀过滤（排除三板退市 4xx、B股 9xx）
+                    del_codes = [c for c in del_codes if c.startswith(tuple(_load_prefixes()))]
                     codes = list(dict.fromkeys(codes + del_codes))
                     print(f"退市股并入: +{len(del_codes)} → 代码总数 {len(codes)}")
                 except Exception as e:  # noqa: BLE001
