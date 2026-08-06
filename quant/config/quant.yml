@@ -20,9 +20,11 @@ gates:                          # 撮合与风控门禁
       partial_fill_enabled: true    # 单日成交额 ≤ 当日 amount×参与率（ADV）时分笔成交
       participation_rate: 0.1       # 买单 ADV 参与率封顶 10%
   symbol_pool:                  # 标的池过滤
-    prefixes:                   # 仅沪主 60 / 深主 00 / 创业板 30
+    prefixes:                   # 沪主 60 / 深主 00 / 创业板 30 / 科创板 688
     - '60'
     - '00'
+    - '30'
+    - '688'
     - '30'
     exclude_st: true               # 剔除 ST/*ST
   circuit_breaker:              # 大盘熔断

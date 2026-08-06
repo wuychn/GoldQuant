@@ -227,14 +227,27 @@ def _all_codes() -> list[str]:
 
     try:
         codes = fetch_a_code_name()
-        if codes:
-            return codes
     except Exception as e:  # noqa: BLE001
         print(f"[WARN] fetch_a_code_name 失败，回退 spot_em: {e}", file=sys.stderr)
-    df = fetch_spot_em()
-    if df.empty:
-        return []
-    return df["code"].astype(str).str.strip().tolist()
+        codes = []
+    if not codes:
+        df = fetch_spot_em()
+        if df.empty:
+            return []
+        codes = df["code"].astype(str).str.strip().tolist()
+
+    # 按配置的标的池前缀过滤（排除北交所 8xx/920、三板退市 4xx、B股 9xx）
+    from quant.config import load_quant_config
+
+    prefixes = (
+        (load_quant_config().get("gates") or {})
+        .get("symbol_pool", {})
+        .get("prefixes", ["60", "00", "30", "688"])
+    )
+    filtered = [c for c in codes if str(c).strip().startswith(tuple(prefixes))]
+    if len(filtered) < len(codes):
+        print(f"前缀过滤: {len(codes)} → {len(filtered)} 只（保留 {prefixes}）")
+    return filtered
 
 
 def _probe_start(start: str, *, lookback_days: int = 90) -> str:
