@@ -124,14 +124,25 @@ def refresh_adj_for_codes(codes: list[str]) -> int:
     if not codes:
         return 0
     import sys
+    import time
 
     frames = []
-    for code in codes:
+    ok = fail = 0
+    t0 = time.time()
+    for i, code in enumerate(codes, 1):
         try:
-            frames.append(fetch_hfq_factor(code))
-        except Exception as e:  # 单只失败不阻断，但记日志（旧静默吞错会留隐患）
+            df = fetch_hfq_factor(code)
+            if not df.empty:
+                frames.append(df)
+                ok += 1
+            else:
+                fail += 1
+        except Exception as e:  # noqa: BLE001
             print(f"[WARN] hfq_factor {code} 拉取失败: {e}", file=sys.stderr)
+            fail += 1
             continue
+        if i % 50 == 0 or i == len(codes):
+            print(f"复权因子进度 {i}/{len(codes)}  ok={ok} fail={fail}  {time.time() - t0:.0f}s")
     if not frames:
         return 0
     df = pd.concat(frames, ignore_index=True)
