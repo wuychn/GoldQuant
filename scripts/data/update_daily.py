@@ -145,6 +145,17 @@ def _prev_close_map(daily: pd.DataFrame, as_of: str) -> dict[str, float]:
     return dict(zip(d["code"].astype(str), pd.to_numeric(d["close"], errors="coerce")))
 
 
+def detect_ex_and_align_pre_close(spot: pd.DataFrame, prev_map: dict[str, float]) -> list[str]:
+    """用源站原始昨收做除权检测，再把 ``spot.pre_close`` 对齐到库内 T-1 close。
+
+    顺序不可反：若先覆盖再检测，两边同源，已有库内票永远检不出除权。
+    就地修改 ``spot``；返回除权代码列表。
+    """
+    ex_codes = detect_ex_dividend_codes(spot, prev_map)
+    spot["pre_close"] = spot["code"].map(prev_map).fillna(spot["pre_close"])
+    return ex_codes
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--date", default=None, help="指定日 YYYY-MM-DD，默认今天")
@@ -177,11 +188,11 @@ def main() -> None:
     spot = spot[spot["code"].astype(str).str.strip().str.startswith(tuple(prefixes))]
     if len(spot) < before:
         print(f"前缀过滤: {before} → {len(spot)} 只（保留 {prefixes}）")
-    # 当日行 pre_close 统一用库内前一交易日 close（而非新浪盘中 settlement）：保证
-    # daily_raw 历史连续性 + 除权检测与库同源，盘中/盘后跑一致。
+    # 先用源站原始昨收做除权检测，再把 pre_close 对齐到库内 T-1 close 写库
+    # （保证 daily_raw 不复权序列连续；检测不可用对齐后的值，否则永远无除权）。
     daily = read_daily_raw(end=today)
     prev_map = _prev_close_map(daily, today)
-    spot["pre_close"] = spot["code"].map(prev_map).fillna(spot["pre_close"])
+    ex_codes = detect_ex_and_align_pre_close(spot, prev_map)
     # 仅保留 daily_raw 列
     cols = ["code", "date", "name", "open", "high", "low", "close", "pre_close",
             "volume", "amount", "turnover_rate", "float_mv", "total_mv"]
@@ -210,8 +221,7 @@ def main() -> None:
     except Exception as e:
         print(f"[WARN] name 快照失败: {e}", file=sys.stderr)
 
-    # 2. 除权检测 + 因子补拉（spot 的 pre_close 已在 step 1 统一为库内 prev，同源）
-    ex_codes = detect_ex_dividend_codes(spot, prev_map)
+    # 2. 除权日补拉复权因子（检测已在写库前完成）
     if ex_codes:
         print(f"检测到除权 {len(ex_codes)} 只，补拉复权因子: {ex_codes[:10]}{'...' if len(ex_codes)>10 else ''}")
         n = refresh_adj_for_codes(ex_codes)
