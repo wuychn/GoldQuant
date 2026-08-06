@@ -299,12 +299,16 @@ def _build_one(code: str, start: str, end: str) -> tuple[str, int, str | None]:
             )
             return code, 0, None
 
-        reason = (
-            f"检查区间 {start}~{end} 与探测窗 {p_start}~{end} "
-            f"东财+退市回退均空（未确认无行情，疑限流/反爬）"
+        # 四个 API 调用全部成功返回空（非异常）→ 确认无行情（新股/未上市/退市）
+        cal = read_calendar()
+        exempt = {d for d in cal if start <= d <= end}
+        n = add_no_bar_dates(code, exempt)
+        print(
+            f"[INFO] {code} 确认无行情（新股/未上市/退市），"
+            f"检查区间 {start}~{end} 已豁免 {n} 天",
+            file=sys.stderr,
         )
-        print(f"[WARN] {code} 拉取失败: {reason}", file=sys.stderr)
-        return code, 0, reason[:200]
+        return code, 0, None
     except Exception as e:  # noqa: BLE001
         print(f"[WARN] {code} 拉取失败: {type(e).__name__}: {e}", file=sys.stderr)
         return code, 0, str(e)[:200]
