@@ -112,6 +112,13 @@ def main() -> None:
 
     daily["code"] = daily["code"].astype(str).str.strip()
     codes = list(daily["code"].unique())
+    # 前缀过滤：与 build_daily/update_daily 一致
+    from quant.config import load_quant_config
+
+    prefixes = (
+        (load_quant_config().get("gates") or {}).get("symbol_pool", {}).get("prefixes", ["60", "00", "30", "688"])
+    )
+    codes = [c for c in codes if c.startswith(tuple(prefixes))]
     if args.codes:
         want = {c.strip() for c in args.codes.split(",") if c.strip()}
         codes = [c for c in codes if c in want]

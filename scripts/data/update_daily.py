@@ -165,6 +165,16 @@ def main() -> None:
         sys.exit(2)
 
     spot["date"] = today
+    # 前缀过滤：与 build_daily 一致，排除北交所/三板/B股（历史段无、当天也不该有）
+    from quant.config import load_quant_config
+
+    prefixes = (
+        (load_quant_config().get("gates") or {}).get("symbol_pool", {}).get("prefixes", ["60", "00", "30", "688"])
+    )
+    before = len(spot)
+    spot = spot[spot["code"].astype(str).str.strip().str.startswith(tuple(prefixes))]
+    if len(spot) < before:
+        print(f"前缀过滤: {before} → {len(spot)} 只（保留 {prefixes}）")
     # 当日行 pre_close 统一用库内前一交易日 close（而非新浪盘中 settlement）：保证
     # daily_raw 历史连续性 + 除权检测与库同源，盘中/盘后跑一致。
     daily = read_daily_raw(end=today)
