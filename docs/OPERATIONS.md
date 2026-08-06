@@ -163,10 +163,12 @@ QUANT_HOME=~/.quant/daily poetry run python -m scripts.data.update_daily
 poetry run python -m scripts.data.merge_library --offline ~/.quant/offline --daily ~/.quant/daily --out ~/.quant
 ```
 
-**③ 补缺**（合并后跑一次，幂等可重跑）— 补历史段缺列 `float_mv/total_mv`（精确市值）+ `pre_close`：
+**③ 补缺**（合并后跑；默认可重跑且只拉仍缺市值的码）— 补历史段 `float_mv/total_mv`（精确市值）+ `pre_close`：
 
 ```powershell
 poetry run python -m scripts.data.backfill_daily_meta --home ~/.quant
+# 强制全量重拉市值（一般不需要）：
+# poetry run python -m scripts.data.backfill_daily_meta --home ~/.quant --force
 ```
 
 **④ 校验** — 一键确认完整性与正确性（退出码 0=通过）：
@@ -184,7 +186,7 @@ poetry run python -m scripts.data.validate_library --home ~/.quant
 |---|---|---|
 | 每日 18:00 | `update_daily`（定时） | 当日 spot + 快照，自带 float_mv/name，无需补缺 |
 | 每周五 22:00 | `maintain`（定时） | 自愈：查缺口回补 + update_daily + retry-failed |
-| 每周五后（可选） | `backfill_daily_meta --home ~/.quant` | 幂等，兜住新入库票的历史缺列 |
+| 每周五后（可选） | `backfill_daily_meta --home ~/.quant` | 默认只拉缺市值码，兜住新入库票；`--force` 全量重拉 |
 | 每次改动后 | `validate_library --home ~/.quant` | 复验 |
 
 **⑥ 可选·因子数据**（激活更多因子）：
@@ -303,7 +305,7 @@ poetry run python -m scripts.data.maintain --start 2021-01-01
 | `poetry run python -m scripts.data.verify_daily` | `--sample` `--start` `--end` | 数据校验 |
 | `poetry run python -m scripts.data.audit_data_health` | `--probe-code` | 健康审计 |
 | `poetry run python -m scripts.data.merge_library` | `--offline` `--daily` `--out` | 合并离线库与每日增量 |
-| `poetry run python -m scripts.data.backfill_daily_meta` | `--home` `--codes` `--workers` `--req-interval` | 补历史段 float_mv/total_mv/pre_close（精确市值） |
+| `poetry run python -m scripts.data.backfill_daily_meta` | `--home` `--codes` `--workers` `--req-interval` `--force` | 补历史段 float_mv/total_mv/pre_close（默认只拉缺市值码） |
 | `poetry run python -m scripts.data.validate_library` | `--home` `--start` `--end` | 离线库完整性与正确性校验（含复权连续性） |
 
 ### 5.6a 离线库与每日增量合并（`merge_library`）
@@ -328,17 +330,20 @@ QUANT_HOME=~/.quant/offline poetry run python -m scripts.data.build_daily --star
 QUANT_HOME=~/.quant/daily poetry run python -m scripts.data.update_daily
 # 3. build 完成后合并到统一 home
 poetry run python -m scripts.data.merge_library --offline ~/.quant/offline --daily ~/.quant/daily --out ~/.quant
-# 4. 补历史段缺列（float_mv/total_mv 精确市值 + pre_close；合并后跑一次即可，幂等可重跑）
+# 4. 补历史段缺列（float_mv/total_mv 精确市值 + pre_close；默认只拉仍缺市值的码，可重跑）
 poetry run python -m scripts.data.backfill_daily_meta --home ~/.quant
+#    强制全量重拉：加 --force
 # 5. 校验合并结果
 poetry run python -m scripts.data.validate_library --home ~/.quant
 ```
 
 **`backfill_daily_meta`**：用 `stock_value_em`（东财估值分析，逐日历史）把历史段 `float_mv/total_mv`
 **精确**补上、`pre_close` 用 `close[t-1]` 推导。参数 `--home`（quant-home 根）/ `--codes`
-（只补指定码）/ `--workers` / `--req-interval`。**name 刻意不灌历史**（当前名灌历史 = ST 过滤
-前视），PIT 名靠 `update_daily` 的 `name_snapshot` 逐日积累；确需当前名兜底用 `--fill-name`。
-日常增量不需要补（spot 当天自带这些列）；每周五 `maintain` 后可选重跑兜住新入库票。
+（只补指定码）/ `--workers` / `--req-interval` / `--force`（默认只拉仍缺市值的码；`--force`
+才全量重拉）。写回对已有非空值 `fillna` 不覆盖。运行时会打印计划（总共/已齐跳过/待执行）
+与周期性进度（ok/fail/速率/ETA），失败码带原因。**name 刻意不灌历史**（当前名灌历史 = ST 过滤前视），PIT 名靠 `update_daily` 的
+`name_snapshot` 逐日积累；确需当前名兜底用 `--fill-name`。日常增量不需要补（spot 当天自带这些列）；
+每周五 `maintain` 后可选重跑兜住新入库票。
 
 **build_daily 与 update_daily 的 daily_raw 列差异及影响**：
 

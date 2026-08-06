@@ -9,12 +9,15 @@ update_daily 的 spot 行齐全但只有当天。本脚本在合并后的统一�
 误剔 / 当年健康现已 ST 的被漏入）。PIT 名靠 ``update_daily`` 的 ``name_snapshot``
 从今天起逐日积累。确需当前名兜底时用 ``--fill-name``（理解前视取舍后使用）。
 
-幂等：只补缺失值（``float_mv/total_mv/pre_close`` 已有值的行跳过），可重跑。
+幂等：
+- 写回只补 NaN（已有 ``float_mv/total_mv/pre_close`` 不覆盖）。
+- 拉网默认只请求「仍有任一行缺 float_mv 或 total_mv」的码；``--force`` 才全量重拉。
 
 用法：
     poetry run python -m scripts.data.backfill_daily_meta --home ~/.quant
     poetry run python -m scripts.data.backfill_daily_meta --home ~/.quant --codes 000001,600519
     poetry run python -m scripts.data.backfill_daily_meta --home ~/.quant --workers 2 --req-interval 1,3
+    poetry run python -m scripts.data.backfill_daily_meta --home ~/.quant --force
     poetry run python -m scripts.data.backfill_daily_meta --home ~/.quant --fill-name
 """
 
@@ -28,20 +31,55 @@ from pathlib import Path
 
 import pandas as pd
 
-# 让 stock_value_em 的 requests 走 curl_cffi 统一层（东财 TLS 反爬）
-from common.utils.source_headers import apply_source_header_patch
-
-apply_source_header_patch()
-
-from quant.data.schema import DAILY_RAW_COLUMNS  # noqa: E402
-from quant.data.store import read_daily_raw, write_daily_raw  # noqa: E402
-from quant.store.paths import override_quant_home  # noqa: E402
+from quant.data.schema import DAILY_RAW_COLUMNS
+from quant.data.store import read_daily_raw, write_daily_raw
+from quant.store.paths import override_quant_home
 
 _MV_COLS = ("float_mv", "total_mv")
+_PROGRESS_EVERY = 50  # 每完成 N 只打一行进度
 
 
-def _fetch_value_meta(code: str, *, interval: tuple[float, float]) -> dict[str, tuple[float, float]] | None:
-    """拉单只历史市值 → {date: (float_mv, total_mv)}；失败返回 None（可重跑）。"""
+def _log(msg: str) -> None:
+    print(msg, flush=True)
+
+
+def _log_err(msg: str) -> None:
+    print(msg, file=sys.stderr, flush=True)
+
+
+def codes_needing_mv_fetch(
+    daily: pd.DataFrame,
+    codes: list[str],
+    *,
+    force: bool = False,
+) -> list[str]:
+    """选出需要打 ``stock_value_em`` 的码。
+
+    默认：该码任一行缺 ``float_mv`` 或 ``total_mv``（列缺失视为全缺）才拉。
+    ``force=True``：传入列表原样返回（全量重拉）。
+    """
+    if force:
+        return list(codes)
+    if not codes:
+        return []
+    want = set(codes)
+    sub = daily[daily["code"].astype(str).str.strip().isin(want)].copy()
+    if sub.empty:
+        return list(codes)
+    need: set[str] = set()
+    for c in _MV_COLS:
+        if c not in sub.columns:
+            return list(codes)
+        miss = sub[sub[c].isna() | (sub[c].astype(str) == "")]
+        need.update(miss["code"].astype(str).str.strip().tolist())
+    # 保持传入顺序
+    return [c for c in codes if c in need]
+
+
+def _fetch_value_meta(
+    code: str, *, interval: tuple[float, float]
+) -> tuple[dict[str, tuple[float, float]] | None, str | None]:
+    """拉单只历史市值 → ({date: (float_mv, total_mv)} | None, err|None)。"""
     import akshare as ak
 
     if interval[1] > 0:
@@ -49,16 +87,19 @@ def _fetch_value_meta(code: str, *, interval: tuple[float, float]) -> dict[str, 
     try:
         df = ak.stock_value_em(symbol=str(code).strip())
     except Exception as e:  # noqa: BLE001
-        print(f"  [WARN] {code} stock_value_em 失败: {type(e).__name__}: {e}", file=sys.stderr)
-        return None
-    if df is None or df.empty or "流通市值" not in df.columns:
-        return None
+        return None, f"{type(e).__name__}: {e}"
+    if df is None or df.empty:
+        return None, "空表"
+    if "流通市值" not in df.columns:
+        return None, f"缺列流通市值 cols={list(df.columns)[:8]}"
     out: dict[str, tuple[float, float]] = {}
     for _, r in df.iterrows():
         d = str(r.get("数据日期"))
         if len(d) == 10 and d[4] == "-":
             out[d] = (float(r.get("流通市值")), float(r.get("总市值")))
-    return out or None
+    if not out:
+        return None, "无有效日期行"
+    return out, None
 
 
 def _fetch_code_names() -> dict[str, str]:
@@ -73,7 +114,7 @@ def _fetch_code_names() -> dict[str, str]:
             if str(r.get("code", "")).strip() and str(r.get("name", "")).strip()
         }
     except Exception as e:  # noqa: BLE001
-        print(f"[WARN] stock_info_a_code_name 失败: {e}", file=sys.stderr)
+        _log_err(f"[WARN] stock_info_a_code_name 失败: {e}")
         return {}
 
 
@@ -88,14 +129,38 @@ def _derive_pre_close(daily: pd.DataFrame) -> pd.DataFrame:
     return daily
 
 
+def _progress_line(*, i: int, total: int, ok: int, fail: int, t0: float) -> str:
+    elapsed = max(time.time() - t0, 1e-6)
+    rate = i / elapsed
+    eta = (total - i) / rate if rate > 0 else 0.0
+    return (
+        f"  进度 {i}/{total} ({i / max(total, 1):.1%})  "
+        f"ok={ok} fail={fail}  {elapsed:.0f}s  "
+        f"{rate:.2f}码/s  ETA {eta:.0f}s"
+    )
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--home", required=True, help="quant-home 根（直接含 store/ 的那级）")
     ap.add_argument("--codes", default=None, help="逗号分隔代码；默认补库内全部")
     ap.add_argument("--workers", type=int, default=1, help="并发（默认 1；datacenter 接口较稳，可适度升）")
     ap.add_argument("--req-interval", default=None, help="请求间隔秒 MIN,MAX 或 N（默认 0,2）")
+    ap.add_argument(
+        "--force",
+        action="store_true",
+        help="强制对候选码全量重拉市值（默认只拉仍缺 float_mv/total_mv 的码）",
+    )
     ap.add_argument("--fill-name", action="store_true", help="用当前名灌历史行（默认不灌，避免 ST 过滤前视）")
     args = ap.parse_args()
+
+    # 尽早打日志，避免 patch/读库前干等无输出
+    home = Path(args.home).expanduser()
+    _log(f"[backfill] 开始 home={home}")
+
+    from common.utils.source_headers import apply_source_header_patch
+
+    apply_source_header_patch()
 
     if args.req_interval:
         parts = [p.strip() for p in args.req_interval.split(",") if p.strip()]
@@ -103,12 +168,17 @@ def main() -> None:
     else:
         interval = (0.0, 2.0)
 
-    home = Path(args.home).expanduser()
+    _log("[backfill] 读取 daily_raw …")
+    t_read = time.time()
     with override_quant_home(home):
         daily = read_daily_raw()
     if daily.empty:
-        print(f"[FATAL] {home} daily_raw 为空", file=sys.stderr)
+        _log_err(f"[FATAL] {home} daily_raw 为空")
         sys.exit(1)
+    _log(
+        f"[backfill] daily_raw 就绪：{len(daily):,} 行 / "
+        f"{daily['code'].nunique():,} 码  ({time.time() - t_read:.1f}s)"
+    )
 
     daily["code"] = daily["code"].astype(str).str.strip()
     codes = list(daily["code"].unique())
@@ -122,28 +192,54 @@ def main() -> None:
     if args.codes:
         want = {c.strip() for c in args.codes.split(",") if c.strip()}
         codes = [c for c in codes if c in want]
-    print(f"[backfill] home={home}  补 {len(codes)} 码市值（间隔 {interval[0]:.0f},{interval[1]:.0f}s）")
+    n_total = len(codes)
+    _log(f"[backfill] 候选码（前缀/指定后）: {n_total}")
+
+    _log("[backfill] 扫描缺市值码 …")
+    t_scan = time.time()
+    codes_todo = codes_needing_mv_fetch(daily, codes, force=args.force)
+    n_need = len(codes_todo)
+    n_skip = n_total - n_need
+    mode = "强制全量" if args.force else "仅缺市值"
+    _log(
+        f"[backfill] 计划 {mode}：总共 {n_total} 码 · "
+        f"已齐跳过 {n_skip} · 待执行 {n_need}  "
+        f"(扫描 {time.time() - t_scan:.1f}s；间隔 {interval[0]:.0f},{interval[1]:.0f}s；"
+        f"workers={max(1, args.workers)})"
+    )
+    if not codes_todo:
+        _log("[backfill] 无待拉码，跳过市值请求；仍推导 pre_close 并写回")
 
     # 1) 逐只拉精确历史市值
     mv_by_code: dict[str, dict[str, tuple[float, float]]] = {}
+    fail_codes: list[tuple[str, str]] = []
     t0 = time.time()
     done = fail = 0
-    with ThreadPoolExecutor(max_workers=max(1, args.workers)) as ex:
-        futs = {ex.submit(_fetch_value_meta, c, interval=interval): c for c in codes}
-        for i, fut in enumerate(as_completed(futs), 1):
-            code = futs[fut]
-            try:
-                mv = fut.result()
-            except Exception:  # noqa: BLE001
-                mv = None
-            if mv:
-                mv_by_code[code] = mv
-                done += 1
-            else:
-                fail += 1
-            if i % 200 == 0 or i == len(codes):
-                print(f"  进度 {i}/{len(codes)}  ok={done} fail={fail}  {time.time() - t0:.0f}s")
-    print(f"市值拉取: ok={done} fail={fail}（失败码可重跑本脚本补）")
+    if codes_todo:
+        _log(f"[backfill] 开始拉取市值：0/{n_need}")
+        with ThreadPoolExecutor(max_workers=max(1, args.workers)) as ex:
+            futs = {ex.submit(_fetch_value_meta, c, interval=interval): c for c in codes_todo}
+            for i, fut in enumerate(as_completed(futs), 1):
+                code = futs[fut]
+                try:
+                    mv, err = fut.result()
+                except Exception as e:  # noqa: BLE001
+                    mv, err = None, f"{type(e).__name__}: {e}"
+                if mv:
+                    mv_by_code[code] = mv
+                    done += 1
+                else:
+                    fail += 1
+                    reason = err or "未知"
+                    fail_codes.append((code, reason))
+                    _log_err(f"  [WARN] {code} 失败: {reason}")
+                if i == 1 or i % _PROGRESS_EVERY == 0 or i == n_need:
+                    _log(_progress_line(i=i, total=n_need, ok=done, fail=fail, t0=t0))
+        _log(f"[backfill] 市值拉取结束：ok={done} fail={fail} 耗时 {time.time() - t0:.0f}s")
+        if fail_codes:
+            sample = ", ".join(f"{c}({r})" for c, r in fail_codes[:10])
+            more = f" …另有 {len(fail_codes) - 10} 只" if len(fail_codes) > 10 else ""
+            _log_err(f"[backfill] 失败样例: {sample}{more}（可重跑本脚本只补缺）")
 
     # 2) 合并 float_mv/total_mv（只补 NaN，幂等）
     rows: list[tuple] = []
@@ -151,33 +247,47 @@ def main() -> None:
         for d, (fm, tm) in m.items():
             rows.append((code, d, fm, tm))
     if rows:
+        _log(f"[backfill] 合并市值到 daily_raw：{len(rows):,} 条 meta …")
+        t_m = time.time()
         meta = pd.DataFrame(rows, columns=["code", "date", *list(_MV_COLS)])
         daily["date"] = daily["date"].astype(str)
         daily = daily.merge(meta, on=["code", "date"], how="left", suffixes=("", "_meta"))
         for c in _MV_COLS:
             daily[c] = daily[c].fillna(daily[f"{c}_meta"])
         daily = daily.drop(columns=[f"{c}_meta" for c in _MV_COLS])
+        _log(f"[backfill] 合并完成 ({time.time() - t_m:.1f}s)")
 
     # 3) 推导 pre_close
+    _log("[backfill] 推导 pre_close …")
+    t_pc = time.time()
     daily = _derive_pre_close(daily)
+    _log(f"[backfill] pre_close 完成 ({time.time() - t_pc:.1f}s)")
 
     # 4) 可选当前名（默认不灌历史）
     if args.fill_name:
+        _log("[backfill] --fill-name：拉取当前名表 …")
         names = _fetch_code_names()
         daily["name"] = daily["code"].map(names).fillna(daily.get("name", ""))
+        _log(f"[backfill] name 填充：映射 {len(names)} 只")
 
     # 写回（按 DAILY_RAW_COLUMNS 归一并幂等分区写）
+    _log("[backfill] 写回 daily_raw …")
+    t_w = time.time()
     daily = daily.reindex(columns=DAILY_RAW_COLUMNS)
     with override_quant_home(home):
         write_daily_raw(daily)
+    _log(f"[backfill] 写回完成 ({time.time() - t_w:.1f}s)")
 
     # 覆盖报告
     n = len(daily)
     mv = daily["float_mv"].notna().sum()
     pc = daily["pre_close"].notna().sum()
-    print(f"\n[backfill] 写回完成：{n:,} 行")
-    print(f"[backfill] float_mv 非空 {mv:,}（{mv / max(n, 1):.1%}）· pre_close 非空 {pc:,}（{pc / max(n, 1):.1%}）")
-    print(f"[backfill] 建议运行 validate：python -m scripts.data.validate_library --home {home}")
+    _log(
+        f"[backfill] 汇总：{n:,} 行 · float_mv 非空 {mv:,}（{mv / max(n, 1):.1%}）· "
+        f"pre_close 非空 {pc:,}（{pc / max(n, 1):.1%}）"
+    )
+    _log(f"[backfill] 拉取统计：计划 {n_need} · 成功 {done} · 失败 {fail} · 跳过已齐 {n_skip}")
+    _log(f"[backfill] 建议校验：python -m scripts.data.validate_library --home {home}")
 
 
 if __name__ == "__main__":

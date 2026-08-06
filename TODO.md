@@ -15,7 +15,7 @@
 - [ ] build 完成后合并到统一 home：
       `poetry run python -m scripts.data.merge_library --offline ~/.quant/offline --daily ~/.quant/daily --out ~/.quant`
       （daily_raw 归一 13 列、update 覆盖 build、复权沿用 raw+factor 分离不复发除权尖刺）
-- [ ] 补历史段缺列（float_mv/total_mv 精确市值 + pre_close，一次幂等）：
+- [ ] 补历史段缺列（float_mv/total_mv 精确市值 + pre_close；默认只拉缺市值码，可重跑；`--force` 全量）：
       `poetry run python -m scripts.data.backfill_daily_meta --home ~/.quant`
 
 > 起始日 2021-01-01 给 ~5 年历史，够 walk-forward 训练窗 504 日 + OOS。
