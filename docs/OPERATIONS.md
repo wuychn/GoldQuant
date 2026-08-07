@@ -263,14 +263,21 @@ poetry run python -m scripts.data.build_daily --start 2026-07-20 --end 2026-07-2
 poetry run python -m scripts.data.update_daily
 poetry run python -m scripts.data.update_daily --date 2026-07-25
 poetry run python -m scripts.data.update_daily --force-fundamental-pit
+poetry run python -m scripts.data.update_daily --flush-every 50
 ```
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
 | `--date` | 今天 | 指定日 YYYY-MM-DD |
 | `--force-fundamental-pit` | — | 无视披露季窗口，增量刷新 fundamental_pit |
+| `--flush-every` | `50` | fund_flow 每拉 N 只落盘一次（断点续传粒度） |
 
 收盘后执行：`spot_em` → 过滤无效盘口（`close<=0` / OHLC 不自洽不落库）→ 追加当日 daily_raw、除权检测、复权刷新、universe/行业/listing、fundamental_pit、因子快照（flow/hot/theme）。
+
+**fund_flow 断点续传**：因子快照里最慢的是全市场资金流。每批 upsert 到
+`store/fund_flow/year={Y}/{date}.parquet`，并把已尝试码（含确认无 5 日数据）记入
+`$QUANT_HOME/data/fund_flow_progress/{date}.json`。中断后重跑同一命令会跳过已完成码；
+网络失败不记完成，下次重试。若需全量重拉，删掉当日 progress 文件与对应 parquet 即可。
 
 **注意**：spot_em 无历史，当日没抓就补不回来，失败须告警。停牌源常返回全 0，入口已丢弃，不写入 daily_raw。
 

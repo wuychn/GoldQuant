@@ -5,23 +5,33 @@
 - fetch_spot → DataFrame(code, name, open, high, low, close, pre_close, volume, amount, turnover_rate, float_mv, total_mv)
 - fetch_concept_boards → DataFrame(板块名称, 涨跌幅)
 - fetch_stock_fund_flow_daily → list[dict]，每条含 'main_net_inflow'(元)
+
+fund_flow 支持分批落盘断点续传：每批 upsert 快照 + 记录已尝试码，
+重跑跳过已成功/已确认无数据的码；网络失败不记完成，下次重试。
 """
 
 from __future__ import annotations
 
+import json
 import logging
-from typing import Any
+import sys
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
+from quant.data.calendar import to_iso
 from quant.data.factor_snapshots import (
-    write_fund_flow_snapshot,
+    read_fund_flow_snapshot,
+    upsert_fund_flow_snapshot,
     write_hot_rank_snapshot,
     write_theme_snapshot,
 )
+from quant.store.paths import quant_home
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_FLOW_FLUSH_EVERY = 50
 
 
 def _num(v) -> float | None:
@@ -44,7 +54,7 @@ def capture_hot_rank(as_of: str) -> int:
 
         df = try_with_fallback("market", "fetch_em_hot_rank")
     except Exception as e:
-        print(f"[WARN] hot_rank 拉取失败: {e}", file=sys.stderr if False else None) or logger.warning("hot_rank: %s", e)
+        logger.warning("hot_rank: %s", e)
         return 0
     if df is None or df.empty:
         return 0
@@ -66,8 +76,41 @@ def capture_hot_rank(as_of: str) -> int:
     return len(rows)
 
 
-def capture_fund_flow(as_of: str, spot: pd.DataFrame, universe_codes: list[str] | None = None) -> int:
-    """主力 5 日净流入 / 流通市值（universe 优先，限流保护）。
+def _flow_progress_path(as_of: str) -> Path:
+    return quant_home() / "data" / "fund_flow_progress" / f"{to_iso(as_of)}.json"
+
+
+def _read_flow_attempted(as_of: str) -> set[str]:
+    p = _flow_progress_path(as_of)
+    if not p.is_file():
+        return set()
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return set()
+    codes = raw.get("attempted") or []
+    return {str(c).strip() for c in codes if str(c).strip()}
+
+
+def _write_flow_attempted(as_of: str, attempted: set[str]) -> None:
+    p = _flow_progress_path(as_of)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "date": to_iso(as_of),
+        "attempted": sorted(attempted),
+        "n": len(attempted),
+    }
+    p.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
+def capture_fund_flow(
+    as_of: str,
+    spot: pd.DataFrame,
+    universe_codes: list[str] | None = None,
+    *,
+    flush_every: int = _DEFAULT_FLOW_FLUSH_EVERY,
+) -> int:
+    """主力 5 日净流入 / 流通市值（universe 优先；分批落盘可断点续传）。
 
     spot 由 facade 统一返回 DataFrame(code, float_mv, ...)，业务层直接用。
     """
@@ -79,24 +122,64 @@ def capture_fund_flow(as_of: str, spot: pd.DataFrame, universe_codes: list[str] 
         mv = _num(r.get("float_mv"))
         if code and mv and mv > 0:
             mv_map[code] = mv
-    targets = universe_codes or list(mv_map.keys())
-    # flow_ratio_5 必须取 5 日累加；spot 的 main_net_inflow 是当日值，不可混用
-    need_fetch = [c for c in dict.fromkeys(targets) if mv_map.get(c)]
-    extra_flows = _fetch_flows_5d_batch(need_fetch)
-    rows: list[dict] = []
-    for code in targets:
-        mv = mv_map.get(code)
-        if not mv or mv <= 0:
-            continue
-        net = extra_flows.get(code)
-        if net is None:
-            continue
-        ratio = net / mv
-        if abs(ratio) < 1e8:
-            rows.append({"code": code, "flow_ratio_5": round(ratio, 6)})
-    if rows:
-        write_fund_flow_snapshot(as_of, rows)
-    return len(rows)
+    targets = [c for c in dict.fromkeys(universe_codes or list(mv_map.keys())) if mv_map.get(c)]
+    if not targets:
+        return 0
+
+    # 已落盘成功码 + 已尝试（含无 5 日数据）→ 跳过；网络失败不进 attempted
+    done = set(read_fund_flow_snapshot(as_of, exact=True)) | _read_flow_attempted(as_of)
+    pending = [c for c in targets if c not in done]
+    flush_every = max(1, int(flush_every))
+    n_done = len(set(targets) & done)
+    print(
+        f"fund_flow: 目标 {len(targets)} · 已跳过 {n_done} · 待拉 {len(pending)} "
+        f"（flush_every={flush_every}）",
+        flush=True,
+    )
+    if not pending:
+        return len(read_fund_flow_snapshot(as_of, exact=True))
+
+    attempted = _read_flow_attempted(as_of)
+    total_ok = 0
+    n_err = 0
+    for i in range(0, len(pending), flush_every):
+        batch = pending[i : i + flush_every]
+        flows, batch_ok, batch_err = _fetch_flows_5d_batch(batch)
+        rows: list[dict] = []
+        for code in batch:
+            if code in batch_err:
+                n_err += 1
+                continue
+            # 成功返回（含无数据）→ 记 attempted，避免重跑再打
+            attempted.add(code)
+            net = flows.get(code)
+            if net is None:
+                continue
+            mv = mv_map.get(code)
+            if not mv or mv <= 0:
+                continue
+            ratio = net / mv
+            if abs(ratio) < 1e8:
+                rows.append({"code": code, "flow_ratio_5": round(ratio, 6)})
+        if rows:
+            upsert_fund_flow_snapshot(as_of, rows)
+            total_ok += len(rows)
+        _write_flow_attempted(as_of, attempted)
+        done_n = min(i + len(batch), len(pending))
+        n_empty = len(batch_ok) - len(flows)
+        print(
+            f"fund_flow 进度 {done_n}/{len(pending)} "
+            f"（本批 ok={len(rows)} empty={n_empty} err={len(batch_err)} · 累计落盘+{total_ok}）",
+            flush=True,
+        )
+
+    if n_err:
+        print(
+            f"[WARN] fund_flow: {n_err} 只网络/源失败未记完成，重跑将重试",
+            file=sys.stderr,
+            flush=True,
+        )
+    return len(read_fund_flow_snapshot(as_of, exact=True))
 
 
 def _sum_flow_5d(recs: list) -> float | None:
@@ -117,32 +200,62 @@ def _sum_flow_5d(recs: list) -> float | None:
     return total if total != 0 else None
 
 
-def _fetch_flows_5d_batch(codes: list[str]) -> dict[str, float]:
-    """批量取 5 日主力净流入：一次 asyncio.run 并发拉取，避免 per-call 起事件循环。
+def _flow_concurrency() -> int:
+    from quant.config import load_quant_config
 
-    走 try_with_fallback_async，fallback 顺序由 yml 决定。
+    data = load_quant_config().get("data") or {}
+    n = data.get("eastmoney_max_concurrent", data.get("default_max_concurrent", 1))
+    return max(1, int(n))
+
+
+def _fetch_flows_5d_batch(
+    codes: list[str],
+) -> tuple[dict[str, float], set[str], set[str]]:
+    """拉取一批 5 日主力净流入。
+
+    返回 ``(code→净流入, 成功集合含空数据, 失败集合)``。
+    失败不写入 progress，便于断点重试。
     """
     if not codes:
-        return {}
+        return {}, set(), set()
     try:
         import asyncio
 
         from quant.data.sources.interface import try_with_fallback_async
 
-        async def _gather() -> list:
-            return await asyncio.gather(
-                *[try_with_fallback_async("enrich", "fetch_stock_fund_flow_daily", symbol=c, days=10) for c in codes]
-            )
+        sem = asyncio.Semaphore(_flow_concurrency())
 
-        recs_list = asyncio.run(_gather())
-    except Exception:
-        return {}
+        async def _one(code: str) -> tuple[str, str, float | None]:
+            """status: ok | err"""
+            async with sem:
+                try:
+                    recs = await try_with_fallback_async(
+                        "enrich", "fetch_stock_fund_flow_daily", symbol=code, days=10
+                    )
+                    return code, "ok", _sum_flow_5d(recs)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("fund_flow %s 失败: %s", code, exc)
+                    return code, "err", None
+
+        async def _gather() -> list:
+            return await asyncio.gather(*[_one(c) for c in codes])
+
+        results = asyncio.run(_gather())
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("fund_flow batch 失败: %s", exc)
+        return {}, set(), set(codes)
+
     out: dict[str, float] = {}
-    for code, recs in zip(codes, recs_list or []):
-        v = _sum_flow_5d(recs)
+    ok: set[str] = set()
+    err: set[str] = set()
+    for code, status, v in results or []:
+        if status == "err":
+            err.add(code)
+            continue
+        ok.add(code)
         if v is not None:
             out[code] = v
-    return out
+    return out, ok, err
 
 
 def capture_theme_mom(as_of: str, spot: pd.DataFrame | None = None) -> int:
@@ -205,7 +318,11 @@ def _stock_concepts(code: str) -> list[str]:
 
 
 def capture_all_factor_snapshots(
-    as_of: str, spot: pd.DataFrame | None = None, universe_codes: list[str] | None = None
+    as_of: str,
+    spot: pd.DataFrame | None = None,
+    universe_codes: list[str] | None = None,
+    *,
+    flush_every: int = _DEFAULT_FLOW_FLUSH_EVERY,
 ) -> dict[str, int]:
     """一次性采集 hot/flow/theme 快照（基本面统一走 fundamental_pit）。"""
     if spot is None:
@@ -215,7 +332,15 @@ def capture_all_factor_snapshots(
             spot = fetch_spot_em()
         except Exception:
             spot = pd.DataFrame()
+    print(f"因子快照: hot_rank …", flush=True)
     n_hot = capture_hot_rank(as_of)
-    n_flow = capture_fund_flow(as_of, spot if isinstance(spot, pd.DataFrame) else pd.DataFrame(), universe_codes)
+    print(f"因子快照: hot_rank={n_hot} · fund_flow …", flush=True)
+    n_flow = capture_fund_flow(
+        as_of,
+        spot if isinstance(spot, pd.DataFrame) else pd.DataFrame(),
+        universe_codes,
+        flush_every=flush_every,
+    )
+    print(f"因子快照: fund_flow={n_flow} · theme_mom …", flush=True)
     n_theme = capture_theme_mom(as_of, spot if isinstance(spot, pd.DataFrame) else None)
     return {"hot": n_hot, "flow": n_flow, "theme": n_theme}

@@ -197,6 +197,12 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--date", default=None, help="指定日 YYYY-MM-DD，默认今天")
     ap.add_argument("--force-fundamental-pit", action="store_true", help="无视披露季窗口，增量刷新 fundamental_pit")
+    ap.add_argument(
+        "--flush-every",
+        type=int,
+        default=50,
+        help="fund_flow 每拉 N 只落盘一次（断点续传粒度，默认 50）",
+    )
     args = ap.parse_args()
 
     today = args.date or cn_now().strftime("%Y-%m-%d")
@@ -332,13 +338,19 @@ def main() -> None:
         print(f"[WARN] fundamental_pit 刷新失败: {e}", file=sys.stderr)
 
     # 9. 因子 PIT 快照（hot/flow/theme；基本面见 fundamental_pit）
+    #    fund_flow 分批落盘 + progress 文件，中断后重跑跳过已尝试码
     try:
         from quant.data.factor_capture import capture_all_factor_snapshots
         from quant.data.universe import universe_codes
 
         uni = universe_codes(today, rebuild=False)
         # 复用 step 1 已拉的新浪 spot（含 code/float_mv），避免再触发东财 clist 拉全市场
-        counts = capture_all_factor_snapshots(today, spot=spot, universe_codes=uni)
+        counts = capture_all_factor_snapshots(
+            today,
+            spot=spot,
+            universe_codes=uni,
+            flush_every=max(1, int(args.flush_every)),
+        )
         print(f"因子快照 @ {today}: {counts}")
     except Exception as e:
         print(f"[WARN] 因子快照失败: {e}", file=sys.stderr)
