@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 
 import pandas as pd
 
-from scripts.data.backfill_daily_meta import codes_needing_mv_fetch, merge_mv_into_daily
+from scripts.data.backfill_daily_meta import (
+    add_no_mv_dates,
+    codes_needing_mv_fetch,
+    is_value_em_unavailable,
+    load_no_mv_map,
+    merge_mv_into_daily,
+    remaining_mv_miss_dates,
+)
 
 
 class CodesNeedingMvFetchTests(unittest.TestCase):
@@ -18,7 +27,6 @@ class CodesNeedingMvFetchTests(unittest.TestCase):
                 "total_mv": [10.0, 20.0, 30.0, None],
             }
         )
-        # 000001 全齐；000002 两列都有缺 → 只拉 000002
         got = codes_needing_mv_fetch(daily, ["000001", "000002"], force=False)
         self.assertEqual(got, ["000002"])
 
@@ -38,10 +46,124 @@ class CodesNeedingMvFetchTests(unittest.TestCase):
         got = codes_needing_mv_fetch(daily, ["000001", "000002"], force=False)
         self.assertEqual(got, ["000001", "000002"])
 
+    def test_skips_unavailable_codes(self):
+        daily = pd.DataFrame(
+            {
+                "code": ["000001", "600068"],
+                "float_mv": [None, None],
+                "total_mv": [None, None],
+            }
+        )
+        got = codes_needing_mv_fetch(
+            daily, ["000001", "600068"], force=False, unavailable={"600068"}
+        )
+        self.assertEqual(got, ["000001"])
+
+    def test_force_ignores_unavailable(self):
+        daily = pd.DataFrame(
+            {
+                "code": ["600068"],
+                "float_mv": [None],
+                "total_mv": [None],
+            }
+        )
+        got = codes_needing_mv_fetch(
+            daily, ["600068"], force=True, unavailable={"600068"}
+        )
+        self.assertEqual(got, ["600068"])
+
+    def test_skips_when_only_no_mv_dates_remain(self):
+        """成功拉过后仍缺的日已豁免 → 不再重拉。"""
+        daily = pd.DataFrame(
+            {
+                "code": ["000001", "000001", "000002"],
+                "date": ["2024-01-02", "2024-01-03", "2024-01-02"],
+                "float_mv": [100.0, None, None],
+                "total_mv": [200.0, None, None],
+            }
+        )
+        got = codes_needing_mv_fetch(
+            daily,
+            ["000001", "000002"],
+            force=False,
+            no_mv_map={"000001": {"2024-01-03"}},
+        )
+        self.assertEqual(got, ["000002"])
+
+    def test_still_fetches_unexempted_miss_dates(self):
+        daily = pd.DataFrame(
+            {
+                "code": ["000001", "000001"],
+                "date": ["2024-01-02", "2024-01-03"],
+                "float_mv": [None, None],
+                "total_mv": [None, None],
+            }
+        )
+        got = codes_needing_mv_fetch(
+            daily,
+            ["000001"],
+            force=False,
+            no_mv_map={"000001": {"2024-01-02"}},
+        )
+        self.assertEqual(got, ["000001"])
+
+    def test_force_ignores_no_mv_map(self):
+        daily = pd.DataFrame(
+            {
+                "code": ["000001"],
+                "date": ["2024-01-02"],
+                "float_mv": [None],
+                "total_mv": [None],
+            }
+        )
+        got = codes_needing_mv_fetch(
+            daily,
+            ["000001"],
+            force=True,
+            no_mv_map={"000001": {"2024-01-02"}},
+        )
+        self.assertEqual(got, ["000001"])
+
+
+class NoMvDatesTests(unittest.TestCase):
+    def test_add_and_load_roundtrip(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            self.assertEqual(add_no_mv_dates(home, "000001", {"2024-01-02", "2024-01-03"}), 2)
+            self.assertEqual(add_no_mv_dates(home, "000001", {"2024-01-03", "2024-01-04"}), 1)
+            mp = load_no_mv_map(home)
+            self.assertEqual(mp["000001"], {"2024-01-02", "2024-01-03", "2024-01-04"})
+
+    def test_remaining_after_partial_merge(self):
+        daily = pd.DataFrame(
+            {
+                "code": ["000001", "000001"],
+                "date": ["2024-01-02", "2024-01-03"],
+                "float_mv": [None, None],
+                "total_mv": [None, None],
+            }
+        )
+        daily2 = merge_mv_into_daily(
+            daily, {"000001": {"2024-01-02": (100.0, 200.0)}}
+        )
+        self.assertEqual(remaining_mv_miss_dates(daily2, "000001"), {"2024-01-03"})
+
+
+class UnavailableClassifyTests(unittest.TestCase):
+    def test_akshare_none_result(self):
+        self.assertTrue(
+            is_value_em_unavailable("TypeError: 'NoneType' object is not subscriptable")
+        )
+
+    def test_friendly_message(self):
+        self.assertTrue(is_value_em_unavailable("源无市值数据（退市或接口无返回）"))
+
+    def test_real_error_not_unavailable(self):
+        self.assertFalse(is_value_em_unavailable("HTTPError: 503"))
+
 
 class MergeMvResumeTests(unittest.TestCase):
     def test_merge_then_skip_on_resume(self):
-        """落盘等价：merge 后该码不再进入待拉列表（断点续传前提）。"""
         daily = pd.DataFrame(
             {
                 "code": ["000001", "000001", "000002"],
@@ -59,7 +181,6 @@ class MergeMvResumeTests(unittest.TestCase):
         }
         daily2 = merge_mv_into_daily(daily, mv)
         self.assertEqual(float(daily2.loc[daily2["date"] == "2024-01-02", "float_mv"].iloc[0]), 100.0)
-        # 已补齐的 000001 不再待拉；000002 仍缺
         got = codes_needing_mv_fetch(daily2, ["000001", "000002"], force=False)
         self.assertEqual(got, ["000002"])
 

@@ -318,7 +318,7 @@ poetry run python -m scripts.data.maintain --start 2021-01-01
 ```text
 ~/.quant/offline/            ← --offline 指到这级（含 store/）
 ├── store/                   # daily_raw / adj_factor / index_daily / calendar.parquet / 快照…
-└── data/                    # build_failed.jsonl、no_bar_dates.json 等
+└── data/                    # build_failed.jsonl、no_bar_dates.json、no_mv_dates.json 等
 ~/.quant/daily/              ← --daily 指到这级
 ~/.quant/                    ← --out / --home 指到这级
 ```
@@ -341,8 +341,11 @@ poetry run python -m scripts.data.validate_library --home ~/.quant
 **精确**补上、`pre_close` 用 `close[t-1]` 推导。参数 `--home`（quant-home 根）/ `--codes`
 （只补指定码）/ `--workers` / `--req-interval` / `--force`（默认只拉仍缺市值的码；`--force`
 才全量重拉）/ `--flush-every`（默认 50：每成功 N 只落盘，中断后重跑只补未落盘缺码）。
-写回对已有非空值 `fillna` 不覆盖。运行时会打印计划（总共/已齐跳过/待执行）
-与周期性进度（ok/fail/flushed/速率/ETA），失败码带原因。**name 刻意不灌历史**（当前名灌历史 = ST 过滤前视），PIT 名靠 `update_daily` 的
+写回对已有非空值 `fillna` 不覆盖。退市等源无市值的码记入 `data/backfill_mv_unavailable.json`，
+下次默认跳过（`--force` 重试）。**成功拉过一次后仍缺的日期**记入 `data/no_mv_dates.json`
+（结构同 `no_bar_dates.json`，语义是「源无市值」而非「源无 K 线」，**禁止混用**），下次不再为这些日重拉；
+新入库且未豁免的缺日仍会触发再拉。运行时会打印计划（总共/已齐·豁免跳过/源无跳过/待执行）
+与周期性进度（ok/fail/unavail/flushed/速率/ETA），失败码带原因。**name 刻意不灌历史**（当前名灌历史 = ST 过滤前视），PIT 名靠 `update_daily` 的
 `name_snapshot` 逐日积累；确需当前名兜底用 `--fill-name`。日常增量不需要补（spot 当天自带这些列）；
 每周五 `maintain` 后可选重跑兜住新入库票。
 
