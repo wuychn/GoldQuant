@@ -6,7 +6,7 @@ import unittest
 
 import pandas as pd
 
-from scripts.data.update_daily import detect_ex_and_align_pre_close
+from scripts.data.update_daily import detect_ex_and_align_pre_close, filter_valid_spot_bars
 
 
 class DetectExAlignTests(unittest.TestCase):
@@ -34,6 +34,40 @@ class DetectExAlignTests(unittest.TestCase):
 
         self.assertEqual(ex, [])
         self.assertEqual(float(spot["pre_close"].iloc[0]), 10.0)
+
+
+class FilterValidSpotBarsTests(unittest.TestCase):
+    def test_drops_zero_close(self):
+        spot = pd.DataFrame(
+            {
+                "code": ["000001", "000838"],
+                "open": [10.0, 0.0],
+                "high": [11.0, 0.0],
+                "low": [9.5, 0.0],
+                "close": [10.5, 0.0],
+                "volume": [1.0, 0.0],
+                "amount": [1.0, 0.0],
+            }
+        )
+        out, n = filter_valid_spot_bars(spot)
+        self.assertEqual(n, 1)
+        self.assertEqual(out["code"].tolist(), ["000001"])
+
+    def test_drops_ohlc_inconsistent(self):
+        spot = pd.DataFrame(
+            {
+                "code": ["603221"],
+                "open": [0.0],
+                "high": [0.0],
+                "low": [0.0],
+                "close": [22.54],
+                "volume": [0.0],
+                "amount": [0.0],
+            }
+        )
+        out, n = filter_valid_spot_bars(spot)
+        self.assertEqual(n, 1)
+        self.assertTrue(out.empty)
 
 
 if __name__ == "__main__":

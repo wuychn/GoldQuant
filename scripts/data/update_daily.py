@@ -95,6 +95,40 @@ def _update_industry(today: str, pend: dict) -> None:
         pend["industry"] = True
 
 
+def filter_valid_spot_bars(spot: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+    """丢掉无效盘口行，避免停牌/空报价把 close=0 写入 daily_raw。
+
+    规则与 ``validate_library`` 价格 sanity 对齐：close>0、high>=low、
+    high/low 夹住 open·close、volume/amount>=0。源站对停牌常返回全 0，
+    当日无有效 K 则不落库（与 hist 缺日 / no_bar 语义一致）。
+    """
+    if spot is None or spot.empty:
+        return spot, 0
+    d = spot.copy()
+    for c in ("open", "high", "low", "close", "volume", "amount"):
+        if c in d.columns:
+            d[c] = pd.to_numeric(d[c], errors="coerce")
+    need = ("open", "high", "low", "close")
+    if any(c not in d.columns for c in need):
+        return spot, 0
+    ok = (
+        d["close"].notna()
+        & (d["close"] > 0)
+        & d["high"].notna()
+        & d["low"].notna()
+        & d["open"].notna()
+        & (d["high"] >= d["low"])
+        & (d["high"] >= d[["open", "close"]].max(axis=1))
+        & (d["low"] <= d[["open", "close"]].min(axis=1))
+    )
+    if "volume" in d.columns:
+        ok &= d["volume"].isna() | (d["volume"] >= 0)
+    if "amount" in d.columns:
+        ok &= d["amount"].isna() | (d["amount"] >= 0)
+    n_drop = int((~ok).sum())
+    return d.loc[ok].copy(), n_drop
+
+
 def _mark_suspended(spot: pd.DataFrame, today: str) -> tuple[int, int]:
     """用当日停复牌信息标记停牌票（volume 置 0，使 universe 停牌过滤生效）。
 
@@ -198,6 +232,10 @@ def main() -> None:
     daily = read_daily_raw(end=today)
     prev_map = _prev_close_map(daily, today)
     ex_codes = detect_ex_and_align_pre_close(spot, prev_map)
+    # 无效盘口（停牌全 0 / high 不夹等）不落库，避免污染 daily_raw 与复权跳空校验
+    spot, n_bad_bars = filter_valid_spot_bars(spot)
+    if n_bad_bars:
+        print(f"丢弃无效盘口: {n_bad_bars} 只（close<=0 或 OHLC 不自洽）", file=sys.stderr)
     # 仅保留 daily_raw 列
     cols = ["code", "date", "name", "open", "high", "low", "close", "pre_close",
             "volume", "amount", "turnover_rate", "float_mv", "total_mv"]

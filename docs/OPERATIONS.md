@@ -270,9 +270,9 @@ poetry run python -m scripts.data.update_daily --force-fundamental-pit
 | `--date` | 今天 | 指定日 YYYY-MM-DD |
 | `--force-fundamental-pit` | — | 无视披露季窗口，增量刷新 fundamental_pit |
 
-收盘后执行：`spot_em` → 追加当日 daily_raw、除权检测、复权刷新、universe/行业/listing、fundamental_pit、因子快照（flow/hot/theme）。
+收盘后执行：`spot_em` → 过滤无效盘口（`close<=0` / OHLC 不自洽不落库）→ 追加当日 daily_raw、除权检测、复权刷新、universe/行业/listing、fundamental_pit、因子快照（flow/hot/theme）。
 
-**注意**：spot_em 无历史，当日没抓就补不回来，失败须告警。
+**注意**：spot_em 无历史，当日没抓就补不回来，失败须告警。停牌源常返回全 0，入口已丢弃，不写入 daily_raw。
 
 ### 5.4 自动维护（推荐）
 
@@ -307,6 +307,7 @@ poetry run python -m scripts.data.maintain --start 2021-01-01
 | `poetry run python -m scripts.data.merge_library` | `--offline` `--daily` `--out` | 合并离线库与每日增量 |
 | `poetry run python -m scripts.data.backfill_daily_meta` | `--home` `--codes` `--workers` `--req-interval` `--force` `--flush-every` | 补历史段 float_mv/total_mv/pre_close（默认只拉缺市值码；边拉边落盘可续传） |
 | `poetry run python -m scripts.data.validate_library` | `--home` `--start` `--end` | 离线库完整性与正确性校验（含复权连续性） |
+| `poetry run python -m scripts.data.scrub_invalid_bars` | `--home` `--dry-run` / `--apply` | 剔除已入库无效盘口（close=0 等）；默认 dry-run |
 
 ### 5.6a 离线库与每日增量合并（`merge_library`）
 
@@ -392,8 +393,15 @@ poetry run python -m scripts.data.validate_library --home ~/.quant
   per-code 日历覆盖（低 WARN，次新/停牌为合法缺日）/ `float_mv` 市值覆盖（<50% WARN，可跑
   `backfill_daily_meta`）/ `pre_close` 覆盖（<90% WARN）
 - **[3] 正确性**：重复 `(code,date)`（>0 FAIL）/ 价格 sanity（close>0、high>=low、high·low 夹住
-  open·close、volume·amount>=0，违规 FAIL）/ **后复权单日跳空 >28%**（>0 FAIL——`apply_hfq`
-  精确 join 旧 bug 的表现，A 股涨停/跌停 ≤20% 故阈值安全）
+  open·close、volume·amount>=0，违规 FAIL）/ **后复权异常跳空**（日历相邻交易日上，后复权
+  跳 >28% 且原料价未同步大跳 → FAIL；停牌复牌缺口、次新大波动豁免）
+
+历史已入库的 `close=0` / OHLC 不自洽行：`update_daily` 入口已拒写；清理用
+
+```powershell
+poetry run python -m scripts.data.scrub_invalid_bars --home ~/.quant --dry-run
+poetry run python -m scripts.data.scrub_invalid_bars --home ~/.quant --apply
+```
 
 ### 5.6 复权说明
 

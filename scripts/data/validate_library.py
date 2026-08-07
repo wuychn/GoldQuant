@@ -15,8 +15,8 @@
 [2] 完整性    adj_factor 覆盖率(<90% FAIL) / index_daily 000300·000905·000852(缺 FAIL) /
               per-code 日历覆盖(低 WARN)
 [3] 正确性    重复 (code,date)(>0 FAIL) / 价格 sanity(close>0、high>=low、high/low 夹住
-              open·close、volume·amount>=0)(违规 FAIL) / 复权单日跳空 >28%(>0 FAIL，
-              即 apply_hfq 精确 join 旧 bug 的表现)
+              open·close、volume·amount>=0)(违规 FAIL) / 复权跳空：仅查日历相邻交易日，
+              且「后复权跳 >28% 而原料价未跳」才 FAIL（停牌复牌/次新大波动豁免）
 """
 
 from __future__ import annotations
@@ -66,29 +66,87 @@ def _check_index() -> None:
             _note("FAIL", f"index_daily {code} 缺失或空")
 
 
-def _check_adj_jumps(daily: pd.DataFrame) -> None:
-    """后复权序列单日跳空检测——除权尖刺 bug 探测器。"""
+def _calendar_next_map(cal: list[str]) -> dict[str, str]:
+    days = sorted({str(d) for d in cal})
+    return {days[i]: days[i + 1] for i in range(len(days) - 1)}
+
+
+def adj_jump_suspects(
+    daily: pd.DataFrame,
+    adj: pd.DataFrame,
+    cal: list[str] | None = None,
+    *,
+    jump_pct: float = JUMP_PCT,
+) -> pd.DataFrame:
+    """找出疑似复权 bug 的跳空行（供校验与单测）。
+
+    条件（同时满足）：
+    1. 库内上一行与本行是**日历上相邻交易日**（长停牌复牌豁免）；
+    2. 后复权涨跌幅绝对值 > ``jump_pct``；
+    3. 同期**不复权**涨跌幅绝对值 ≤ ``jump_pct``（原料也大跳 → 次新/涨跌停外波动，豁免）。
+
+    真除权日：原料常大跳、后复权应平滑 → 不会进嫌疑；因子错接：原料平稳、后复权尖刺 → FAIL。
+    """
     from quant.data.adjust import apply_hfq
+
+    if daily.empty or adj is None or adj.empty:
+        return pd.DataFrame()
+    raw = daily.copy()
+    raw["date"] = raw["date"].astype(str)
+    raw["code"] = raw["code"].astype(str).str.strip()
+    raw["close"] = pd.to_numeric(raw["close"], errors="coerce")
+    raw = raw[raw["close"].notna() & (raw["close"] > 0)]
+    if raw.empty:
+        return pd.DataFrame()
+
+    adj2 = adj.copy()
+    adj2["date"] = adj2["date"].astype(str)
+    out = apply_hfq(raw, adj2)
+    if out.empty:
+        return pd.DataFrame()
+    out = out.sort_values(["code", "date"]).reset_index(drop=True)
+    out["hfq_pct"] = out.groupby("code", sort=False)["close"].pct_change() * 100.0
+    out["prev_date"] = out.groupby("code", sort=False)["date"].shift(1)
+
+    raw_pct = (
+        raw.sort_values(["code", "date"])
+        .assign(raw_pct=lambda x: x.groupby("code", sort=False)["close"].pct_change() * 100.0)
+        [["code", "date", "close", "raw_pct"]]
+        .rename(columns={"close": "raw_close"})
+    )
+    m = out.merge(raw_pct, on=["code", "date"], how="left")
+
+    if cal:
+        nxt = _calendar_next_map(cal)
+        adjacent = m["prev_date"].map(nxt) == m["date"]
+    else:
+        # 无日历时退化为「库内相邻」；仍用 raw/hfq 对比过滤次新大波动
+        adjacent = m["prev_date"].notna()
+
+    bad = m[adjacent & (m["hfq_pct"].abs() > jump_pct) & (m["raw_pct"].abs() <= jump_pct)]
+    return bad.reset_index(drop=True)
+
+
+def _check_adj_jumps(daily: pd.DataFrame, cal: list[str] | None = None) -> None:
+    """后复权跳空检测——只抓复权/因子错接，不误伤停牌复牌与次新波动。"""
     from quant.data.store import read_adj_factor
 
     adj = read_adj_factor()
     if adj.empty:
         _note("FAIL", "adj_factor 为空 → load_adjusted_daily 退化为未复权价，除权日必假跳空（须先补 adj_factor）")
         return
-    adj["date"] = adj["date"].astype(str)
-    daily = daily.copy()
-    daily["date"] = daily["date"].astype(str)
-    out = apply_hfq(daily, adj)
-    if out.empty:
-        return
-    out = out.sort_values(["code", "date"])
-    out["pct"] = out.groupby("code")["close"].pct_change() * 100.0
-    bad = out[out["pct"].abs() > JUMP_PCT]
+    bad = adj_jump_suspects(daily, adj, cal)
     if bad.empty:
-        print("  [OK]   后复权单日跳空 >28%: 0 个（复权连续，无除权尖刺）")
+        print(
+            f"  [OK]   后复权异常跳空 >{JUMP_PCT}%: 0 个"
+            f"（已豁免非相邻交易日 / 原料同步大波动）"
+        )
     else:
-        samples = bad[["code", "date", "close", "pct"]].head(5).to_dict("records")
-        _note("FAIL", f"后复权单日跳空 >{JUMP_PCT}%: {len(bad)} 个（复权/数据 bug）样例: {samples}")
+        samples = bad[["code", "date", "close", "hfq_pct", "raw_pct"]].head(5).to_dict("records")
+        _note(
+            "FAIL",
+            f"后复权异常跳空 >{JUMP_PCT}%（原料未同步）: {len(bad)} 个（复权/数据 bug）样例: {samples}",
+        )
 
 
 def _check_price_sanity(daily: pd.DataFrame) -> None:
@@ -233,7 +291,7 @@ def main() -> None:
                 else:
                     _note("FAIL", f"重复 (code,date): {dup}")
                 _check_price_sanity(daily)
-                _check_adj_jumps(daily)
+                _check_adj_jumps(daily, cal)
 
         # 汇总
         print("\n=== 结果 ===")
