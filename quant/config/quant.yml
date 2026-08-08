@@ -83,6 +83,8 @@ data:                          # 数据源并发限流
   # 个股资金流 5 日：分页完再逐票补缺（quant/data/fund_flow_5d.py）
   # 键名与 CLI 一致（下划线 / 连字符）：req_page_interval ↔ --req-page-interval
   # 区间一律 MIN,MAX（或单值 N）
+  fund_flow_use_rank: true        # false=跳过分页直接逐票；CLI --fund-flow-mode per_symbol
+  fund_flow_flush_every: 50       # 逐票每 N 只落盘；CLI --flush-every
   fund_flow_rank_page_size: 100
   req_page_interval: "61,121"     # 页间；CLI --req-page-interval
   req_symbol_interval: "5,10"     # 逐票；CLI --req-symbol-interval

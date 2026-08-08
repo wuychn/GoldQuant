@@ -253,6 +253,8 @@
 | `akshare_max_concurrent` | `1` | AKShare 并发（过高易限流） |
 | `ths_max_concurrent` | `1` | 同花顺并发 |
 | `eastmoney_max_concurrent` | `1` | 东财并发 |
+| `fund_flow_use_rank` | `true` | 是否先走分页排名；`false` 则直接逐票（CLI `--fund-flow-mode`） |
+| `fund_flow_flush_every` | `50` | 逐票每 N 只落盘（CLI `--flush-every`） |
 | `fund_flow_rank_page_size` | `100` | 个股资金流排名每页条数 |
 | `req_page_interval` | `"61,121"` | 页间间隔秒（`MIN,MAX`/`N`；CLI `--req-page-interval`；下限 10） |
 | `req_symbol_interval` | `"5,10"` | 逐票间隔秒（`MIN,MAX`/`N`；CLI `--req-symbol-interval`） |

@@ -233,13 +233,13 @@ poetry run python -m scripts.data.update_daily --home D:\ProgramData\.quant\dail
 | `--home` | 当前 QUANT_HOME | 建库期 `...\daily`；日常正式库 | quant-home 根 |
 | `--date` | 今天 | 一般不设 | 交易日 YYYY-MM-DD；非交易日跳过 |
 | `--force-fundamental-pit` | off | 披露季外要强刷财务时开 | 无视披露窗口，增量刷新 `fundamental_pit` |
-| `--fund-flow-mode` | `rank` | `rank` | `rank`=分页为主、失败后逐票补缺；`per_symbol`=强制旧逐票 |
+| `--fund-flow-mode` | yml `fund_flow_use_rank` | `per_symbol` | `rank`=先分页再逐票补缺；`per_symbol`=跳过分页直接逐票（yml `fund_flow_use_rank: false`） |
 | `--fund-flow-page-size` | yml `100` | `100` | rank 每页条数 |
 | `--req-page-interval` | yml `61,121` | `61,121` | 页间间隔秒，`MIN,MAX` 或 `N`（与 yml `req_page_interval` 同名；下限 10） |
 | `--req-symbol-interval` | yml `5,10` | `5,10` | 逐票间隔秒（yml `req_symbol_interval`） |
 | `--req-batch-pause` | yml `120,240` | 一般不设 | 批间/失败跳页暂停（yml `req_batch_pause`） |
 | `--req-burst-pages` | yml `1,3` | 一般不设 | 每成功 N 页批停（yml `req_burst_pages`） |
-| `--flush-every` | `50` | `50` | 仅 `per_symbol`：每 N 只落盘 |
+| `--flush-every` | yml `50` | `50` | 逐票每 N 只落盘断点（yml `fund_flow_flush_every`；分页仍每页落盘） |
 
 示例：
 

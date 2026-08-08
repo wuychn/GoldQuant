@@ -36,8 +36,9 @@ def test_after_rank_fills_missing_only(quant_tmp, monkeypatch):
 
     pulled: list[str] = []
 
-    def fake_fill(*, as_of, codes, interval_lo, interval_hi, pause_lo, pause_hi, force):
-        pulled.extend(list(codes))
+    def fake_fill(**kwargs):
+        pulled.extend(list(kwargs["codes"]))
+        codes = kwargs["codes"]
         filled = {c: float(i + 1) * 1e8 for i, c in enumerate(codes)}
         return len(filled), 0, filled
 
@@ -52,6 +53,40 @@ def test_after_rank_fills_missing_only(quant_tmp, monkeypatch):
     assert "enrich.fetch_stock_fund_flow_daily" in result.sources_used
     assert pulled == ["000003"]
     assert set(result.df["code"]) == {"000001", "000002", "000003"}
+
+
+def test_use_rank_false_skips_pagination(quant_tmp, monkeypatch):
+    from quant.data import fund_flow_5d as orch
+
+    monkeypatch.setattr(orch, "_page_interval_bounds", lambda: (0.0, 0.0))
+    monkeypatch.setattr(orch, "_symbol_interval_bounds", lambda: (0.0, 0.0))
+    monkeypatch.setattr(orch, "_batch_pause_bounds", lambda: (0.0, 0.0))
+    monkeypatch.setattr(orch, "_burst_pages", lambda: (1, 3))
+
+    def boom_rank(*a, **kw):
+        raise AssertionError("should not call rank when use_rank=false")
+
+    monkeypatch.setattr(
+        "quant.data.sources.interface.try_with_fallback", boom_rank
+    )
+    pulled: list[str] = []
+
+    def fake_fill(**kwargs):
+        codes = kwargs["codes"]
+        pulled.extend(list(codes))
+        return len(codes), 0, {c: 1.0 for c in codes}
+
+    monkeypatch.setattr(orch, "_fill_per_symbol", fake_fill)
+
+    result = orch.fetch_main_net_inflow_5d(
+        as_of="2026-08-08",
+        codes=["000001", "000002"],
+        use_rank=False,
+    )
+    assert pulled == ["000001", "000002"]
+    assert not any("fund_flow_rank" in s for s in result.sources_used)
+    assert "enrich.fetch_stock_fund_flow_daily" in result.sources_used
+    assert len(result.df) == 2
 
 
 def test_no_per_symbol_when_rank_covers(quant_tmp, monkeypatch):

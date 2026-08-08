@@ -328,11 +328,13 @@ def capture_fund_flow_rank(
     batch_pause: str | None = None,
     burst_pages: str | None = None,
     force: bool = False,
+    use_rank: bool = True,
+    flush_every: int | None = None,
 ) -> int:
     """主力 5 日净流入 / 流通市值。
 
-    取数编排在 ``quant.data.fund_flow_5d``（分页→失败回退逐票）；本函数只做
-    市值归一与快照落盘。
+    取数编排在 ``quant.data.fund_flow_5d``（``use_rank`` 控制是否先分页）；
+    本函数只做市值归一与快照落盘。
     """
     if spot is None or spot.empty:
         return 0
@@ -392,6 +394,8 @@ def capture_fund_flow_rank(
         burst_pages_min=burst_lo,
         burst_pages_max=burst_hi,
         force=force,
+        use_rank=use_rank,
+        flush_every=flush_every,
     )
     df = result.df
     if df is None or df.empty:
@@ -449,21 +453,19 @@ def capture_all_factor_snapshots(
     print(f"因子快照: hot_rank={n_hot} · fund_flow …", flush=True)
     spot_df = spot if isinstance(spot, pd.DataFrame) else pd.DataFrame()
     mode = (fund_flow_mode or "rank").strip().lower()
-    if mode == "per_symbol":
-        n_flow = capture_fund_flow(
-            as_of, spot_df, universe_codes, flush_every=flush_every
-        )
-    else:
-        n_flow = capture_fund_flow_rank(
-            as_of,
-            spot_df,
-            universe_codes,
-            page_size=page_size,
-            page_interval=page_interval,
-            symbol_interval=symbol_interval,
-            batch_pause=batch_pause,
-            burst_pages=burst_pages,
-        )
+    use_rank = mode != "per_symbol"
+    n_flow = capture_fund_flow_rank(
+        as_of,
+        spot_df,
+        universe_codes,
+        page_size=page_size,
+        page_interval=page_interval,
+        symbol_interval=symbol_interval,
+        batch_pause=batch_pause,
+        burst_pages=burst_pages,
+        use_rank=use_rank,
+        flush_every=flush_every,
+    )
     print(f"因子快照: fund_flow={n_flow} · theme_mom …", flush=True)
     n_theme = capture_theme_mom(as_of, spot if isinstance(spot, pd.DataFrame) else None)
     return {"hot": n_hot, "flow": n_flow, "theme": n_theme}

@@ -20,6 +20,8 @@ class DataCfg(BaseModel):
     akshare_max_concurrent: int | None = Field(default=None, ge=1, le=32)
     ths_max_concurrent: int | None = Field(default=None, ge=1, le=32)
     eastmoney_max_concurrent: int | None = Field(default=None, ge=1, le=32)
+    fund_flow_use_rank: bool | None = None
+    fund_flow_flush_every: int | None = Field(default=None, ge=1, le=5000)
     fund_flow_rank_page_size: int | None = Field(default=None, ge=1, le=500)
     # 与 CLI 同名（yml 下划线 ↔ CLI 连字符）：req_page_interval ↔ --req-page-interval
     req_page_interval: str | None = None

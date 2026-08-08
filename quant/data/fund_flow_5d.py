@@ -152,8 +152,16 @@ def fetch_main_net_inflow_5d(
     burst_pages_min: int | None = None,
     burst_pages_max: int | None = None,
     force: bool = False,
+    use_rank: bool = True,
+    flush_every: int | None = None,
 ) -> FundFlow5dResult:
-    """取 5 日主力净流入（元）。先分页（接口级换源），完成后逐票补缺。"""
+    """取 5 日主力净流入（元）。
+
+    ``use_rank=True``（默认）：先分页再逐票补缺。
+    ``use_rank=False``：跳过分页，直接逐票（yml ``fund_flow_use_rank`` /
+    CLI ``--fund-flow-mode per_symbol``）。
+    ``flush_every``：逐票每 N 只落盘一次（默认 yml ``fund_flow_flush_every``=50）。
+    """
     from quant.data.sources.interface import try_with_fallback
 
     page_lo, page_hi = _page_interval_bounds()
@@ -189,19 +197,17 @@ def fetch_main_net_inflow_5d(
     data = _cfg()
     if page_size is None:
         page_size = int(data.get("fund_flow_rank_page_size", 100))
+    if flush_every is None:
+        flush_every = int(data.get("fund_flow_flush_every", 50))
+    flush_every = max(1, int(flush_every))
 
     need = {str(c).strip() for c in (codes or []) if str(c).strip()}
     rank_label = f"market.fetch_stock_fund_flow_rank[{_rank_source_label()}]"
     sources: list[str] = []
 
     print(
-        f"{_LOG} 【开始】as_of={to_iso(as_of)} · 目标 {len(need) if need else '全市场'} 码",
-        flush=True,
-    )
-    print(
-        f"{_LOG} 【阶段1/2·分页】源={rank_label} · 页间隔{page_lo:.0f}~{page_hi:.0f}s · "
-        f"每{burst_lo}~{burst_hi}页批停{pause_lo:.0f}~{pause_hi:.0f}s · "
-        f"单页失败长停后跳过该页，缺码由阶段2逐票补（属正常，不是退出）",
+        f"{_LOG} 【开始】as_of={to_iso(as_of)} · 目标 {len(need) if need else '全市场'} 码"
+        f" · use_rank={use_rank}",
         flush=True,
     )
 
@@ -210,57 +216,70 @@ def fetch_main_net_inflow_5d(
     rank_reason = ""
     pages_ok = 0
 
-    try:
-        out = try_with_fallback(
-            "market",
-            "fetch_stock_fund_flow_rank",
-            indicator="5日",
-            page_size=page_size,
-            page_interval_min=page_lo,
-            page_interval_max=page_hi,
-            burst_pages_min=burst_lo,
-            burst_pages_max=burst_hi,
-            batch_pause_min_sec=pause_lo,
-            batch_pause_max_sec=pause_hi,
-            as_of=as_of,
-            force=force,
-            return_meta=True,
-        )
-        if isinstance(out, tuple) and len(out) == 2:
-            rank_df, meta = out
-        else:
-            rank_df, meta = out, {}
-        pages_ok = int(meta.get("last_page") or 0)
-        rank_aborted = bool(meta.get("aborted"))
-        rank_reason = str(meta.get("abort_reason") or "")
-        sources.append(rank_label)
+    if not use_rank:
         print(
-            f"{_LOG} 【阶段1/2·分页结束】源={rank_label} · "
-            f"{'完成' if not rank_aborted else '未完成'} · "
-            f"{pages_ok} 页 · {len(rank_df)} 码"
-            f"{(' · ' + rank_reason) if rank_reason else ''}",
+            f"{_LOG} 【阶段1/2·跳过】关闭分页（use_rank=false），直接逐票",
             flush=True,
         )
-    except Exception as exc:  # noqa: BLE001
-        rank_aborted = True
-        rank_reason = f"{type(exc).__name__}: {exc}"
-        sources.append(rank_label)
+        rank_reason = "use_rank=false"
+    else:
         print(
-            f"{_LOG} 【阶段1/2·分页异常】源={rank_label} · {rank_reason} → 尝试读断点缓存",
+            f"{_LOG} 【阶段1/2·分页】源={rank_label} · 页间隔{page_lo:.0f}~{page_hi:.0f}s · "
+            f"每{burst_lo}~{burst_hi}页批停{pause_lo:.0f}~{pause_hi:.0f}s · "
+            f"单页失败长停后跳过该页，缺码由阶段2逐票补（属正常，不是退出）",
             flush=True,
         )
-        from quant.data.sources.eastmoney.fund_flow_rank import _read_meta, load_cached_rank
-
-        cached = load_cached_rank(as_of, "5日")
-        if cached is not None and not cached.empty:
-            rank_df = cached
-            pages_ok = int(_read_meta(as_of, "5日").get("last_page") or 0)
+        try:
+            out = try_with_fallback(
+                "market",
+                "fetch_stock_fund_flow_rank",
+                indicator="5日",
+                page_size=page_size,
+                page_interval_min=page_lo,
+                page_interval_max=page_hi,
+                burst_pages_min=burst_lo,
+                burst_pages_max=burst_hi,
+                batch_pause_min_sec=pause_lo,
+                batch_pause_max_sec=pause_hi,
+                as_of=as_of,
+                force=force,
+                return_meta=True,
+            )
+            if isinstance(out, tuple) and len(out) == 2:
+                rank_df, meta = out
+            else:
+                rank_df, meta = out, {}
+            pages_ok = int(meta.get("last_page") or 0)
+            rank_aborted = bool(meta.get("aborted"))
+            rank_reason = str(meta.get("abort_reason") or "")
+            sources.append(rank_label)
             print(
-                f"{_LOG} 【断点缓存】已恢复 {pages_ok} 页 · {len(rank_df)} 码",
+                f"{_LOG} 【阶段1/2·分页结束】源={rank_label} · "
+                f"{'完成' if not rank_aborted else '未完成'} · "
+                f"{pages_ok} 页 · {len(rank_df)} 码"
+                f"{(' · ' + rank_reason) if rank_reason else ''}",
                 flush=True,
             )
-        else:
-            print(f"{_LOG} 【断点缓存】无可用分页数据", flush=True)
+        except Exception as exc:  # noqa: BLE001
+            rank_aborted = True
+            rank_reason = f"{type(exc).__name__}: {exc}"
+            sources.append(rank_label)
+            print(
+                f"{_LOG} 【阶段1/2·分页异常】源={rank_label} · {rank_reason} → 尝试读断点缓存",
+                flush=True,
+            )
+            from quant.data.sources.eastmoney.fund_flow_rank import _read_meta, load_cached_rank
+
+            cached = load_cached_rank(as_of, "5日")
+            if cached is not None and not cached.empty:
+                rank_df = cached
+                pages_ok = int(_read_meta(as_of, "5日").get("last_page") or 0)
+                print(
+                    f"{_LOG} 【断点缓存】已恢复 {pages_ok} 页 · {len(rank_df)} 码",
+                    flush=True,
+                )
+            else:
+                print(f"{_LOG} 【断点缓存】无可用分页数据", flush=True)
 
     have = {
         str(r["code"]).strip(): float(r["main_net_inflow"])
@@ -308,11 +327,12 @@ def fetch_main_net_inflow_5d(
         )
         return _result_from_have()
 
+    stage2 = "逐票全量" if not use_rank else "逐票补缺"
     print(
-        f"{_LOG} 【阶段2/2·逐票补缺】源=enrich.fetch_stock_fund_flow_daily · "
-        f"间隔{sym_lo:.0f}~{sym_hi:.0f}s · "
+        f"{_LOG} 【阶段2/2·{stage2}】源=enrich.fetch_stock_fund_flow_daily · "
+        f"东财间隔{sym_lo:.0f}~{sym_hi:.0f}s · "
         f"已有 {len(need) - len(missing)} · 待拉 {len(missing)} · 总共 {len(need)} "
-        f"（分页已有不重拉；进度每 50 只汇总；断连休眠后重试）",
+        f"（东财单层间隔同 build_daily；断连休眠后重试）",
         flush=True,
     )
     sources.append("enrich.fetch_stock_fund_flow_daily")
@@ -325,6 +345,7 @@ def fetch_main_net_inflow_5d(
         pause_lo=pause_lo,
         pause_hi=pause_hi,
         force=force,
+        flush_every=flush_every,
     )
     have.update(filled)
     covered = len(set(have) & need)
@@ -362,12 +383,15 @@ def _fill_per_symbol(
     pause_lo: float,
     pause_hi: float,
     force: bool,
+    flush_every: int = 50,
 ) -> tuple[int, int, dict[str, float]]:
     from common.utils.source_headers import apply_source_header_patch, set_eastmoney_interval
     from quant.data.sources.interface import try_with_fallback_async
 
     apply_source_header_patch()
+    # 与 build_daily 一致：只靠东财策略 before_request 限速，循环内不再二次 sleep
     set_eastmoney_interval(max(1, int(interval_lo)), max(1, int(interval_hi)))
+    flush_every = max(1, int(flush_every))
 
     done = set() if force else _read_per_symbol_done(as_of)
     filled = {} if force else _read_per_symbol_values(as_of)
@@ -377,7 +401,7 @@ def _fill_per_symbol(
     n_pending = len(pending)
     print(
         f"{_LOG} 【逐票】已完成 {already} · 待拉 {n_pending} · 总共 {total} · "
-        f"间隔 {interval_lo:.0f}~{interval_hi:.0f}s",
+        f"东财间隔 {interval_lo:.0f}~{interval_hi:.0f}s · 每 {flush_every} 只落盘",
         flush=True,
     )
     if not pending:
@@ -386,13 +410,21 @@ def _fill_per_symbol(
     ok_n = 0
     empty_n = 0
     fail_n = 0
-    progress_every = 50
+    dirty = 0
     t0 = time.time()
 
     async def _pull(code: str):
         return await try_with_fallback_async(
             "enrich", "fetch_stock_fund_flow_daily", symbol=code, days=10
         )
+
+    def _maybe_flush(done_n: int, *, final: bool = False) -> None:
+        nonlocal dirty
+        if dirty <= 0:
+            return
+        if final or dirty >= flush_every or done_n % flush_every == 0:
+            _write_per_symbol_state(as_of, done, filled)
+            dirty = 0
 
     def _log_progress(done_n: int) -> None:
         # 对齐 build_daily._run_pull：进度 i/N  ok= empty= fail=  耗时s
@@ -405,21 +437,20 @@ def _fill_per_symbol(
 
     print(
         f"{_LOG} 【逐票】开始拉取 · 待拉 {n_pending} · "
-        f"进度每 {progress_every} 只（首只完成后即打一次）",
+        f"进度/落盘每 {flush_every} 只（首只完成后即打进度）",
         flush=True,
     )
 
     i = 0
     while i < n_pending:
         code = pending[i]
-        if i > 0:
-            time.sleep(random.uniform(interval_lo, interval_hi))
         try:
             recs = asyncio.run(_pull(code))
             net = _sum_main_net_5d(recs)
         except Exception as exc:  # noqa: BLE001
             if _is_disconnect(exc):
                 sec = random.uniform(pause_lo, pause_hi)
+                _maybe_flush(i, final=True)  # 休眠前先落盘，减少回退
                 print(
                     f"{_LOG} 【逐票断连】{code} · {type(exc).__name__}: {exc} · "
                     f"休眠 {sec / 60:.1f} 分钟后重试"
@@ -430,9 +461,10 @@ def _fill_per_symbol(
                 continue  # 同码再试，断点不前进
             fail_n += 1
             done.add(code)
-            _write_per_symbol_state(as_of, done, filled)
+            dirty += 1
             i += 1
-            if i == 1 or i % progress_every == 0 or i == n_pending:
+            _maybe_flush(i)
+            if i == 1 or i % flush_every == 0 or i == n_pending:
                 _log_progress(i)
             continue
 
@@ -442,11 +474,13 @@ def _fill_per_symbol(
             ok_n += 1
         else:
             empty_n += 1
-        _write_per_symbol_state(as_of, done, filled)
+        dirty += 1
         i += 1
-        if i == 1 or i % progress_every == 0 or i == n_pending:
+        _maybe_flush(i)
+        if i == 1 or i % flush_every == 0 or i == n_pending:
             _log_progress(i)
 
+    _maybe_flush(i, final=True)
     print(
         f"{_LOG} 【逐票完成】ok={ok_n} empty={empty_n} fail={fail_n}  "
         f"耗时 {time.time() - t0:.0f}s"
