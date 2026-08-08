@@ -207,7 +207,25 @@ def main() -> None:
         "--flush-every",
         type=int,
         default=50,
-        help="fund_flow 每成功拉取 N 只落盘一次（断点续传粒度，默认 50）",
+        help="per_symbol 模式：fund_flow 每成功拉取 N 只落盘一次（默认 50）",
+    )
+    ap.add_argument(
+        "--fund-flow-mode",
+        choices=("rank", "per_symbol"),
+        default="rank",
+        help="fund_flow：rank=分页全市场（默认）；per_symbol=逐票旧路径",
+    )
+    ap.add_argument(
+        "--fund-flow-page-size",
+        type=int,
+        default=None,
+        help="rank 模式每页条数（默认 quant.yml data.fund_flow_rank_page_size）",
+    )
+    ap.add_argument(
+        "--fund-flow-page-interval",
+        type=float,
+        default=None,
+        help="rank 模式固定页间秒数（默认不设：yml min/max 随机 10–30；下限 10）",
     )
     args = ap.parse_args()
 
@@ -345,7 +363,7 @@ def main() -> None:
             print(f"[WARN] fundamental_pit 刷新失败: {e}", file=sys.stderr)
 
         # 9. 因子 PIT 快照（hot/flow/theme；基本面见 fundamental_pit）
-        #    fund_flow 分批落盘 + progress 文件，中断后重跑跳过已尝试码
+        #    fund_flow 默认 rank 分页（源内页级断点）；--fund-flow-mode per_symbol 走旧逐票
         try:
             from quant.data.factor_capture import capture_all_factor_snapshots
             from quant.data.universe import universe_codes
@@ -357,6 +375,9 @@ def main() -> None:
                 spot=spot,
                 universe_codes=uni,
                 flush_every=max(1, int(args.flush_every)),
+                page_size=args.fund_flow_page_size,
+                page_interval=args.fund_flow_page_interval,
+                fund_flow_mode=args.fund_flow_mode,
             )
             print(f"因子快照 @ {today}: {counts}")
         except Exception as e:
@@ -366,8 +387,11 @@ def main() -> None:
         _write_pending(pend)
         n_pend = len(pend.get("indices", [])) + (1 if pend.get("industry") else 0)
         if n_pend:
-            print(f"[INFO] 待重试 {n_pend} 项（指数 {pend.get('indices')}，行业 "
-                  f"{pend.get('industry')}）→ 下次 update_daily 自动补", file=sys.stderr)
+            print(
+                f"[INFO] 待重试 {n_pend} 项（指数 {pend.get('indices')}，行业 "
+                f"{pend.get('industry')}）→ 下次 update_daily 自动补",
+                file=sys.stderr,
+            )
         log_progress_done(_SCOPE, "成功", detail=today)
 
 

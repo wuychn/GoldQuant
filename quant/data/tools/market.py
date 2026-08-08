@@ -144,6 +144,60 @@ async def fetch_market_fund_flow(n: int) -> list | None:
         return None
 
 
+def fetch_stock_fund_flow_rank(
+    *,
+    indicator: str = "5日",
+    as_of: str | None = None,
+    page_size: int | None = None,
+    page_interval: float | None = None,
+    page_interval_min: float | None = None,
+    page_interval_max: float | None = None,
+    force: bool = False,
+):
+    """个股资金流排名（分页）→ DataFrame(code, main_net_inflow)。
+
+    页间默认随机 [min,max]（yml ``fund_flow_rank_page_interval_*``，默认 10–30）。
+    编排（分页失败→逐票）见 ``quant.data.fund_flow_5d.fetch_main_net_inflow_5d``。
+    """
+    from quant.config import load_quant_config
+    from quant.data.sources.interface import try_with_fallback
+
+    data = load_quant_config().get("data") or {}
+    if page_size is None:
+        page_size = int(data.get("fund_flow_rank_page_size", 100))
+    if page_interval is not None:
+        page_interval_min = page_interval_max = max(10.0, float(page_interval))
+    if page_interval_min is None:
+        page_interval_min = float(
+            data.get("fund_flow_rank_page_interval_min", data.get("fund_flow_rank_page_interval", 10))
+        )
+    if page_interval_max is None:
+        page_interval_max = float(data.get("fund_flow_rank_page_interval_max", 30))
+    burst_lo = int(data.get("fund_flow_rank_burst_pages_min", 2))
+    burst_hi = int(data.get("fund_flow_rank_burst_pages_max", 4))
+    pause_lo = float(
+        data.get(
+            "fund_flow_rank_batch_pause_min_sec",
+            data.get("fund_flow_rank_fail_cooldown_sec", 120),
+        )
+    )
+    pause_hi = float(data.get("fund_flow_rank_batch_pause_max_sec", 240))
+    return try_with_fallback(
+        "market",
+        "fetch_stock_fund_flow_rank",
+        indicator=indicator,
+        page_size=max(1, int(page_size)),
+        page_interval_min=max(10.0, float(page_interval_min)),
+        page_interval_max=max(10.0, float(page_interval_max)),
+        burst_pages_min=max(1, burst_lo),
+        burst_pages_max=max(1, burst_hi),
+        batch_pause_min_sec=max(0.0, pause_lo),
+        batch_pause_max_sec=max(0.0, pause_hi),
+        as_of=as_of,
+        force=force,
+    )
+
+
 async def async_holding_rows() -> list:
     from quant.store.state import get_holdings
 

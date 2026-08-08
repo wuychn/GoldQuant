@@ -317,14 +317,96 @@ def _stock_concepts(code: str) -> list[str]:
     return concepts or []
 
 
+def capture_fund_flow_rank(
+    as_of: str,
+    spot: pd.DataFrame,
+    universe_codes: list[str] | None = None,
+    *,
+    page_size: int | None = None,
+    page_interval: float | None = None,
+    force: bool = False,
+) -> int:
+    """主力 5 日净流入 / 流通市值。
+
+    取数编排在 ``quant.data.fund_flow_5d``（分页→失败回退逐票）；本函数只做
+    市值归一与快照落盘。
+    """
+    if spot is None or spot.empty:
+        return 0
+    mv_map: dict[str, float] = {}
+    for _, r in spot.iterrows():
+        code = str(r.get("code", "")).strip()
+        mv = _num(r.get("float_mv"))
+        if code and mv and mv > 0:
+            mv_map[code] = mv
+    targets = [
+        c for c in dict.fromkeys(universe_codes or list(mv_map.keys())) if mv_map.get(c)
+    ]
+    if not targets:
+        return 0
+
+    if not force:
+        existing = read_fund_flow_snapshot(as_of, exact=True)
+        hit = len(set(existing) & set(targets))
+        if hit >= max(1, int(0.98 * len(targets))):
+            print(
+                f"fund_flow: 快照已覆盖 {hit}/{len(targets)}，跳过拉取",
+                flush=True,
+            )
+            return len(existing)
+
+    from quant.data.fund_flow_5d import fetch_main_net_inflow_5d
+
+    # CLI 传入 page_interval 时作固定间隔；否则编排层读 yml 随机 [min,max]
+    fixed = max(10.0, float(page_interval)) if page_interval is not None else None
+    result = fetch_main_net_inflow_5d(
+        as_of=as_of,
+        codes=targets,
+        page_size=page_size,
+        page_interval_min=fixed,
+        page_interval_max=fixed,
+        force=force,
+    )
+    df = result.df
+    if df is None or df.empty:
+        print("[WARN] fund_flow: 无净流入数据", file=sys.stderr, flush=True)
+        return len(read_fund_flow_snapshot(as_of, exact=True))
+
+    rows: list[dict] = []
+    for _, r in df.iterrows():
+        code = str(r.get("code", "")).strip()
+        net = _num(r.get("main_net_inflow"))
+        mv = mv_map.get(code)
+        if not code or net is None or not mv or mv <= 0:
+            continue
+        ratio = net / mv
+        if abs(ratio) < 1e8:
+            rows.append({"code": code, "flow_ratio_5": round(ratio, 6)})
+    if rows:
+        upsert_fund_flow_snapshot(as_of, rows)
+    print(
+        f"fund_flow: 落盘 {len(rows)} · sources={result.sources_used} · "
+        f"rank_pages={result.rank_pages_ok} aborted={result.rank_aborted} · "
+        f"per_symbol ok/fail={result.per_symbol_ok}/{result.per_symbol_fail}",
+        flush=True,
+    )
+    return len(read_fund_flow_snapshot(as_of, exact=True))
+
+
 def capture_all_factor_snapshots(
     as_of: str,
     spot: pd.DataFrame | None = None,
     universe_codes: list[str] | None = None,
     *,
     flush_every: int = _DEFAULT_FLOW_FLUSH_EVERY,
+    page_size: int | None = None,
+    page_interval: float | None = None,
+    fund_flow_mode: str = "rank",
 ) -> dict[str, int]:
-    """一次性采集 hot/flow/theme 快照（基本面统一走 fundamental_pit）。"""
+    """一次性采集 hot/flow/theme 快照（基本面统一走 fundamental_pit）。
+
+    ``fund_flow_mode``: ``rank``（默认，分页全市场）| ``per_symbol``（旧逐票路径）。
+    """
     if spot is None:
         try:
             from quant.data.fetch import fetch_spot_em
@@ -332,15 +414,23 @@ def capture_all_factor_snapshots(
             spot = fetch_spot_em()
         except Exception:
             spot = pd.DataFrame()
-    print(f"因子快照: hot_rank …", flush=True)
+    print("因子快照: hot_rank …", flush=True)
     n_hot = capture_hot_rank(as_of)
     print(f"因子快照: hot_rank={n_hot} · fund_flow …", flush=True)
-    n_flow = capture_fund_flow(
-        as_of,
-        spot if isinstance(spot, pd.DataFrame) else pd.DataFrame(),
-        universe_codes,
-        flush_every=flush_every,
-    )
+    spot_df = spot if isinstance(spot, pd.DataFrame) else pd.DataFrame()
+    mode = (fund_flow_mode or "rank").strip().lower()
+    if mode == "per_symbol":
+        n_flow = capture_fund_flow(
+            as_of, spot_df, universe_codes, flush_every=flush_every
+        )
+    else:
+        n_flow = capture_fund_flow_rank(
+            as_of,
+            spot_df,
+            universe_codes,
+            page_size=page_size,
+            page_interval=page_interval,
+        )
     print(f"因子快照: fund_flow={n_flow} · theme_mom …", flush=True)
     n_theme = capture_theme_mom(as_of, spot if isinstance(spot, pd.DataFrame) else None)
     return {"hot": n_hot, "flow": n_flow, "theme": n_theme}

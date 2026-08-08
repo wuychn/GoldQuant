@@ -80,6 +80,15 @@ data:                          # 数据源并发限流
   akshare_max_concurrent: 1     # AKShare 并发（过高易限流）
   ths_max_concurrent: 1         # 同花顺并发
   eastmoney_max_concurrent: 1  # 东财并发
+  # 个股资金流 5 日：分页完再逐票补缺（quant/data/fund_flow_5d.py）
+  fund_flow_rank_page_size: 100
+  fund_flow_rank_page_interval_min: 10   # 页间/逐票间隔下限（秒，随机）
+  fund_flow_rank_page_interval_max: 30   # 页间/逐票间隔上限（秒，随机）
+  fund_flow_rank_burst_pages_min: 2      # 每成功拉 N 页后批停（下限）
+  fund_flow_rank_burst_pages_max: 4      # 每成功拉 N 页后批停（上限，随机）
+  fund_flow_rank_batch_pause_min_sec: 120  # 批间/断连暂停下限（秒，2–4 分钟）
+  fund_flow_rank_batch_pause_max_sec: 240  # 批间/断连暂停上限（秒）
+  fund_flow_rank_fail_cooldown_sec: 120     # 兼容旧键→映射为 batch_pause_min
   sources:
     # 四类（daily/market/enrich/info）均支持接口级换源 + 数据驱动 fallback：
     #   整源：daily: default                  # 所有接口走同一实现，不 fallback
@@ -99,6 +108,8 @@ data:                          # 数据源并发限流
     market:
       fetch_industry_map: [sina, eastmoney]
       fetch_concept_boards: [akshare, ths, default]
+      # 仅 eastmoney：akshare/default 同源实现，多源 fallback 只会反复打同一断页
+      fetch_stock_fund_flow_rank: eastmoney
     enrich:
       fetch_stock_quote: [eastmoney, default]
       fetch_stock_fund_flow: [ths, default]

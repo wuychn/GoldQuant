@@ -66,6 +66,46 @@ class EastmoneyMarketSource:
             }
         return out
 
+    def fetch_stock_fund_flow_rank(
+        self,
+        *,
+        indicator: str = "5日",
+        page_size: int = 100,
+        page_interval: float | None = None,
+        page_interval_min: float | None = None,
+        page_interval_max: float | None = None,
+        burst_pages_min: int | None = None,
+        burst_pages_max: int | None = None,
+        batch_pause_min_sec: float | None = None,
+        batch_pause_max_sec: float | None = None,
+        fail_cooldown_sec: float | None = None,
+        as_of: str | None = None,
+        force: bool = False,
+        return_meta: bool = False,
+    ) -> Any:
+        """东财个股资金流排名（分页）→ DataFrame(code, main_net_inflow)。"""
+        from quant.data.sources.eastmoney.fund_flow_rank import fetch_stock_fund_flow_rank
+        from quant.data.sources.rate_limit import with_limit
+
+        return with_limit(
+            "eastmoney",
+            lambda: fetch_stock_fund_flow_rank(
+                indicator=indicator,
+                page_size=page_size,
+                page_interval=page_interval,
+                page_interval_min=page_interval_min,
+                page_interval_max=page_interval_max,
+                burst_pages_min=burst_pages_min,
+                burst_pages_max=burst_pages_max,
+                batch_pause_min_sec=batch_pause_min_sec,
+                batch_pause_max_sec=batch_pause_max_sec,
+                fail_cooldown_sec=fail_cooldown_sec,
+                as_of=as_of,
+                force=force,
+                return_meta=return_meta,
+            ),
+        )
+
     # ---- 未实现接口：显式报错 ----
     def fetch_index_spot(self) -> Any:
         raise NotImplementedError("eastmoney 未实现 fetch_index_spot（可用 akshare/default）")

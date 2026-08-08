@@ -20,6 +20,15 @@ class DataCfg(BaseModel):
     akshare_max_concurrent: int | None = Field(default=None, ge=1, le=32)
     ths_max_concurrent: int | None = Field(default=None, ge=1, le=32)
     eastmoney_max_concurrent: int | None = Field(default=None, ge=1, le=32)
+    fund_flow_rank_page_size: int | None = Field(default=None, ge=1, le=500)
+    fund_flow_rank_page_interval: float | None = Field(default=None, ge=10.0, le=120.0)  # 兼容旧键
+    fund_flow_rank_page_interval_min: float | None = Field(default=None, ge=10.0, le=120.0)
+    fund_flow_rank_page_interval_max: float | None = Field(default=None, ge=10.0, le=120.0)
+    fund_flow_rank_burst_pages_min: int | None = Field(default=None, ge=1, le=20)
+    fund_flow_rank_burst_pages_max: int | None = Field(default=None, ge=1, le=20)
+    fund_flow_rank_batch_pause_min_sec: float | None = Field(default=None, ge=0.0, le=3600.0)
+    fund_flow_rank_batch_pause_max_sec: float | None = Field(default=None, ge=0.0, le=3600.0)
+    fund_flow_rank_fail_cooldown_sec: float | None = Field(default=None, ge=0.0, le=3600.0)  # 兼容旧键
     sources: DataSourcesCfg = Field(default_factory=DataSourcesCfg)
 
 

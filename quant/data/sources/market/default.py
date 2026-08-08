@@ -8,6 +8,7 @@
 - fetch_market_fund_flow：akshare
 - fetch_em_industry_map：东财
 - fetch_em_hot_rank/concept_boards：akshare
+- fetch_stock_fund_flow_rank：eastmoney（分页全市场 5 日主力净额）
 """
 
 from __future__ import annotations
@@ -74,3 +75,36 @@ class DefaultMarketSource:
 
     def fetch_stop_resume(self, date: str) -> Any:
         return self._em.fetch_stop_resume(date)
+
+    def fetch_stock_fund_flow_rank(
+        self,
+        *,
+        indicator: str = "5日",
+        page_size: int = 100,
+        page_interval: float | None = None,
+        page_interval_min: float | None = None,
+        page_interval_max: float | None = None,
+        burst_pages_min: int | None = None,
+        burst_pages_max: int | None = None,
+        batch_pause_min_sec: float | None = None,
+        batch_pause_max_sec: float | None = None,
+        fail_cooldown_sec: float | None = None,
+        as_of: str | None = None,
+        force: bool = False,
+        return_meta: bool = False,
+    ) -> Any:
+        return self._em.fetch_stock_fund_flow_rank(
+            indicator=indicator,
+            page_size=page_size,
+            page_interval=page_interval,
+            page_interval_min=page_interval_min,
+            page_interval_max=page_interval_max,
+            burst_pages_min=burst_pages_min,
+            burst_pages_max=burst_pages_max,
+            batch_pause_min_sec=batch_pause_min_sec,
+            batch_pause_max_sec=batch_pause_max_sec,
+            fail_cooldown_sec=fail_cooldown_sec,
+            as_of=as_of,
+            force=force,
+            return_meta=return_meta,
+        )

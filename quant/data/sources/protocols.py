@@ -71,6 +71,23 @@ class MarketSource(Protocol):
     def fetch_em_hot_rank(self) -> Any: ...       # 旧名（东财人气榜），保留兼容
     def fetch_em_concept_boards(self) -> Any: ...  # 旧名，保留兼容
     def fetch_stop_resume(self, date: str) -> Any: ...
+    def fetch_stock_fund_flow_rank(
+        self,
+        *,
+        indicator: str = "5日",
+        page_size: int = 100,
+        page_interval: float | None = None,
+        page_interval_min: float | None = None,
+        page_interval_max: float | None = None,
+        burst_pages_min: int | None = None,
+        burst_pages_max: int | None = None,
+        batch_pause_min_sec: float | None = None,
+        batch_pause_max_sec: float | None = None,
+        fail_cooldown_sec: float | None = None,
+        as_of: str | None = None,
+        force: bool = False,
+        return_meta: bool = False,
+    ) -> Any: ...  # DataFrame(code, main_net_inflow)；return_meta 时为 (df, meta)
 
 
 @runtime_checkable

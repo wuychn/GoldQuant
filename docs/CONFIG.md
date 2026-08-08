@@ -253,6 +253,13 @@
 | `akshare_max_concurrent` | `1` | AKShare 并发（过高易限流） |
 | `ths_max_concurrent` | `1` | 同花顺并发 |
 | `eastmoney_max_concurrent` | `1` | 东财并发 |
+| `fund_flow_rank_page_size` | `100` | 个股资金流排名每页条数 |
+| `fund_flow_rank_page_interval_min` | `10` | 页间/逐票间隔下限（秒，随机，代码下限 10） |
+| `fund_flow_rank_page_interval_max` | `30` | 页间/逐票间隔上限（秒，随机） |
+| `fund_flow_rank_burst_pages_min` | `2` | 每成功拉 N 页后批停（下限） |
+| `fund_flow_rank_burst_pages_max` | `4` | 每成功拉 N 页后批停（上限，随机） |
+| `fund_flow_rank_batch_pause_min_sec` | `120` | 批间/断连暂停下限（秒） |
+| `fund_flow_rank_batch_pause_max_sec` | `240` | 批间/断连暂停上限（秒） |
 
 数据源选择（换源只改配置、不改代码；四类协议各一个 `default` 组合实现）：
 

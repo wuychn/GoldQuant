@@ -68,3 +68,24 @@ class SinaMarketSource:
 
     def fetch_stop_resume(self, date: str) -> Any:
         raise NotImplementedError("sina 未实现 fetch_stop_resume（可用 eastmoney/default）")
+
+    def fetch_stock_fund_flow_rank(
+        self,
+        *,
+        indicator: str = "5日",
+        page_size: int = 100,
+        page_interval: float | None = None,
+        page_interval_min: float | None = None,
+        page_interval_max: float | None = None,
+        burst_pages_min: int | None = None,
+        burst_pages_max: int | None = None,
+        batch_pause_min_sec: float | None = None,
+        batch_pause_max_sec: float | None = None,
+        fail_cooldown_sec: float | None = None,
+        as_of: str | None = None,
+        force: bool = False,
+        return_meta: bool = False,
+    ) -> Any:
+        raise NotImplementedError(
+            "sina 未实现 fetch_stock_fund_flow_rank（可用 eastmoney/akshare/default）"
+        )
