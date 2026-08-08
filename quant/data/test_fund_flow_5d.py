@@ -29,7 +29,8 @@ def test_after_rank_fills_missing_only(quant_tmp, monkeypatch):
             {"aborted": False, "abort_reason": "", "last_page": 1, "done": True},
         ),
     )
-    monkeypatch.setattr(orch, "_interval_bounds", lambda: (0.0, 0.0))
+    monkeypatch.setattr(orch, "_page_interval_bounds", lambda: (0.0, 0.0))
+    monkeypatch.setattr(orch, "_symbol_interval_bounds", lambda: (0.0, 0.0))
     monkeypatch.setattr(orch, "_batch_pause_bounds", lambda: (0.0, 0.0))
     monkeypatch.setattr(orch, "_burst_pages", lambda: (2, 4))
 
@@ -69,7 +70,8 @@ def test_no_per_symbol_when_rank_covers(quant_tmp, monkeypatch):
             {"aborted": False, "last_page": 1, "abort_reason": "", "done": True},
         ),
     )
-    monkeypatch.setattr(orch, "_interval_bounds", lambda: (0.0, 0.0))
+    monkeypatch.setattr(orch, "_page_interval_bounds", lambda: (0.0, 0.0))
+    monkeypatch.setattr(orch, "_symbol_interval_bounds", lambda: (0.0, 0.0))
     monkeypatch.setattr(orch, "_batch_pause_bounds", lambda: (0.0, 0.0))
     monkeypatch.setattr(orch, "_burst_pages", lambda: (2, 4))
 

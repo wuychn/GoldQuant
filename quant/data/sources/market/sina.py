@@ -81,7 +81,6 @@ class SinaMarketSource:
         burst_pages_max: int | None = None,
         batch_pause_min_sec: float | None = None,
         batch_pause_max_sec: float | None = None,
-        fail_cooldown_sec: float | None = None,
         as_of: str | None = None,
         force: bool = False,
         return_meta: bool = False,

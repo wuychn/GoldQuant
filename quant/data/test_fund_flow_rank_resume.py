@@ -144,7 +144,6 @@ def test_rank_fail_skips_page_then_continues(quant_tmp, monkeypatch):
             {"f12": f"{page * 10 + i:06d}", "f164": float(page * 100 + i)}
             for i in range(2)
         ]
-        # page2 成功时告知共 6 条 → 3 页；第 1 页已跳过
         return pd.DataFrame(rows), 6
 
     monkeypatch.setattr(mod, "_fetch_page_once", fake_page)
@@ -161,7 +160,37 @@ def test_rank_fail_skips_page_then_continues(quant_tmp, monkeypatch):
         force=True,
         return_meta=True,
     )
-    assert calls == [1, 2, 3]  # 第 1 页失败后跳到 2、3，不重打 1
+    assert calls == [1, 2, 3]  # 单次失败仍继续
     assert 1 in meta["skipped_pages"]
-    assert len(df) == 4  # 仅 2、3 页
+    assert len(df) == 4
     assert any("跳过第 1 页" in p for p in pauses)
+
+
+def test_rank_two_consecutive_fails_aborts(quant_tmp, monkeypatch):
+    from quant.data.sources.eastmoney import fund_flow_rank as mod
+
+    _patch_fast(mod, monkeypatch)
+    calls: list[int] = []
+
+    def fake_page(*, fid, fields, page, page_size):
+        calls.append(page)
+        raise ConnectionError("RemoteDisconnected")
+
+    monkeypatch.setattr(mod, "_fetch_page_once", fake_page)
+
+    df, meta = mod.fetch_stock_fund_flow_rank(
+        indicator="5日",
+        page_size=2,
+        page_interval=0.0,
+        batch_pause_min_sec=0.0,
+        batch_pause_max_sec=0.0,
+        burst_pages_min=100,
+        burst_pages_max=100,
+        as_of="2026-08-08",
+        force=True,
+        return_meta=True,
+    )
+    assert calls == [1, 2]  # 连续 2 次失败即停，不打第 3 页
+    assert meta["aborted"] is True
+    assert meta["skipped_pages"] == [1, 2]
+    assert df.empty

@@ -1,10 +1,9 @@
 """东财个股资金流排名（clist 分页）——自研分页，不改 akshare 原函数。
 
 节流策略：
-- 页间随机 10–30s
-- 每成功拉取 2–4 页，批间暂停 2–4 分钟
-- 单页只打 1 次；失败/断连立即暂停 2–4 分钟后**跳过该页**继续下一页
-- 跳过页造成的缺码由编排层逐票补全
+- 页间默认随机 29–61s；每成功 1–3 页批停 2–4 分钟
+- 单页只打 1 次；失败后长停并跳过该页
+- **连续失败 2 次**立即结束分页，由编排层回退逐票
 - TLS：curl_cffi impersonate；Cookie 每页重读 ``.eastmoney.header``
 """
 
@@ -22,12 +21,13 @@ from common.utils.source_headers import load_headers_from_file
 from quant.data.calendar import to_iso
 from quant.store.paths import quant_home
 
-_MIN_INTERVAL = 10.0
-_MAX_INTERVAL = 30.0
-_BURST_PAGES_MIN = 2
-_BURST_PAGES_MAX = 4
+_MIN_INTERVAL = 10.0  # 页间绝对下限（默认区间见 yml req_page_interval 29,61）
+_MAX_INTERVAL = 61.0
+_BURST_PAGES_MIN = 1
+_BURST_PAGES_MAX = 3
 _BATCH_PAUSE_MIN = 120.0
 _BATCH_PAUSE_MAX = 240.0
+_MAX_CONSECUTIVE_FAILS = 2
 _IMPERSONATE_POOL = ("chrome120", "chrome124", "chrome131", "chrome110", "chrome")
 
 _INDICATOR_MAP: dict[str, tuple[str, str, str]] = {
@@ -243,7 +243,6 @@ def fetch_stock_fund_flow_rank(
     burst_pages_max: int | None = None,
     batch_pause_min_sec: float | None = None,
     batch_pause_max_sec: float | None = None,
-    fail_cooldown_sec: float | None = None,  # 兼容旧参：映射为断连/失败暂停下限
     as_of: str | None = None,
     force: bool = False,
     return_meta: bool = False,
@@ -261,10 +260,10 @@ def fetch_stock_fund_flow_rank(
         if page_interval is not None:
             lo = hi = max(_MIN_INTERVAL, float(page_interval))
         else:
-            lo, hi = _MIN_INTERVAL, _MAX_INTERVAL
+            lo, hi = 29.0, _MAX_INTERVAL  # 与 yml req_page_interval 默认一致
     else:
-        lo = max(_MIN_INTERVAL, float(page_interval_min or _MIN_INTERVAL))
-        hi = max(lo, float(page_interval_max or _MAX_INTERVAL))
+        lo = max(_MIN_INTERVAL, float(page_interval_min if page_interval_min is not None else 29.0))
+        hi = max(lo, float(page_interval_max if page_interval_max is not None else _MAX_INTERVAL))
 
     b_lo = int(burst_pages_min if burst_pages_min is not None else _BURST_PAGES_MIN)
     b_hi = int(burst_pages_max if burst_pages_max is not None else _BURST_PAGES_MAX)
@@ -272,9 +271,7 @@ def fetch_stock_fund_flow_rank(
     b_hi = max(b_lo, b_hi)
 
     p_lo = float(
-        batch_pause_min_sec
-        if batch_pause_min_sec is not None
-        else (fail_cooldown_sec if fail_cooldown_sec is not None else _BATCH_PAUSE_MIN)
+        batch_pause_min_sec if batch_pause_min_sec is not None else _BATCH_PAUSE_MIN
     )
     p_hi = float(batch_pause_max_sec if batch_pause_max_sec is not None else _BATCH_PAUSE_MAX)
     p_lo = max(0.0, p_lo)
@@ -286,9 +283,7 @@ def fetch_stock_fund_flow_rank(
     last_fail_reason = ""
     skipped_pages: list[int] = []
     last_ok_page = 0
-    # 尚不知总页数时，连续失败探页上限（避免无限翻页）
-    _max_probe_without_total = 5
-    probe_fails = 0
+    consecutive_fails = 0
 
     if as_of and not force:
         meta = _read_meta(as_of, indicator)
@@ -324,7 +319,7 @@ def fetch_stock_fund_flow_rank(
         f"{_LOG} 【分页开始】源=eastmoney.clist_rank indicator={indicator} "
         f"每页{page_size}条 · 页间隔{lo:.0f}~{hi:.0f}s · "
         f"每成功{b_lo}~{b_hi}页批停{p_lo:.0f}~{p_hi:.0f}s · "
-        f"单页失败不重试：长停后跳过该页继续下一页，缺码由逐票补",
+        f"单页失败跳过；连续失败{_MAX_CONSECUTIVE_FAILS}次则结束分页改逐票",
         flush=True,
     )
 
@@ -362,10 +357,7 @@ def fetch_stock_fund_flow_rank(
                 f"{_LOG} 【{page_label}{kind}】未落盘 · {last_fail_reason}",
                 flush=True,
             )
-            print(
-                f"{_LOG} 【说明】本页不重试；长停后跳到下一页，本页缺码稍后逐票补",
-                flush=True,
-            )
+            consecutive_fails += 1
             next_page = page + 1
             skipped_pages.append(page)
             highest_attempted = page
@@ -381,10 +373,26 @@ def fetch_stock_fund_flow_rank(
                         "last_page": last_ok_page,
                         "skipped_pages": skipped_pages,
                         "done": False,
-                        "aborted": False,
+                        "aborted": consecutive_fails >= _MAX_CONSECUTIVE_FAILS,
                         "last_error": last_fail_reason,
                     },
                 )
+            if consecutive_fails >= _MAX_CONSECUTIVE_FAILS:
+                print(
+                    f"{_LOG} 【说明】连续失败 {consecutive_fails} 次 → 结束分页，回退逐票补全",
+                    flush=True,
+                )
+                _rand_pause(
+                    p_lo,
+                    p_hi,
+                    what_next="分页中止，进入逐票阶段前短暂冷却",
+                )
+                break
+            print(
+                f"{_LOG} 【说明】本页不重试（连续失败 {consecutive_fails}/"
+                f"{_MAX_CONSECUTIVE_FAILS}）；长停后跳到下一页",
+                flush=True,
+            )
             _rand_pause(
                 p_lo,
                 p_hi,
@@ -394,22 +402,13 @@ def fetch_stock_fund_flow_rank(
                     else f"跳过第 {page} 页后分页探查结束"
                 ),
             )
-            if total_pages is None:
-                probe_fails += 1
-                if probe_fails >= _max_probe_without_total:
-                    print(
-                        f"{_LOG} 【停止探页】连续 {probe_fails} 页失败且仍不知总页数 → "
-                        f"结束分页，改由逐票补全",
-                        flush=True,
-                    )
-                    break
             if total_pages is not None and page >= total_pages:
                 break
             page = next_page
             first_request = True
             continue
 
-        probe_fails = 0
+        consecutive_fails = 0
         if total_pages is None:
             total_pages = max(1, math.ceil(total / page_size)) if total else 1
             print(

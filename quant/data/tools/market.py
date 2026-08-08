@@ -156,7 +156,7 @@ def fetch_stock_fund_flow_rank(
 ):
     """个股资金流排名（分页）→ DataFrame(code, main_net_inflow)。
 
-    页间默认随机（yml ``fund_flow_rank_page_interval``，默认 ``10,30``）。
+    页间默认随机（yml ``req_page_interval``，默认 ``29,61``）。
     编排（分页→逐票补缺）见 ``quant.data.fund_flow_5d.fetch_main_net_inflow_5d``。
     """
     from quant.config import load_quant_config
@@ -169,39 +169,25 @@ def fetch_stock_fund_flow_rank(
         page_size = int(data.get("fund_flow_rank_page_size", 100))
     if page_interval is not None:
         page_interval_min, page_interval_max = parse_interval_range(
-            page_interval, default=(10.0, 30.0)
+            page_interval, default=(29.0, 61.0)
         )
     elif page_interval_min is None and page_interval_max is None:
         page_interval_min, page_interval_max = parse_interval_range(
-            data.get("fund_flow_rank_page_interval", data.get("fund_flow_rank_req_interval")),
-            default=(
-                float(data.get("fund_flow_rank_page_interval_min", 10)),
-                float(data.get("fund_flow_rank_page_interval_max", 30)),
-            ),
+            data.get("req_page_interval"),
+            default=(29.0, 61.0),
         )
     else:
         if page_interval_min is None:
-            page_interval_min = 10.0
+            page_interval_min = 29.0
         if page_interval_max is None:
             page_interval_max = float(page_interval_min)
     burst_lo, burst_hi = parse_interval_range(
-        data.get("fund_flow_rank_burst_pages"),
-        default=(
-            float(data.get("fund_flow_rank_burst_pages_min", 2)),
-            float(data.get("fund_flow_rank_burst_pages_max", 4)),
-        ),
+        data.get("req_burst_pages"),
+        default=(1.0, 3.0),
     )
     pause_lo, pause_hi = parse_interval_range(
-        data.get("fund_flow_rank_batch_pause"),
-        default=(
-            float(
-                data.get(
-                    "fund_flow_rank_batch_pause_min_sec",
-                    data.get("fund_flow_rank_fail_cooldown_sec", 120),
-                )
-            ),
-            float(data.get("fund_flow_rank_batch_pause_max_sec", 240)),
-        ),
+        data.get("req_batch_pause"),
+        default=(120.0, 240.0),
     )
     return try_with_fallback(
         "market",

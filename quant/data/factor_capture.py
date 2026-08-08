@@ -324,7 +324,6 @@ def capture_fund_flow_rank(
     *,
     page_size: int | None = None,
     page_interval: float | str | None = None,
-    req_interval: str | None = None,
     symbol_interval: str | None = None,
     batch_pause: str | None = None,
     burst_pages: str | None = None,
@@ -362,16 +361,14 @@ def capture_fund_flow_rank(
     from common.utils.source_headers import parse_interval_range
     from quant.data.fund_flow_5d import fetch_main_net_inflow_5d
 
-    # 页间：req_interval / page_interval；逐票：symbol_interval（各自 MIN,MAX 或单值）
-    page_spec = req_interval if req_interval is not None else page_interval
     page_lo = page_hi = None
-    if page_spec is not None:
-        page_lo, page_hi = parse_interval_range(page_spec, default=(10.0, 30.0))
+    if page_interval is not None:
+        page_lo, page_hi = parse_interval_range(page_interval, default=(29.0, 61.0))
         page_lo = max(10.0, page_lo)
         page_hi = max(page_lo, page_hi)
     sym_lo = sym_hi = None
     if symbol_interval is not None:
-        sym_lo, sym_hi = parse_interval_range(symbol_interval, default=(10.0, 30.0))
+        sym_lo, sym_hi = parse_interval_range(symbol_interval, default=(10.0, 20.0))
         sym_lo = max(10.0, sym_lo)
         sym_hi = max(sym_lo, sym_hi)
     pause_lo = pause_hi = None
@@ -379,7 +376,7 @@ def capture_fund_flow_rank(
         pause_lo, pause_hi = parse_interval_range(batch_pause, default=(120.0, 240.0))
     burst_lo = burst_hi = None
     if burst_pages is not None:
-        b0, b1 = parse_interval_range(burst_pages, default=(2.0, 4.0))
+        b0, b1 = parse_interval_range(burst_pages, default=(1.0, 3.0))
         burst_lo, burst_hi = int(b0), int(b1)
 
     result = fetch_main_net_inflow_5d(
@@ -431,7 +428,6 @@ def capture_all_factor_snapshots(
     flush_every: int = _DEFAULT_FLOW_FLUSH_EVERY,
     page_size: int | None = None,
     page_interval: float | str | None = None,
-    req_interval: str | None = None,
     symbol_interval: str | None = None,
     batch_pause: str | None = None,
     burst_pages: str | None = None,
@@ -464,7 +460,6 @@ def capture_all_factor_snapshots(
             universe_codes,
             page_size=page_size,
             page_interval=page_interval,
-            req_interval=req_interval,
             symbol_interval=symbol_interval,
             batch_pause=batch_pause,
             burst_pages=burst_pages,

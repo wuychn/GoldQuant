@@ -224,39 +224,39 @@ def main() -> None:
     ap.add_argument(
         "--req-page-interval",
         default=None,
-        help="分页页间间隔秒，格式 MIN,MAX 或 N（默认 yml fund_flow_rank_page_interval=10,30；下限 10）",
+        help="分页页间间隔秒，格式 MIN,MAX 或 N（默认 yml req_page_interval=29,61；下限 10）",
     )
     ap.add_argument(
         "--req-symbol-interval",
         default=None,
-        help="逐票间隔秒，格式 MIN,MAX 或 N（默认 yml fund_flow_rank_symbol_interval；未配则同页间）",
+        help="逐票间隔秒，格式 MIN,MAX 或 N（默认 yml req_symbol_interval=10,20）",
     )
     ap.add_argument(
-        "--fund-flow-batch-pause",
+        "--req-batch-pause",
         default=None,
-        help="分页批间暂停 & 单页失败跳页前暂停秒，格式 MIN,MAX 或 N（默认 yml 120,240）",
+        help="分页批间暂停 & 单页失败跳页前暂停秒，格式 MIN,MAX 或 N（默认 yml req_batch_pause=120,240）",
     )
     ap.add_argument(
-        "--fund-flow-burst-pages",
+        "--req-burst-pages",
         default=None,
-        help="每成功拉 N 页后批停，格式 MIN,MAX 或 N（默认 yml 2,4）",
+        help="每成功拉 N 页后批停，格式 MIN,MAX 或 N（默认 yml req_burst_pages=1,3）",
     )
     args = ap.parse_args()
 
     if args.req_page_interval:
         from common.utils.source_headers import parse_interval_range, set_eastmoney_interval
 
-        lo, hi = parse_interval_range(args.req_page_interval, default=(10.0, 30.0))
+        lo, hi = parse_interval_range(args.req_page_interval, default=(29.0, 61.0))
         lo_i, hi_i = max(10, int(lo)), max(10, int(hi))
         if hi_i < lo_i:
             lo_i, hi_i = hi_i, lo_i
         set_eastmoney_interval(lo_i, hi_i)
-        print(f"分页页间/东财请求间隔: {lo_i},{hi_i}s", flush=True)
+        print(f"req_page_interval: {lo_i},{hi_i}s", flush=True)
     if args.req_symbol_interval:
         from common.utils.source_headers import parse_interval_range
 
-        s_lo, s_hi = parse_interval_range(args.req_symbol_interval, default=(10.0, 30.0))
-        print(f"逐票间隔: {int(s_lo)},{int(s_hi)}s", flush=True)
+        s_lo, s_hi = parse_interval_range(args.req_symbol_interval, default=(10.0, 20.0))
+        print(f"req_symbol_interval: {int(s_lo)},{int(s_hi)}s", flush=True)
 
     with home_context(args.home):
         today = args.date or cn_now().strftime("%Y-%m-%d")
@@ -411,10 +411,10 @@ def main() -> None:
                 universe_codes=uni,
                 flush_every=max(1, int(args.flush_every)),
                 page_size=args.fund_flow_page_size,
-                req_interval=args.req_page_interval,
+                page_interval=args.req_page_interval,
                 symbol_interval=args.req_symbol_interval,
-                batch_pause=args.fund_flow_batch_pause,
-                burst_pages=args.fund_flow_burst_pages,
+                batch_pause=args.req_batch_pause,
+                burst_pages=args.req_burst_pages,
                 fund_flow_mode=args.fund_flow_mode,
             )
             print(f"因子快照 @ {today}: 完成 {counts}", flush=True)

@@ -21,21 +21,11 @@ class DataCfg(BaseModel):
     ths_max_concurrent: int | None = Field(default=None, ge=1, le=32)
     eastmoney_max_concurrent: int | None = Field(default=None, ge=1, le=32)
     fund_flow_rank_page_size: int | None = Field(default=None, ge=1, le=500)
-    # 逗号区间 "MIN,MAX" 或单值 "N"；旧 min/max 数值键仍兼容
-    fund_flow_rank_page_interval: float | str | None = None
-    fund_flow_rank_symbol_interval: str | None = None
-    fund_flow_rank_req_interval: str | None = None  # 兼容旧键→页间
-    fund_flow_rank_batch_pause: str | None = None
-    fund_flow_rank_burst_pages: str | None = None
-    fund_flow_rank_page_interval_min: float | None = Field(default=None, ge=0.0, le=3600.0)
-    fund_flow_rank_page_interval_max: float | None = Field(default=None, ge=0.0, le=3600.0)
-    fund_flow_rank_symbol_interval_min: float | None = Field(default=None, ge=0.0, le=3600.0)
-    fund_flow_rank_symbol_interval_max: float | None = Field(default=None, ge=0.0, le=3600.0)
-    fund_flow_rank_burst_pages_min: int | None = Field(default=None, ge=1, le=20)
-    fund_flow_rank_burst_pages_max: int | None = Field(default=None, ge=1, le=20)
-    fund_flow_rank_batch_pause_min_sec: float | None = Field(default=None, ge=0.0, le=3600.0)
-    fund_flow_rank_batch_pause_max_sec: float | None = Field(default=None, ge=0.0, le=3600.0)
-    fund_flow_rank_fail_cooldown_sec: float | None = Field(default=None, ge=0.0, le=3600.0)
+    # 与 CLI 同名（yml 下划线 ↔ CLI 连字符）：req_page_interval ↔ --req-page-interval
+    req_page_interval: str | None = None
+    req_symbol_interval: str | None = None
+    req_batch_pause: str | None = None
+    req_burst_pages: str | None = None
     sources: DataSourcesCfg = Field(default_factory=DataSourcesCfg)
 
 

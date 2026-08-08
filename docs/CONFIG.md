@@ -254,10 +254,10 @@
 | `ths_max_concurrent` | `1` | 同花顺并发 |
 | `eastmoney_max_concurrent` | `1` | 东财并发 |
 | `fund_flow_rank_page_size` | `100` | 个股资金流排名每页条数 |
-| `fund_flow_rank_page_interval` | `"10,30"` | 分页页间间隔秒（`MIN,MAX` 或 `N`；CLI `--req-page-interval`；下限 10） |
-| `fund_flow_rank_symbol_interval` | `"10,30"` | 逐票间隔秒（`MIN,MAX` 或 `N`；CLI `--req-symbol-interval`；未配则同页间） |
-| `fund_flow_rank_batch_pause` | `"120,240"` | 批间暂停 & 单页失败跳页前暂停秒（`MIN,MAX` 或 `N`） |
-| `fund_flow_rank_burst_pages` | `"2,4"` | 每成功拉 N 页后批停（`MIN,MAX` 或 `N`） |
+| `req_page_interval` | `"29,61"` | 页间间隔秒（`MIN,MAX`/`N`；CLI `--req-page-interval`；下限 10） |
+| `req_symbol_interval` | `"10,20"` | 逐票间隔秒（`MIN,MAX`/`N`；CLI `--req-symbol-interval`） |
+| `req_batch_pause` | `"120,240"` | 批间/失败跳页暂停秒（`MIN,MAX`/`N`；CLI `--req-batch-pause`） |
+| `req_burst_pages` | `"1,3"` | 每成功 N 页后批停（`MIN,MAX`/`N`；CLI `--req-burst-pages`） |
 
 数据源选择（换源只改配置、不改代码；四类协议各一个 `default` 组合实现）：
 

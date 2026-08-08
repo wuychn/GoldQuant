@@ -42,87 +42,34 @@ def _cfg() -> dict:
     return load_quant_config().get("data") or {}
 
 
-def _parse_cfg_range(
-    *,
-    csv_key: str,
-    min_key: str,
-    max_key: str,
-    default: tuple[float, float],
-    legacy_single: str | None = None,
-) -> tuple[float, float]:
+def _parse_cfg_range(csv_key: str, default: tuple[float, float]) -> tuple[float, float]:
     from common.utils.source_headers import parse_interval_range
 
-    data = _cfg()
-    if data.get(csv_key) is not None:
-        return parse_interval_range(data.get(csv_key), default=default)
-    if legacy_single and data.get(legacy_single) is not None and data.get(min_key) is None:
-        return parse_interval_range(data.get(legacy_single), default=default)
-    if data.get(min_key) is not None or data.get(max_key) is not None:
-        lo = float(data.get(min_key, default[0]))
-        hi = float(data.get(max_key, default[1]))
-        return (lo, hi) if hi >= lo else (hi, lo)
-    return default
+    return parse_interval_range(_cfg().get(csv_key), default=default)
 
 
 def _page_interval_bounds() -> tuple[float, float]:
-    """分页页间间隔。优先 page_interval，兼容旧 req_interval。"""
-    lo, hi = _parse_cfg_range(
-        csv_key="fund_flow_rank_page_interval",
-        min_key="fund_flow_rank_page_interval_min",
-        max_key="fund_flow_rank_page_interval_max",
-        default=(10.0, 30.0),
-        legacy_single="fund_flow_rank_req_interval",
-    )
+    """分页页间间隔（yml ``req_page_interval``）。"""
+    lo, hi = _parse_cfg_range("req_page_interval", (29.0, 61.0))
     lo = max(10.0, lo)
-    hi = max(lo, hi)
-    return lo, hi
+    return lo, max(lo, hi)
 
 
 def _symbol_interval_bounds() -> tuple[float, float]:
-    """逐票间隔。未配置时回退到页间间隔。"""
-    data = _cfg()
-    if (
-        data.get("fund_flow_rank_symbol_interval") is not None
-        or data.get("fund_flow_rank_symbol_interval_min") is not None
-        or data.get("fund_flow_rank_symbol_interval_max") is not None
-    ):
-        lo, hi = _parse_cfg_range(
-            csv_key="fund_flow_rank_symbol_interval",
-            min_key="fund_flow_rank_symbol_interval_min",
-            max_key="fund_flow_rank_symbol_interval_max",
-            default=(10.0, 30.0),
-        )
-    else:
-        lo, hi = _page_interval_bounds()
+    """逐票间隔（yml ``req_symbol_interval``）。"""
+    lo, hi = _parse_cfg_range("req_symbol_interval", (10.0, 20.0))
     lo = max(10.0, lo)
-    hi = max(lo, hi)
-    return lo, hi
-
-
-# 兼容旧测试名
-_interval_bounds = _page_interval_bounds
+    return lo, max(lo, hi)
 
 
 def _batch_pause_bounds() -> tuple[float, float]:
-    lo, hi = _parse_cfg_range(
-        csv_key="fund_flow_rank_batch_pause",
-        min_key="fund_flow_rank_batch_pause_min_sec",
-        max_key="fund_flow_rank_batch_pause_max_sec",
-        default=(120.0, 240.0),
-        legacy_single="fund_flow_rank_fail_cooldown_sec",
-    )
+    lo, hi = _parse_cfg_range("req_batch_pause", (120.0, 240.0))
     lo = max(0.0, lo)
-    hi = max(lo, hi)
-    return lo, hi
+    return lo, max(lo, hi)
 
 
 def _burst_pages() -> tuple[int, int]:
-    lo, hi = _parse_cfg_range(
-        csv_key="fund_flow_rank_burst_pages",
-        min_key="fund_flow_rank_burst_pages_min",
-        max_key="fund_flow_rank_burst_pages_max",
-        default=(2.0, 4.0),
-    )
+    lo, hi = _parse_cfg_range("req_burst_pages", (1.0, 3.0))
     lo_i, hi_i = max(1, int(lo)), max(1, int(hi))
     return (lo_i, hi_i) if hi_i >= lo_i else (hi_i, lo_i)
 
