@@ -57,8 +57,8 @@ def _page_interval_bounds() -> tuple[float, float]:
 
 def _symbol_interval_bounds() -> tuple[float, float]:
     """逐票间隔（yml ``req_symbol_interval``）。"""
-    lo, hi = _parse_cfg_range("req_symbol_interval", (10.0, 20.0))
-    lo = max(10.0, lo)
+    lo, hi = _parse_cfg_range("req_symbol_interval", (5.0, 10.0))
+    lo = max(1.0, lo)
     return lo, max(lo, hi)
 
 
@@ -166,7 +166,7 @@ def fetch_main_net_inflow_5d(
 
     sym_lo, sym_hi = _symbol_interval_bounds()
     if symbol_interval_min is not None:
-        sym_lo = max(10.0, float(symbol_interval_min))
+        sym_lo = max(1.0, float(symbol_interval_min))
     if symbol_interval_max is not None:
         sym_hi = max(sym_lo, float(symbol_interval_max))
     else:
@@ -367,23 +367,27 @@ def _fill_per_symbol(
     from quant.data.sources.interface import try_with_fallback_async
 
     apply_source_header_patch()
-    set_eastmoney_interval(max(10, int(interval_lo)), max(10, int(interval_hi)))
+    set_eastmoney_interval(max(1, int(interval_lo)), max(1, int(interval_hi)))
 
     done = set() if force else _read_per_symbol_done(as_of)
     filled = {} if force else _read_per_symbol_values(as_of)
     pending = [c for c in codes if c not in done and c not in filled]
     total = len(codes)
     already = total - len(pending)
+    n_pending = len(pending)
     print(
-        f"{_LOG} 【逐票】已完成 {already} · 待拉 {len(pending)} · 总共 {total}",
+        f"{_LOG} 【逐票】已完成 {already} · 待拉 {n_pending} · 总共 {total} · "
+        f"间隔 {interval_lo:.0f}~{interval_hi:.0f}s",
         flush=True,
     )
     if not pending:
         return 0, 0, filled
 
     ok_n = 0
+    empty_n = 0
     fail_n = 0
     progress_every = 50
+    t0 = time.time()
 
     async def _pull(code: str):
         return await try_with_fallback_async(
@@ -391,16 +395,22 @@ def _fill_per_symbol(
         )
 
     def _log_progress(done_n: int) -> None:
-        remain = len(pending) - done_n
+        # 对齐 build_daily._run_pull：进度 i/N  ok= empty= fail=  耗时s
         print(
-            f"{_LOG} 【逐票进度】已成功 {ok_n} · 失败/空 {fail_n} · "
-            f"本批已处理 {done_n}/{len(pending)} · 待拉 {remain} · "
-            f"总共 {total}（含断点已完成 {already}）",
+            f"{_LOG} 【逐票进度】{done_n}/{n_pending}  "
+            f"ok={ok_n} empty={empty_n} fail={fail_n}  "
+            f"{time.time() - t0:.0f}s",
             flush=True,
         )
 
+    print(
+        f"{_LOG} 【逐票】开始拉取 · 待拉 {n_pending} · "
+        f"进度每 {progress_every} 只（首只完成后即打一次）",
+        flush=True,
+    )
+
     i = 0
-    while i < len(pending):
+    while i < n_pending:
         code = pending[i]
         if i > 0:
             time.sleep(random.uniform(interval_lo, interval_hi))
@@ -412,8 +422,8 @@ def _fill_per_symbol(
                 sec = random.uniform(pause_lo, pause_hi)
                 print(
                     f"{_LOG} 【逐票断连】{code} · {type(exc).__name__}: {exc} · "
-                    f"休眠 {sec / 60:.1f} 分钟后重试（已成功 {ok_n} · "
-                    f"待拉 {len(pending) - i} · 总共 {total}）",
+                    f"休眠 {sec / 60:.1f} 分钟后重试"
+                    f"（进度 {i}/{n_pending} ok={ok_n} · {time.time() - t0:.0f}s）",
                     flush=True,
                 )
                 time.sleep(sec)
@@ -422,7 +432,7 @@ def _fill_per_symbol(
             done.add(code)
             _write_per_symbol_state(as_of, done, filled)
             i += 1
-            if i % progress_every == 0 or i == len(pending):
+            if i == 1 or i % progress_every == 0 or i == n_pending:
                 _log_progress(i)
             continue
 
@@ -431,10 +441,16 @@ def _fill_per_symbol(
             filled[code] = float(net)
             ok_n += 1
         else:
-            fail_n += 1
+            empty_n += 1
         _write_per_symbol_state(as_of, done, filled)
         i += 1
-        if i % progress_every == 0 or i == len(pending):
+        if i == 1 or i % progress_every == 0 or i == n_pending:
             _log_progress(i)
 
-    return ok_n, fail_n, filled
+    print(
+        f"{_LOG} 【逐票完成】ok={ok_n} empty={empty_n} fail={fail_n}  "
+        f"耗时 {time.time() - t0:.0f}s"
+        f"{f'（断点已完成 {already}）' if already else ''}",
+        flush=True,
+    )
+    return ok_n, fail_n + empty_n, filled

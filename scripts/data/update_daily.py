@@ -229,7 +229,7 @@ def main() -> None:
     ap.add_argument(
         "--req-symbol-interval",
         default=None,
-        help="逐票间隔秒，格式 MIN,MAX 或 N（默认 yml req_symbol_interval=10,20）",
+        help="逐票间隔秒，格式 MIN,MAX 或 N（默认 yml req_symbol_interval=5,10）",
     )
     ap.add_argument(
         "--req-batch-pause",
@@ -255,7 +255,7 @@ def main() -> None:
     if args.req_symbol_interval:
         from common.utils.source_headers import parse_interval_range
 
-        s_lo, s_hi = parse_interval_range(args.req_symbol_interval, default=(10.0, 20.0))
+        s_lo, s_hi = parse_interval_range(args.req_symbol_interval, default=(5.0, 10.0))
         print(f"req_symbol_interval: {int(s_lo)},{int(s_hi)}s", flush=True)
 
     with home_context(args.home):

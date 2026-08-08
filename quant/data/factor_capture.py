@@ -368,8 +368,8 @@ def capture_fund_flow_rank(
         page_hi = max(page_lo, page_hi)
     sym_lo = sym_hi = None
     if symbol_interval is not None:
-        sym_lo, sym_hi = parse_interval_range(symbol_interval, default=(10.0, 20.0))
-        sym_lo = max(10.0, sym_lo)
+        sym_lo, sym_hi = parse_interval_range(symbol_interval, default=(5.0, 10.0))
+        sym_lo = max(1.0, sym_lo)
         sym_hi = max(sym_lo, sym_hi)
     pause_lo = pause_hi = None
     if batch_pause is not None:
