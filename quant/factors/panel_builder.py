@@ -8,11 +8,13 @@
 5. 前瞻收益（1/3/5/10/20 日）→ forward_return_pct + meta['fwd']（供 ic_decay）
 
 性能：按 code 一次性建 BarSeries 并复用；前瞻收益向量化 shift。
+``workers>1`` 时仅并行「单票 raw 因子」循环（ProcessPool）；截面步骤仍串行。
 """
 
 from __future__ import annotations
 
-from typing import Iterable
+from concurrent.futures import ProcessPoolExecutor
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -65,69 +67,58 @@ def _build_bar_series(code_df: pd.DataFrame, code: str) -> BarSeries | None:
     return BarSeries(code=code, df=df[cols])
 
 
-def build_panel(
-    dates: list[str],
-    *,
-    registry: FactorRegistry = REGISTRY,
-    industries: dict[str, str] | None = None,
-    daily: pd.DataFrame | None = None,
-    adj: pd.DataFrame | None = None,
-    rebuild_universe: bool = False,
-    universe_by_date: dict[str, list[str]] | None = None,
+def _split_codes(codes: list[str], n_chunks: int) -> list[list[str]]:
+    """将已排序的 codes 均分为 ``n_chunks`` 块（块数不超过 len(codes)）。"""
+    if not codes:
+        return []
+    n = max(1, min(int(n_chunks), len(codes)))
+    size, rem = divmod(len(codes), n)
+    out: list[list[str]] = []
+    i = 0
+    for k in range(n):
+        take = size + (1 if k < rem else 0)
+        out.append(codes[i : i + take])
+        i += take
+    return [c for c in out if c]
+
+
+def _compute_raw_rows_for_codes(
+    codes: list[str],
+    daily: pd.DataFrame,
+    date_set: set[str],
+    universe_map: dict[str, list[str]],
+    industry_by_date: dict[str, dict[str, str]],
+    pit_table: pd.DataFrame,
 ) -> list[FactorRow]:
-    """构建全历史因子面板。返回 FactorRow 列表（含 raw/neutral/forward_return_pct/meta['fwd']）。
+    """按给定 codes（须已排序）计算 raw FactorRow；供单进程与 ProcessPool worker 共用。
 
-    【KEYSTONE】``daily`` 必须为**后复权**帧：默认经 ``load_adjusted_daily`` 读取
-    （不复权 raw + adj_factor 合并）；调用方自行传入时须已复权。因子值与前瞻收益/IC
-    因此在同一复权基准上，消除除权日假跳空（修此前 IC 标签被原始价污染的 bug）。
-    ``adj`` 参数已废弃：调整在加载边界完成，面板内不再二次复权。
-    ``dates`` 为要构建的交易日列表（ISO 或 YYYYMMDD 均可，内部归一化为 ISO）。
-    ``universe_by_date`` 可直接注入每日 universe，跳过离线库查询（测试/复用场景）。
+    使用进程内 ``REGISTRY``（不 pickle 因子闭包）；PIT 表在 worker 内建索引。
     """
-    if daily is None:
-        daily = load_adjusted_daily()
-    daily = _normalize_daily(daily)
+    from quant.data.fundamental_pit import PitIndex, metrics_as_of
 
-    factors = registry.all()
-    iso_dates = [to_iso(d) for d in dates]
-    date_set = set(iso_dates)
-    universe_map = _resolve_universe(iso_dates, rebuild_universe, universe_by_date)
-    # 按评估日缓存 PIT 行业（同一进程内复用）
-    industry_by_date: dict[str, dict[str, str]] = {}
-    if industries is not None:
-        for d in iso_dates:
-            industry_by_date[d] = industries
-    else:
-        for d in iso_dates:
-            industry_by_date[d] = _industry_map_for(d)
-
-    # 按 code 分组，一次性建 BarSeries 并复用
-    # 预先按 (code, date) 排序：下面用 searchsorted 定位评估日，依赖 date 升序
-    daily = daily.sort_values(["code", "date"], kind="stable")
-
-    from quant.data.fundamental_pit import PitIndex, read_fundamental_pit_table
-
-    pit_table = read_fundamental_pit_table()
+    if not codes or daily is None or daily.empty:
+        return []
+    factors = REGISTRY.all()
+    umap = {d: set(v) for d, v in universe_map.items()}
     pit_index = PitIndex.from_table(pit_table)
+    by_code = {str(c): g for c, g in daily.groupby(daily["code"].astype(str), sort=False)}
 
     rows: list[FactorRow] = []
-    for code, code_df in daily.groupby("code", sort=False):
-        if code_df.empty:
+    for code in codes:
+        code_df = by_code.get(code)
+        if code_df is None or code_df.empty:
             continue
         bars = _build_bar_series(code_df, code)
         if bars is None:
             continue
-        # 该 code 在哪些评估日有数据
-        code_dates = set(code_df["date"].tolist()) & date_set
+        code_dates = set(code_df["date"].astype(str).tolist()) & date_set
         if not code_dates:
             continue
-        # 该 code 在 universe 中的评估日
-        universe_needed = sorted(d for d in code_dates if code in universe_map.get(d, ()))
+        universe_needed = sorted(d for d in code_dates if code in umap.get(d, ()))
         if not universe_needed:
             continue
 
-        # 预取按 date 升序的数组，评估日用 searchsorted 定位「<= d 的最后一行」
-        date_arr = code_df["date"].to_numpy(dtype=object)
+        date_arr = code_df["date"].astype(str).to_numpy(dtype=object)
         close_arr = (
             pd.to_numeric(code_df["close"], errors="coerce").to_numpy(dtype=float)
             if "close" in code_df.columns
@@ -142,10 +133,12 @@ def build_panel(
 
         for d in universe_needed:
             pos = int(np.searchsorted(date_arr, d, side="right")) - 1
-            from quant.data.fundamental_pit import metrics_as_of
-
             px = float(close_arr[pos]) if close_arr is not None and pos >= 0 else None
-            fm = float(mv_arr[pos]) if mv_arr is not None and pos >= 0 and np.isfinite(mv_arr[pos]) else None
+            fm = (
+                float(mv_arr[pos])
+                if mv_arr is not None and pos >= 0 and np.isfinite(mv_arr[pos])
+                else None
+            )
             pit_extras = metrics_as_of(code, d, close=px, float_mv=fm, index=pit_index)
             object.__setattr__(bars, "extras", dict(pit_extras))
 
@@ -159,38 +152,135 @@ def build_panel(
                     raw[f.name] = float(v) * f.direction
             if not raw:
                 continue
-            # 「<= d」的最后一行位置（date_arr 已升序）
             lm = None
             if mv_arr is not None and pos >= 0:
                 val = mv_arr[pos]
                 if np.isfinite(val) and val > 0:
                     lm = float(np.log(val))
             nm = str(name_arr[pos]) if name_arr is not None and pos >= 0 else ""
-            fr = FactorRow(
-                date=d,
-                code=code,
-                name=nm,
-                industry=industry_by_date.get(d, {}).get(code, ""),
-                log_mcap=lm,
-                raw=raw,
+            rows.append(
+                FactorRow(
+                    date=d,
+                    code=code,
+                    name=nm,
+                    industry=industry_by_date.get(d, {}).get(code, ""),
+                    log_mcap=lm,
+                    raw=raw,
+                )
             )
-            rows.append(fr)
+    return rows
 
-    # PIT 快照 → flow / hot / theme（基本面见 build_panel fundamental_pit 循环）
+
+def _compute_raw_rows_chunk(payload: dict[str, Any]) -> list[FactorRow]:
+    """ProcessPool 入口：单参数 payload，避免 Windows spawn 下多参 pickle 问题。"""
+    return _compute_raw_rows_for_codes(
+        payload["codes"],
+        payload["daily"],
+        set(payload["dates"]),
+        payload["universe_map"],
+        payload["industry_by_date"],
+        payload["pit_table"],
+    )
+
+
+def build_panel(
+    dates: list[str],
+    *,
+    registry: FactorRegistry = REGISTRY,
+    industries: dict[str, str] | None = None,
+    daily: pd.DataFrame | None = None,
+    adj: pd.DataFrame | None = None,
+    rebuild_universe: bool = False,
+    universe_by_date: dict[str, list[str]] | None = None,
+    workers: int = 1,
+) -> list[FactorRow]:
+    """构建全历史因子面板。返回 FactorRow 列表（含 raw/neutral/forward_return_pct/meta['fwd']）。
+
+    【KEYSTONE】``daily`` 必须为**后复权**帧：默认经 ``load_adjusted_daily`` 读取
+    （不复权 raw + adj_factor 合并）；调用方自行传入时须已复权。因子值与前瞻收益/IC
+    因此在同一复权基准上，消除除权日假跳空（修此前 IC 标签被原始价污染的 bug）。
+    ``adj`` 参数已废弃：调整在加载边界完成，面板内不再二次复权。
+    ``dates`` 为要构建的交易日列表（ISO 或 YYYYMMDD 均可，内部归一化为 ISO）。
+    ``universe_by_date`` 可直接注入每日 universe，跳过离线库查询（测试/复用场景）。
+    ``workers``：按股票并行算 raw 因子的进程数；``<=1`` 单进程（与默认口径一致）。
+    截面中性化 / 快照 / 前瞻收益始终在主进程串行。
+    """
+    del adj  # 废弃参数，保留签名兼容
+    workers = max(1, int(workers))
+    if daily is None:
+        daily = load_adjusted_daily()
+    daily = _normalize_daily(daily)
+
+    iso_dates = [to_iso(d) for d in dates]
+    date_set = set(iso_dates)
+    universe_map = _resolve_universe(iso_dates, rebuild_universe, universe_by_date)
+    industry_by_date: dict[str, dict[str, str]] = {}
+    if industries is not None:
+        for d in iso_dates:
+            industry_by_date[d] = industries
+    else:
+        for d in iso_dates:
+            industry_by_date[d] = _industry_map_for(d)
+
+    # 预先按 (code, date) 排序：searchsorted 依赖 date 升序；codes 排序保证确定性
+    daily = daily.sort_values(["code", "date"], kind="stable")
+    daily = daily.assign(code=daily["code"].astype(str))
+    codes = sorted(daily["code"].unique().tolist())
+
+    from quant.data.fundamental_pit import read_fundamental_pit_table
+
+    pit_table = read_fundamental_pit_table()
+    universe_map_ser = {d: sorted(v) for d, v in universe_map.items()}
+
+    if workers <= 1 or len(codes) <= 1:
+        rows = _compute_raw_rows_for_codes(
+            codes,
+            daily,
+            date_set,
+            universe_map_ser,
+            industry_by_date,
+            pit_table,
+        )
+    else:
+        chunks = _split_codes(codes, workers)
+        payloads = []
+        for chunk in chunks:
+            sub = daily[daily["code"].isin(chunk)]
+            pit_sub = (
+                pit_table[pit_table["code"].astype(str).isin(chunk)]
+                if pit_table is not None and not pit_table.empty and "code" in pit_table.columns
+                else pit_table
+            )
+            payloads.append(
+                {
+                    "codes": chunk,
+                    "daily": sub,
+                    "dates": iso_dates,
+                    "universe_map": universe_map_ser,
+                    "industry_by_date": industry_by_date,
+                    "pit_table": pit_sub,
+                }
+            )
+        rows = []
+        with ProcessPoolExecutor(max_workers=len(chunks)) as pool:
+            # map 保序：与 chunks 顺序一致
+            for part in pool.map(_compute_raw_rows_chunk, payloads):
+                rows.extend(part)
+
+    rows.sort(key=lambda r: (r.date, r.code))
+
+    # PIT 快照 → flow / hot / theme（基本面见 raw 循环）
     _inject_snapshot_factors(rows, iso_dates)
-    # 行业动量代理 → theme_mom（快照缺失时回退）
     _fill_theme_mom(rows, overwrite=False)
 
-    # 截面中性化（含 winsorize）
     from quant.factors.neutralize import neutralize_panel_rows
 
     neutralize_panel_rows(rows, factor_names=registry.names())
 
-    # 前瞻收益（IC 用）：向量化按 code shift，按 (date, code) 索引
     fwd = _forward_returns_panel(daily, {r.code for r in rows}, date_set, horizons=(1, 3, 5, 10, 20))
     for r in rows:
         fmap = fwd.get((r.date, r.code), {})
-        r.forward_return_pct = fmap.get(5)  # 主用 5 日
+        r.forward_return_pct = fmap.get(5)
         r.meta["fwd"] = dict(fmap)
     return rows
 

@@ -3,13 +3,14 @@
 用法::
 
     poetry run python -m scripts.backtest.run --home D:/ProgramData/.quant \\
-        --start 2024-01-01 --end 2026-08-07
+        --start 2024-01-01 --end 2026-08-07 --workers 4
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
+import time
 from datetime import date
 
 from common.progress_log import log_progress, log_progress_done, log_progress_error, log_progress_start
@@ -42,9 +43,32 @@ def main() -> None:
     ap.add_argument("--loose", action="store_true", help="关闭 strict 开盘成交（非官方口径）")
     ap.add_argument("--registry-weights", action="store_true", help="忽略 IC 权重，用 registry 默认")
     ap.add_argument("--sensitivity", action="store_true", help="额外输出参数敏感性扫描")
+    ap.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="因子面板按股票并行进程数（默认 1；建议 2–4，内存紧张保持 1）",
+    )
+    ap.add_argument(
+        "--sens-workers",
+        type=int,
+        default=1,
+        help="敏感性扫描并行进程数（默认 1；仅 --sensitivity 时生效）",
+    )
     args = ap.parse_args()
+    if args.workers < 1:
+        ap.error("--workers 须 >= 1")
+    if args.sens_workers < 1:
+        ap.error("--sens-workers 须 >= 1")
 
-    log_progress_start(_SCOPE, "开始", detail=f"home={args.home or '当前'} {args.start} ~ {args.end}")
+    log_progress_start(
+        _SCOPE,
+        "开始",
+        detail=(
+            f"home={args.home or '当前'} {args.start} ~ {args.end} "
+            f"workers={args.workers} sens_workers={args.sens_workers}"
+        ),
+    )
     try:
         with home_context(args.home):
             strict = not args.loose
@@ -57,10 +81,22 @@ def main() -> None:
                 log_progress_error(_SCOPE, "失败", detail="无交易日")
                 sys.exit(1)
 
+            t0 = time.perf_counter()
             daily = load_adjusted_daily()
-            log_progress(_SCOPE, "构建 alpha …")
-            alpha_by_date = build_alpha_by_date(dates, daily, use_ic_weights=not args.registry_weights)
-            print(f"alpha 覆盖 {len(alpha_by_date)} 日")
+            log_progress(
+                _SCOPE,
+                "构建 alpha …",
+                detail=f"workers={args.workers}",
+            )
+            t_alpha0 = time.perf_counter()
+            alpha_by_date = build_alpha_by_date(
+                dates,
+                daily,
+                use_ic_weights=not args.registry_weights,
+                workers=args.workers,
+            )
+            t_alpha = time.perf_counter() - t_alpha0
+            print(f"alpha 覆盖 {len(alpha_by_date)} 日 · 耗时 {t_alpha:.1f}s", flush=True)
 
             def alpha_fn(d: str, _rows: dict) -> dict[str, float]:
                 return alpha_by_date.get(d, {})
@@ -74,7 +110,8 @@ def main() -> None:
                 sectors=read_industry_snapshot(dates[-1]) if dates else {},
             )
             exit_cfg = None if args.no_exit else ExitConfig()
-            log_progress(_SCOPE, "跑回测 …", detail=f"{len(dates)} 日")
+            log_progress(_SCOPE, "跑回测 …", detail=f"{len(dates)} 日（串行）")
+            t_bt0 = time.perf_counter()
             broker = run_backtest(
                 daily=daily,
                 dates=dates,
@@ -84,40 +121,79 @@ def main() -> None:
                 exit_config=exit_cfg,
                 strict_signals=strict,
             )
+            t_bt = time.perf_counter() - t_bt0
+            print(f"回测耗时 {t_bt:.1f}s", flush=True)
 
             sens = None
             if args.sensitivity:
+                log_progress(
+                    _SCOPE,
+                    "敏感性扫描 …",
+                    detail=f"sens_workers={args.sens_workers}",
+                )
+                t_s0 = time.perf_counter()
+                defaults = {
+                    "n_enter": float(args.n_enter),
+                    "n_exit": float(args.n_exit),
+                    "target_vol": float(args.target_vol),
+                    "buffer_abs": 0.01,
+                    "sector_cap": 0.40,
+                }
+                if args.sens_workers <= 1:
 
-                def _sens_run(params: dict[str, float]) -> float:
-                    ne = int(params.get("n_enter", args.n_enter))
-                    tv = float(params.get("target_vol", args.target_vol))
-                    ba = float(params.get("buffer_abs", 0.01))
-                    sc = float(params.get("sector_cap", 0.40))
-                    pol = TargetPortfolio.from_config(
-                        n_enter=ne,
-                        n_exit=max(ne + 5, args.n_exit),
-                        max_stocks=args.max_positions,
-                        target_vol=tv,
-                        buffer_abs=ba,
-                        sector_cap=sc,
-                        daily=daily,
-                    )
-                    b = run_backtest(
-                        daily=daily,
-                        dates=dates,
-                        alpha_fn=alpha_fn,
-                        policy=pol,
-                        max_positions=args.max_positions,
-                        exit_config=exit_cfg,
-                        strict_signals=strict,
-                    )
-                    return float(compute_metrics(b).get("sharpe") or 0.0)
+                    def _sens_run(params: dict[str, float]) -> float:
+                        ne = int(params.get("n_enter", args.n_enter))
+                        tv = float(params.get("target_vol", args.target_vol))
+                        ba = float(params.get("buffer_abs", 0.01))
+                        sc = float(params.get("sector_cap", 0.40))
+                        pol = TargetPortfolio.from_config(
+                            n_enter=ne,
+                            n_exit=max(ne + 5, args.n_exit),
+                            max_stocks=args.max_positions,
+                            target_vol=tv,
+                            buffer_abs=ba,
+                            sector_cap=sc,
+                            daily=daily,
+                        )
+                        b = run_backtest(
+                            daily=daily,
+                            dates=dates,
+                            alpha_fn=alpha_fn,
+                            policy=pol,
+                            max_positions=args.max_positions,
+                            exit_config=exit_cfg,
+                            strict_signals=strict,
+                        )
+                        return float(compute_metrics(b).get("sharpe") or 0.0)
 
-                sens = run_backtest_sensitivity(base_run_fn=_sens_run)
+                    sens = run_backtest_sensitivity(
+                        base_run_fn=_sens_run, workers=1
+                    )
+                else:
+                    sens = run_backtest_sensitivity(
+                        workers=args.sens_workers,
+                        parallel_ctx={
+                            "daily": daily,
+                            "dates": dates,
+                            "alpha_by_date": alpha_by_date,
+                            "max_positions": args.max_positions,
+                            "strict_signals": strict,
+                            "use_exit": not args.no_exit,
+                            "defaults": defaults,
+                        },
+                    )
+                print(
+                    f"敏感性耗时 {time.perf_counter() - t_s0:.1f}s",
+                    flush=True,
+                )
 
             rep = export_report(broker, out, daily=daily, strict_signals=strict, sensitivity=sens)
             print(rep["metrics_data"])
-            log_progress_done(_SCOPE, "成功", detail=out)
+            log_progress_done(
+                _SCOPE,
+                "成功",
+                detail=f"{out} · 总耗时 {time.perf_counter() - t0:.1f}s",
+            )
     except SystemExit:
         raise
     except Exception as e:

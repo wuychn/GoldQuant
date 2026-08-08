@@ -13,14 +13,16 @@ def build_alpha_by_date(
     daily,
     *,
     use_ic_weights: bool = True,
+    workers: int = 1,
 ) -> dict[str, dict[str, float]]:
-    panel = build_panel(dates, daily=daily)
+    panel = build_panel(dates, daily=daily, workers=workers)
     by_date: dict[str, dict[str, float]] = {}
     rows_by: dict[str, list] = {}
     for r in panel:
         rows_by.setdefault(r.date, []).append(r)
     default_w = REGISTRY.weights()
-    for d, rows in rows_by.items():
+    for d in sorted(rows_by):
+        rows = rows_by[d]
         w = load_factor_weights(as_of=d) if use_ic_weights else None
         # strict OOS 且无 factor_weights_ts 时回退 REGISTRY 默认（非 IC 权重）
         by_date[d] = compose_alpha(rows, weights=w or default_w)

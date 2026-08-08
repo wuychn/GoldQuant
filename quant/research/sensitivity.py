@@ -6,8 +6,9 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Callable
 
 import numpy as np
 
@@ -33,20 +34,40 @@ def _stability(sharpes: list[float]) -> tuple[float, float]:
     return stab, ptm
 
 
+def _safe_run_fn(run_fn: Callable[[float], float], v: float) -> float:
+    """模块级包装，供 ProcessPool 调用（run_fn 须可 pickle）。"""
+    try:
+        return float(run_fn(v))
+    except Exception:
+        return float("nan")
+
+
 def scan_param(
     param: str,
     grid: list[float],
     *,
     run_fn: Callable[[float], float],  # param_value → Sharpe
+    workers: int = 1,
 ) -> SensitivityResult:
-    sharpes = []
-    for v in grid:
-        try:
-            sharpes.append(float(run_fn(v)))
-        except Exception:
-            sharpes.append(float("nan"))
+    """单变量扫描。``workers>1`` 时要求 ``run_fn`` 可被 pickle（模块级函数）。"""
+    workers = max(1, int(workers))
+    if workers <= 1 or len(grid) <= 1:
+        sharpes = []
+        for v in grid:
+            sharpes.append(_safe_run_fn(run_fn, float(v)))
+    else:
+        with ProcessPoolExecutor(max_workers=min(workers, len(grid))) as pool:
+            sharpes = list(
+                pool.map(_safe_run_fn, [run_fn] * len(grid), [float(v) for v in grid])
+            )
     stab, ptm = _stability(sharpes)
-    return SensitivityResult(param=param, grid=grid, sharpes=sharpes, stability=round(stab, 3), peak_to_median=round(ptm, 3))
+    return SensitivityResult(
+        param=param,
+        grid=list(grid),
+        sharpes=sharpes,
+        stability=round(stab, 3),
+        peak_to_median=round(ptm, 3),
+    )
 
 
 def parameter_budget(n_params: int, n_values_per_param: int) -> int:

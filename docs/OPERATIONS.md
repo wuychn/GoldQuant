@@ -506,7 +506,8 @@ poetry run python -m scripts.data.audit_data_health --home D:\ProgramData\.quant
 
 ```powershell
 poetry run python -m scripts.backtest.run `
-  --home D:\ProgramData\.quant --start 2024-01-01 --end 2026-08-07
+  --home D:\ProgramData\.quant --start 2024-01-01 --end 2026-08-07 `
+  --workers 4
 ```
 
 | 参数 | 默认 | 含义 |
@@ -520,7 +521,11 @@ poetry run python -m scripts.backtest.run `
 | `--no-exit` | off | 关掉 L4 出场规则，只看选股 alpha |
 | `--registry-weights` | off | 忽略 IC/校准权重，改用 registry 默认权重 |
 | `--sensitivity` | off | 额外跑参数敏感性扫描（更慢） |
+| `--workers` | `1` | 因子面板按**股票**并行进程数；日循环撮合仍串行。结果应与 `1` 一致；CPU 多且内存够可用 `2`–`4`，内存紧张保持 `1` |
+| `--sens-workers` | `1` | 敏感性各参数点并行进程数（仅 `--sensitivity`）；默认 `1` |
 | `--out` | `$QUANT_HOME/reports/bt` | 报告输出目录 |
+
+并行只加速「建 alpha（按票算因子）」与可选的敏感性多组回测，**不**并行逐日撮合；默认 `workers=1` 与旧口径一致。
 
 ---
 
