@@ -162,9 +162,9 @@ def _copy_snapshots(offline: Path, daily: Path, out: Path) -> int:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--offline", required=True, help="离线库 home（build_daily --end 昨日）")
-    ap.add_argument("--daily", required=True, help="每日增量 home（update_daily）")
-    ap.add_argument("--out", required=True, help="输出 home（合并后统一库）")
+    ap.add_argument("--offline", required=True, help="离线库 quant-home 根目录（含 store/；build_daily --end 昨日写入处）")
+    ap.add_argument("--daily", required=True, help="增量库 quant-home 根目录（含 store/；update_daily 每日写入处）")
+    ap.add_argument("--out", required=True, help="合并输出 quant-home 根目录（含 store/；合并后的统一库）")
     args = ap.parse_args()
 
     offline, daily, out = Path(args.offline).expanduser(), Path(args.daily).expanduser(), Path(args.out).expanduser()

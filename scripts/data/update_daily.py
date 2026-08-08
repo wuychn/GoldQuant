@@ -22,6 +22,7 @@ from quant.data.calendar import is_trading_day
 from quant.data.fetch import fetch_index, fetch_spot_em, fetch_trade_calendar
 from quant.data.store import read_daily_raw, write_calendar, write_daily_raw, write_index_daily
 from quant.store.paths import quant_home
+from scripts.cli_home import add_home_argument, home_context
 from common.timeutil import cn_now
 
 _SCOPE = "update_daily"
@@ -194,174 +195,180 @@ def detect_ex_and_align_pre_close(spot: pd.DataFrame, prev_map: dict[str, float]
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--date", default=None, help="指定日 YYYY-MM-DD，默认今天")
-    ap.add_argument("--force-fundamental-pit", action="store_true", help="无视披露季窗口，增量刷新 fundamental_pit")
+    ap = argparse.ArgumentParser(description="每日增量：spot 追加当日 + 除权检测 + 因子/指数/行业快照")
+    add_home_argument(ap)
+    ap.add_argument("--date", default=None, help="指定交易日 YYYY-MM-DD，默认今天（非交易日自动跳过）")
+    ap.add_argument(
+        "--force-fundamental-pit",
+        action="store_true",
+        help="无视披露季窗口，强制增量刷新 fundamental_pit",
+    )
     ap.add_argument(
         "--flush-every",
         type=int,
         default=50,
-        help="fund_flow 每拉 N 只落盘一次（断点续传粒度，默认 50）",
+        help="fund_flow 每成功拉取 N 只落盘一次（断点续传粒度，默认 50）",
     )
     args = ap.parse_args()
 
-    today = args.date or cn_now().strftime("%Y-%m-%d")
-    if not is_trading_day(__import__("datetime").date.fromisoformat(today)):
-        log_progress(_SCOPE, "非交易日，跳过", detail=today)
-        log_progress_done(_SCOPE, "成功", detail="skipped non-trading day")
-        return
+    with home_context(args.home):
+        today = args.date or cn_now().strftime("%Y-%m-%d")
+        if not is_trading_day(__import__("datetime").date.fromisoformat(today)):
+            log_progress(_SCOPE, "非交易日，跳过", detail=today)
+            log_progress_done(_SCOPE, "成功", detail="skipped non-trading day")
+            return
 
-    log_progress_start(_SCOPE, "开始", detail=today)
+        log_progress_start(_SCOPE, "开始", detail=today)
 
-    # 1. 全市场当日 spot（经 DailySource facade；默认新浪直连 20s 全量含市值，东财 spot_em
-    #    走 clist 58 页易断——换源只改 quant.yml data.sources.daily）
-    try:
-        log_progress(_SCOPE, "拉取 spot …")
-        spot = fetch_spot_em()
-    except Exception as e:
-        log_progress_error(_SCOPE, "spot 拉取失败", detail=f"{type(e).__name__}: {e}")
-        sys.exit(2)
+        # 1. 全市场当日 spot（经 DailySource facade；默认新浪直连 20s 全量含市值，东财 spot_em
+        #    走 clist 58 页易断——换源只改 quant.yml data.sources.daily）
+        try:
+            log_progress(_SCOPE, "拉取 spot …")
+            spot = fetch_spot_em()
+        except Exception as e:
+            log_progress_error(_SCOPE, "spot 拉取失败", detail=f"{type(e).__name__}: {e}")
+            sys.exit(2)
 
-    spot["date"] = today
-    # 前缀过滤：与 build_daily 一致，排除北交所/三板/B股（历史段无、当天也不该有）
-    from quant.config import load_quant_config
+        spot["date"] = today
+        # 前缀过滤：与 build_daily 一致，排除北交所/三板/B股（历史段无、当天也不该有）
+        from quant.config import load_quant_config
 
-    prefixes = (
-        (load_quant_config().get("gates") or {}).get("symbol_pool", {}).get("prefixes", ["60", "00", "30", "688"])
-    )
-    before = len(spot)
-    spot = spot[spot["code"].astype(str).str.strip().str.startswith(tuple(prefixes))]
-    if len(spot) < before:
-        print(f"前缀过滤: {before} → {len(spot)} 只（保留 {prefixes}）")
-    # 先用源站原始昨收做除权检测，再把 pre_close 对齐到库内 T-1 close 写库
-    # （保证 daily_raw 不复权序列连续；检测不可用对齐后的值，否则永远无除权）。
-    daily = read_daily_raw(end=today)
-    prev_map = _prev_close_map(daily, today)
-    ex_codes = detect_ex_and_align_pre_close(spot, prev_map)
-    # 无效盘口（停牌全 0 / high 不夹等）不落库，避免污染 daily_raw 与复权跳空校验
-    spot, n_bad_bars = filter_valid_spot_bars(spot)
-    if n_bad_bars:
-        print(f"丢弃无效盘口: {n_bad_bars} 只（close<=0 或 OHLC 不自洽）", file=sys.stderr)
-    # 仅保留 daily_raw 列
-    cols = ["code", "date", "name", "open", "high", "low", "close", "pre_close",
-            "volume", "amount", "turnover_rate", "float_mv", "total_mv"]
-    spot_out = spot[[c for c in cols if c in spot.columns]]
-    write_daily_raw(spot_out)
-    print(f"spot 追加: {len(spot_out)} 行 @ {today}")
-
-    # 1a. 停牌识别：停牌票 volume 置 0（universe 过滤生效），复牌盘口缺失记告警
-    n_stop, n_resume = _mark_suspended(spot, today)
-    if n_stop or n_resume:
-        print(f"停牌 {n_stop} 只（volume 置 0）· 复牌盘口缺失 {n_resume} 只", file=sys.stderr)
-
-    # 1b. PIT 名称快照（供 universe ST/退市过滤、涨跌停 ST 分档）
-    #     spot 的 name 是当日真实名（PIT），落库后 universe 可按日取，避免依赖
-    #     daily_raw.name（历史常缺失或为查询当下的当前名）。
-    try:
-        from quant.data.store import write_name_snapshot
-
-        code_name = {
-            str(r.get("code", "")).strip(): str(r.get("name", "")).strip()
-            for _, r in spot.iterrows()
-            if str(r.get("code", "")).strip() and str(r.get("name", "")).strip()
-        }
-        write_name_snapshot(today, code_name)
-        print(f"name 快照: {len(code_name)} 只 @ {today}")
-    except Exception as e:
-        print(f"[WARN] name 快照失败: {e}", file=sys.stderr)
-
-    # 2. 除权日补拉复权因子（检测已在写库前完成）
-    if ex_codes:
-        print(f"检测到除权 {len(ex_codes)} 只，补拉复权因子: {ex_codes[:10]}{'...' if len(ex_codes)>10 else ''}")
-        n = refresh_adj_for_codes(ex_codes)
-        print(f"复权因子更新 {n} 条")
-    else:
-        print("无除权")
-
-    # 3. 指数增量（三个基准指数，与 build_daily 一致）——失败即时记 pending，下次运行先重试
-    pend = _read_pending()
-    _update_indices(today, daily, pend.get("indices", []))
-    _write_pending(pend)  # 即时落盘，避免后续步骤（因子快照等）慢/卡导致丢失
-
-    # 4. 交易日历刷新（低频）
-    try:
-        cal = fetch_trade_calendar()
-        write_calendar(cal)
-        log_progress(_SCOPE, "交易日历已刷新", detail=f"{len(cal)} 天")
-    except Exception as e:  # noqa: BLE001
-        print(f"[WARN] 交易日历刷新失败: {e}", file=sys.stderr, flush=True)
-
-    # 5. 行业 PIT 快照（供中性化 / 组合约束）——失败即时记 pending，下次运行先重试
-    _update_industry(today, pend)
-    _write_pending(pend)  # 即时落盘
-
-    # 6. Universe PIT 快照
-    try:
-        from quant.data.universe import universe_snapshot
-
-        snap = universe_snapshot(today, rebuild=True, daily=daily)
-        n_inc = int(snap["included"].sum()) if not snap.empty and "included" in snap.columns else 0
-        print(f"universe 快照: {n_inc} 只纳入 / {len(snap)} 行 @ {today}")
-    except Exception as e:
-        print(f"[WARN] universe 快照失败: {e}", file=sys.stderr)
-
-    # 7. 上市日表（jbxx + daily 首条，供 universe PIT）
-    try:
-        from quant.data.listing import build_listing_map, write_listing_table
-
-        mp = build_listing_map(daily)
-        write_listing_table(mp)
-        print(f"listing_dates 更新: {len(mp)} 只")
-    except Exception as e:
-        print(f"[WARN] listing_dates 失败: {e}", file=sys.stderr)
-
-
-    # 8. fundamental_pit 披露季增量刷新（round-robin 存量码 upsert）
-    try:
-        from quant.data.fundamental_pit import (
-            mark_refresh_done,
-            refresh_already_ran_today,
-            refresh_fundamental_pit_incremental,
-            should_refresh_fundamental_pit,
+        prefixes = (
+            (load_quant_config().get("gates") or {}).get("symbol_pool", {}).get("prefixes", ["60", "00", "30", "688"])
         )
+        before = len(spot)
+        spot = spot[spot["code"].astype(str).str.strip().str.startswith(tuple(prefixes))]
+        if len(spot) < before:
+            print(f"前缀过滤: {before} → {len(spot)} 只（保留 {prefixes}）")
+        # 先用源站原始昨收做除权检测，再把 pre_close 对齐到库内 T-1 close 写库
+        # （保证 daily_raw 不复权序列连续；检测不可用对齐后的值，否则永远无除权）。
+        daily = read_daily_raw(end=today)
+        prev_map = _prev_close_map(daily, today)
+        ex_codes = detect_ex_and_align_pre_close(spot, prev_map)
+        # 无效盘口（停牌全 0 / high 不夹等）不落库，避免污染 daily_raw 与复权跳空校验
+        spot, n_bad_bars = filter_valid_spot_bars(spot)
+        if n_bad_bars:
+            print(f"丢弃无效盘口: {n_bad_bars} 只（close<=0 或 OHLC 不自洽）", file=sys.stderr)
+        # 仅保留 daily_raw 列
+        cols = ["code", "date", "name", "open", "high", "low", "close", "pre_close",
+                "volume", "amount", "turnover_rate", "float_mv", "total_mv"]
+        spot_out = spot[[c for c in cols if c in spot.columns]]
+        write_daily_raw(spot_out)
+        print(f"spot 追加: {len(spot_out)} 行 @ {today}")
 
-        if args.force_fundamental_pit or should_refresh_fundamental_pit(today):
-            if args.force_fundamental_pit or not refresh_already_ran_today(today):
-                ok, fail = refresh_fundamental_pit_incremental(limit=300, rotate=True)
-                mark_refresh_done(today)
-                print(f"fundamental_pit 披露季刷新: ok={ok} fail={fail}")
-            else:
-                print(f"fundamental_pit: 今日已刷新，跳过")
+        # 1a. 停牌识别：停牌票 volume 置 0（universe 过滤生效），复牌盘口缺失记告警
+        n_stop, n_resume = _mark_suspended(spot, today)
+        if n_stop or n_resume:
+            print(f"停牌 {n_stop} 只（volume 置 0）· 复牌盘口缺失 {n_resume} 只", file=sys.stderr)
+
+        # 1b. PIT 名称快照（供 universe ST/退市过滤、涨跌停 ST 分档）
+        #     spot 的 name 是当日真实名（PIT），落库后 universe 可按日取，避免依赖
+        #     daily_raw.name（历史常缺失或为查询当下的当前名）。
+        try:
+            from quant.data.store import write_name_snapshot
+
+            code_name = {
+                str(r.get("code", "")).strip(): str(r.get("name", "")).strip()
+                for _, r in spot.iterrows()
+                if str(r.get("code", "")).strip() and str(r.get("name", "")).strip()
+            }
+            write_name_snapshot(today, code_name)
+            print(f"name 快照: {len(code_name)} 只 @ {today}")
+        except Exception as e:
+            print(f"[WARN] name 快照失败: {e}", file=sys.stderr)
+
+        # 2. 除权日补拉复权因子（检测已在写库前完成）
+        if ex_codes:
+            print(f"检测到除权 {len(ex_codes)} 只，补拉复权因子: {ex_codes[:10]}{'...' if len(ex_codes)>10 else ''}")
+            n = refresh_adj_for_codes(ex_codes)
+            print(f"复权因子更新 {n} 条")
         else:
-            print("fundamental_pit: 非披露季窗口，跳过（可用 --force-fundamental-pit）")
-    except Exception as e:
-        print(f"[WARN] fundamental_pit 刷新失败: {e}", file=sys.stderr)
+            print("无除权")
 
-    # 9. 因子 PIT 快照（hot/flow/theme；基本面见 fundamental_pit）
-    #    fund_flow 分批落盘 + progress 文件，中断后重跑跳过已尝试码
-    try:
-        from quant.data.factor_capture import capture_all_factor_snapshots
-        from quant.data.universe import universe_codes
+        # 3. 指数增量（三个基准指数，与 build_daily 一致）——失败即时记 pending，下次运行先重试
+        pend = _read_pending()
+        _update_indices(today, daily, pend.get("indices", []))
+        _write_pending(pend)  # 即时落盘，避免后续步骤（因子快照等）慢/卡导致丢失
 
-        uni = universe_codes(today, rebuild=False)
-        # 复用 step 1 已拉的新浪 spot（含 code/float_mv），避免再触发东财 clist 拉全市场
-        counts = capture_all_factor_snapshots(
-            today,
-            spot=spot,
-            universe_codes=uni,
-            flush_every=max(1, int(args.flush_every)),
-        )
-        print(f"因子快照 @ {today}: {counts}")
-    except Exception as e:
-        print(f"[WARN] 因子快照失败: {e}", file=sys.stderr)
+        # 4. 交易日历刷新（低频）
+        try:
+            cal = fetch_trade_calendar()
+            write_calendar(cal)
+            log_progress(_SCOPE, "交易日历已刷新", detail=f"{len(cal)} 天")
+        except Exception as e:  # noqa: BLE001
+            print(f"[WARN] 交易日历刷新失败: {e}", file=sys.stderr, flush=True)
 
-    # 10. 写 pending（指数/行业失败待重试），下次运行开头自动补
-    _write_pending(pend)
-    n_pend = len(pend.get("indices", [])) + (1 if pend.get("industry") else 0)
-    if n_pend:
-        print(f"[INFO] 待重试 {n_pend} 项（指数 {pend.get('indices')}，行业 "
-              f"{pend.get('industry')}）→ 下次 update_daily 自动补", file=sys.stderr)
-    log_progress_done(_SCOPE, "成功", detail=today)
+        # 5. 行业 PIT 快照（供中性化 / 组合约束）——失败即时记 pending，下次运行先重试
+        _update_industry(today, pend)
+        _write_pending(pend)  # 即时落盘
+
+        # 6. Universe PIT 快照
+        try:
+            from quant.data.universe import universe_snapshot
+
+            snap = universe_snapshot(today, rebuild=True, daily=daily)
+            n_inc = int(snap["included"].sum()) if not snap.empty and "included" in snap.columns else 0
+            print(f"universe 快照: {n_inc} 只纳入 / {len(snap)} 行 @ {today}")
+        except Exception as e:
+            print(f"[WARN] universe 快照失败: {e}", file=sys.stderr)
+
+        # 7. 上市日表（jbxx + daily 首条，供 universe PIT）
+        try:
+            from quant.data.listing import build_listing_map, write_listing_table
+
+            mp = build_listing_map(daily)
+            write_listing_table(mp)
+            print(f"listing_dates 更新: {len(mp)} 只")
+        except Exception as e:
+            print(f"[WARN] listing_dates 失败: {e}", file=sys.stderr)
+
+
+        # 8. fundamental_pit 披露季增量刷新（round-robin 存量码 upsert）
+        try:
+            from quant.data.fundamental_pit import (
+                mark_refresh_done,
+                refresh_already_ran_today,
+                refresh_fundamental_pit_incremental,
+                should_refresh_fundamental_pit,
+            )
+
+            if args.force_fundamental_pit or should_refresh_fundamental_pit(today):
+                if args.force_fundamental_pit or not refresh_already_ran_today(today):
+                    ok, fail = refresh_fundamental_pit_incremental(limit=300, rotate=True)
+                    mark_refresh_done(today)
+                    print(f"fundamental_pit 披露季刷新: ok={ok} fail={fail}")
+                else:
+                    print(f"fundamental_pit: 今日已刷新，跳过")
+            else:
+                print("fundamental_pit: 非披露季窗口，跳过（可用 --force-fundamental-pit）")
+        except Exception as e:
+            print(f"[WARN] fundamental_pit 刷新失败: {e}", file=sys.stderr)
+
+        # 9. 因子 PIT 快照（hot/flow/theme；基本面见 fundamental_pit）
+        #    fund_flow 分批落盘 + progress 文件，中断后重跑跳过已尝试码
+        try:
+            from quant.data.factor_capture import capture_all_factor_snapshots
+            from quant.data.universe import universe_codes
+
+            uni = universe_codes(today, rebuild=False)
+            # 复用 step 1 已拉的新浪 spot（含 code/float_mv），避免再触发东财 clist 拉全市场
+            counts = capture_all_factor_snapshots(
+                today,
+                spot=spot,
+                universe_codes=uni,
+                flush_every=max(1, int(args.flush_every)),
+            )
+            print(f"因子快照 @ {today}: {counts}")
+        except Exception as e:
+            print(f"[WARN] 因子快照失败: {e}", file=sys.stderr)
+
+        # 10. 写 pending（指数/行业失败待重试），下次运行开头自动补
+        _write_pending(pend)
+        n_pend = len(pend.get("indices", [])) + (1 if pend.get("industry") else 0)
+        if n_pend:
+            print(f"[INFO] 待重试 {n_pend} 项（指数 {pend.get('indices')}，行业 "
+                  f"{pend.get('industry')}）→ 下次 update_daily 自动补", file=sys.stderr)
+        log_progress_done(_SCOPE, "成功", detail=today)
 
 
 if __name__ == "__main__":

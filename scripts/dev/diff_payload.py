@@ -59,7 +59,11 @@ def _diff(a, b, path: str = "") -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Diff market mode payloads")
-    parser.add_argument("mode", choices=MODES)
+    parser.add_argument(
+        "mode",
+        choices=MODES,
+        help="市场模式：news / pre_market / during_market / post_market_lunch / post_market_evening",
+    )
     parser.add_argument("--fixture", action="store_true", help="对比 service vs data/*.json")
     args = parser.parse_args()
 

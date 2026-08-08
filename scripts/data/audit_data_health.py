@@ -14,6 +14,7 @@ import argparse
 import sys
 
 from common.progress_log import log_progress, log_progress_done, log_progress_error, log_progress_start
+from scripts.cli_home import add_home_argument, home_context
 
 _SCOPE = "audit_data_health"
 
@@ -143,30 +144,32 @@ def probe_akshare_name(code: str) -> None:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--probe-code", default="000001", help="akshare name 列探测代码")
+    ap = argparse.ArgumentParser(description="数据健康诊断：复权/名称/行业/universe PIT 覆盖率")
+    add_home_argument(ap)
+    ap.add_argument("--probe-code", default="000001", help="akshare stock_zh_a_hist 名称列探测用的股票代码（默认 000001）")
     args = ap.parse_args()
 
-    log_progress_start(_SCOPE, "开始", detail=f"probe-code={args.probe_code}")
-    try:
-        log_progress(_SCOPE, "审计 daily_raw / adj_factor …")
-        audit_dailies()
-        print()
-        log_progress(_SCOPE, "审计 name_snapshot …")
-        audit_name_snapshot()
-        print()
-        log_progress(_SCOPE, "审计 industry …")
-        audit_industry()
-        print()
-        log_progress(_SCOPE, "审计 universe …")
-        audit_universe()
-        print()
-        log_progress(_SCOPE, "探测 akshare name 列 …")
-        probe_akshare_name(args.probe_code)
-        log_progress_done(_SCOPE, "成功")
-    except Exception as e:
-        log_progress_error(_SCOPE, "失败", detail=f"{type(e).__name__}: {e}")
-        raise
+    with home_context(args.home):
+        log_progress_start(_SCOPE, "开始", detail=f"probe-code={args.probe_code}")
+        try:
+            log_progress(_SCOPE, "审计 daily_raw / adj_factor …")
+            audit_dailies()
+            print()
+            log_progress(_SCOPE, "审计 name_snapshot …")
+            audit_name_snapshot()
+            print()
+            log_progress(_SCOPE, "审计 industry …")
+            audit_industry()
+            print()
+            log_progress(_SCOPE, "审计 universe …")
+            audit_universe()
+            print()
+            log_progress(_SCOPE, "探测 akshare name 列 …")
+            probe_akshare_name(args.probe_code)
+            log_progress_done(_SCOPE, "成功")
+        except Exception as e:
+            log_progress_error(_SCOPE, "失败", detail=f"{type(e).__name__}: {e}")
+            raise
 
 
 if __name__ == "__main__":

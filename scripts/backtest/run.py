@@ -10,11 +10,10 @@ from __future__ import annotations
 
 import argparse
 import sys
-from contextlib import nullcontext
 from datetime import date
-from pathlib import Path
 
 from common.progress_log import log_progress, log_progress_done, log_progress_error, log_progress_start
+from scripts.cli_home import add_home_argument, home_context
 from quant.backtest.engine import ExitConfig, run_backtest
 from quant.backtest.metrics import compute_metrics
 from quant.backtest.report import export_report
@@ -24,33 +23,30 @@ from quant.data.calendar import to_iso, trading_day_list
 from quant.data.industry import read_industry_snapshot
 from quant.factors.alpha_builder import build_alpha_by_date
 from quant.portfolio.target import TargetPortfolio
-from quant.store.paths import override_quant_home, reports_dir
+from quant.store.paths import reports_dir
 
 _SCOPE = "backtest.run"
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--home", default=None, help="quant-home 根（含 store/）；默认当前 QUANT_HOME")
-    ap.add_argument("--start", required=True, help="YYYY-MM-DD")
-    ap.add_argument("--end", required=True, help="YYYY-MM-DD")
-    ap.add_argument("--out", default=None, help="默认 $QUANT_HOME/reports/bt")
-    ap.add_argument("--max-positions", type=int, default=10)
-    ap.add_argument("--n-enter", type=int, default=8)
-    ap.add_argument("--n-exit", type=int, default=15)
-    ap.add_argument("--target-vol", type=float, default=0.15)
-    ap.add_argument("--no-exit", action="store_true")
+    ap = argparse.ArgumentParser(description="IC 权重 + MVO 回测并导出报告")
+    add_home_argument(ap)
+    ap.add_argument("--start", required=True, help="回测起始日 YYYY-MM-DD（含）")
+    ap.add_argument("--end", required=True, help="回测结束日 YYYY-MM-DD（含）")
+    ap.add_argument("--out", default=None, help="报告输出目录；默认 $QUANT_HOME/reports/bt")
+    ap.add_argument("--max-positions", type=int, default=10, help="最大持仓只数（默认 10）")
+    ap.add_argument("--n-enter", type=int, default=8, help="目标组合纳入阈值排名（默认 8）")
+    ap.add_argument("--n-exit", type=int, default=15, help="目标组合剔除阈值排名（默认 15）")
+    ap.add_argument("--target-vol", type=float, default=0.15, help="目标组合年化波动率（默认 0.15）")
+    ap.add_argument("--no-exit", action="store_true", help="关闭出场规则（仅测 alpha 选股）")
     ap.add_argument("--loose", action="store_true", help="关闭 strict 开盘成交（非官方口径）")
-    ap.add_argument("--registry-weights", action="store_true", help="忽略 IC 权重")
-    ap.add_argument("--sensitivity", action="store_true", help="输出参数敏感性")
+    ap.add_argument("--registry-weights", action="store_true", help="忽略 IC 权重，用 registry 默认")
+    ap.add_argument("--sensitivity", action="store_true", help="额外输出参数敏感性扫描")
     args = ap.parse_args()
 
-    home = Path(args.home).expanduser() if args.home else None
-    log_progress_start(_SCOPE, "开始", detail=f"home={home or '当前'} {args.start} ~ {args.end}")
-    # 读库 / reports_dir 默认路径都须在 override 内，否则 --home 不生效。
-    ctx = override_quant_home(home) if home else nullcontext()
+    log_progress_start(_SCOPE, "开始", detail=f"home={args.home or '当前'} {args.start} ~ {args.end}")
     try:
-        with ctx:
+        with home_context(args.home):
             strict = not args.loose
             out = args.out or str(reports_dir("bt"))
             dates = [

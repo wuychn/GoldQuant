@@ -33,6 +33,7 @@ from common.progress_log import (
 from common.timeutil import cn_now
 from quant.data.calendar import is_trading_day
 from quant.data.store import read_calendar, read_daily_raw
+from scripts.cli_home import add_home_argument, home_context, home_cli_args
 
 DEFAULT_START = "2021-01-01"
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -80,9 +81,10 @@ def _invoke_module(module: str, extra: list[str]) -> int:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description="每周离线库自愈：建库/补漏 + 当日增量 + 重试失败清单")
+    add_home_argument(ap)
     ap.add_argument("--date", default=None, help="维护截至日 YYYY-MM-DD，默认今天（非交易日回退最近交易日）")
-    ap.add_argument("--start", default=DEFAULT_START, help=f"无库时全量起始日，默认 {DEFAULT_START}")
+    ap.add_argument("--start", default=DEFAULT_START, help=f"离线库为空时全量建库起始日，默认 {DEFAULT_START}")
     args = ap.parse_args()
 
     today = date.fromisoformat(args.date) if args.date else cn_now().date()
@@ -95,45 +97,62 @@ def main() -> None:
     as_of = today.isoformat()
     log_progress_start(_SCOPE, "开始", detail=f"as_of={as_of} start={args.start}")
 
-    fails: list[str] = []
-    daily = read_daily_raw(end=as_of)
-    if daily.empty:
-        log_progress(_SCOPE, "离线库为空 → 全量建库", detail=f"build_daily --start {args.start} --end {as_of}")
-        rc = _invoke_module("scripts.data.build_daily", ["--start", args.start, "--end", as_of])
-        if rc != 0:
-            fails.append("build_daily(全量)")
-    else:
-        log_progress(_SCOPE, "扫描交易日缺口 …")
-        missing = scan_missing_dates(as_of)
-        if missing:
-            log_progress(
-                _SCOPE,
-                "检测到缺口，回补",
-                detail=f"{len(missing)} 日 {missing[0]}~{missing[-1]}",
-            )
+    with home_context(args.home):
+        fails: list[str] = []
+        daily = read_daily_raw(end=as_of)
+        if daily.empty:
+            log_progress(_SCOPE, "离线库为空 → 全量建库", detail=f"build_daily --start {args.start} --end {as_of}")
             rc = _invoke_module(
                 "scripts.data.build_daily",
-                ["--start", missing[0], "--end", missing[-1], "--ignore-existing"],
+                ["--start", args.start, "--end", as_of, *home_cli_args(args.home)],
             )
             if rc != 0:
-                fails.append("build_daily(补漏)")
+                fails.append("build_daily(全量)")
         else:
-            log_progress(_SCOPE, "历史数据完整，无缺口")
+            log_progress(_SCOPE, "扫描交易日缺口 …")
+            missing = scan_missing_dates(as_of)
+            if missing:
+                log_progress(
+                    _SCOPE,
+                    "检测到缺口，回补",
+                    detail=f"{len(missing)} 日 {missing[0]}~{missing[-1]}",
+                )
+                rc = _invoke_module(
+                    "scripts.data.build_daily",
+                    [
+                        "--start",
+                        missing[0],
+                        "--end",
+                        missing[-1],
+                        "--ignore-existing",
+                        *home_cli_args(args.home),
+                    ],
+                )
+                if rc != 0:
+                    fails.append("build_daily(补漏)")
+            else:
+                log_progress(_SCOPE, "历史数据完整，无缺口")
 
-    log_progress(_SCOPE, "当日增量", detail=f"update_daily --date {as_of}")
-    rc = _invoke_module("scripts.data.update_daily", ["--date", as_of])
-    if rc != 0:
-        fails.append("update_daily")
+        log_progress(_SCOPE, "当日增量", detail=f"update_daily --date {as_of}")
+        rc = _invoke_module(
+            "scripts.data.update_daily",
+            ["--date", as_of, *home_cli_args(args.home)],
+        )
+        if rc != 0:
+            fails.append("update_daily")
 
-    log_progress(_SCOPE, "重试失败清单", detail="build_daily --retry-failed")
-    rc = _invoke_module("scripts.data.build_daily", ["--retry-failed"])
-    if rc != 0:
-        fails.append("build_daily(retry-failed)")
+        log_progress(_SCOPE, "重试失败清单", detail="build_daily --retry-failed")
+        rc = _invoke_module(
+            "scripts.data.build_daily",
+            ["--retry-failed", *home_cli_args(args.home)],
+        )
+        if rc != 0:
+            fails.append("build_daily(retry-failed)")
 
-    if fails:
-        log_progress_error(_SCOPE, "完成但有失败步骤", detail=", ".join(fails))
-        sys.exit(1)
-    log_progress_done(_SCOPE, "成功", detail=f"as_of={as_of}")
+        if fails:
+            log_progress_error(_SCOPE, "完成但有失败步骤", detail=", ".join(fails))
+            sys.exit(1)
+        log_progress_done(_SCOPE, "成功", detail=f"as_of={as_of}")
 
 
 if __name__ == "__main__":

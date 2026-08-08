@@ -1,525 +1,900 @@
 # 运维与操作指南
 
-> 依赖由 **Poetry** 管理（`pyproject.toml` + `poetry.lock`）。下文命令一律用 `poetry run python -m ...`，避免误用系统 Python。
-
-## 1. 环境要求
-
-- Python **3.11+**（推荐 3.11；`requires-python >=3.11,<3.14`）
-- [Poetry](https://python-poetry.org/) 2.x
-- 可访问外网（拉取行情）
-- Windows / Linux 均可
+> 依赖由 **Poetry** 管理。下文命令一律在项目根目录执行，前缀用 `poetry run python -m ...`。  
+> **数据完备后的每日选股与模拟交易**见 [DAILY_OPS.md](./DAILY_OPS.md)。配置项细节见 [CONFIG.md](./CONFIG.md)。
 
 ---
 
-## 2. 安装
+## 0. 新手怎么读这份文档
 
-在项目根目录 `GoldQuant` 下：
+按时间顺序做即可，不必一次读完：
+
+| 阶段 | 章节 | 你在做什么 |
+|---|---|---|
+| 装环境 | §1～§2 | 装依赖、指定数据目录 |
+| 第一次建库 | §3 | 拉历史行情 →（可选分流合并）→ 补市值 → 校验；脏数据再清理 |
+| 可选加强 | §4 | 财务/主题因子等，不做也能先回测和选股 |
+| 验证策略 | §5 | 历史回测，看系统大致能不能赚钱（参考值） |
+| 日常养库 | §6 | 每天增量、每周自愈 |
+| 无人值守 | §7 | 开 API + 定时任务，自动增量/选股/盘中模拟 |
+| 研究调参 | §8 | 因子权重、walk-forward（可选） |
+| 查问题 | §9～§11 | 报告在哪、复权约定、FAQ |
+
+### 0.1 最短路径清单（第一次跑通）
+
+在项目根 `D:\workspace\GoldQuant` 下逐项打勾：
+
+1. [ ] `poetry install`，复制并编辑 `.env`（至少填 `GOLDQUANT_QUANT_HOME_DIR`）
+2. [ ] （推荐）分目录建库：`build_daily` → 并行 `update_daily` → `merge_library`
+3. [ ] `backfill_daily_meta` 补市值 / 昨收
+4. [ ] `validate_library` 退出码 0（允许 WARN）
+5. [ ] 若价格 sanity FAIL → `scrub_invalid_bars --dry-run` → `--apply` → 再 validate
+6. [ ] （可选）跑一段 `backtest.run` 确认能出报告
+7. [ ] 日常：`update_daily`；生产：`poetry run python -m app` 开调度
+8. [ ] 选股与模拟交易 → [DAILY_OPS.md](./DAILY_OPS.md)
+
+### 0.2 名词速查
+
+| 名词 | 白话 |
+|---|---|
+| **quant-home / `--home`** | 数据根目录，下面有 `store/`、`reports/`、`paper_account/` 等。读写库的脚本都可用 `--home` 指定；不设则读环境变量或默认 `~/.quant` |
+| **store** | `$QUANT_HOME` 下真正存 Parquet 行情的地方（如 `daily_raw`、`adj_factor`） |
+| **daily_raw** | 不复权 OHLCV 日线（开高低收、成交量等） |
+| **adj_factor** | 后复权因子；因子/回测必须用复权价，否则除权日会假跳空 |
+| **float_mv / pre_close** | 流通市值、昨收；选股过滤与部分因子要用 |
+| **universe** | 当日可交易股票池快照 |
+| **PIT** | Point-in-Time，只用当时已知信息，避免用未来财报「穿越」 |
+| **offline / daily 分流** | 全量建库慢，另开两个目录分别跑历史与每日增量，最后合并进正式库 |
+| **作战池 battle_pool** | T 晚选出的次日可买候选列表 |
+| **sell_watch** | T 晚写好的持仓卖出监控（止损等），供 T+1 盘中用 |
+| **纸面账户 paper_account** | 模拟成交账户，与人工 `state/` 隔离 |
+
+下文示例正式库：`D:\ProgramData\.quant`；建库分流：`...\offline`、`...\daily`。
+
+---
+
+## 1. 环境与安装（必须）
+
+**用途**：安装 Python 依赖，让 `poetry run python -m ...` 能跑起来。  
+**必须性**：首次搭建必须。  
+**你会得到**：项目下的 `.venv`，以及可编辑的 `.env`。
+
+### 1.1 要求
+
+- Python **3.11+**（推荐 3.11；约束 `>=3.11,<3.14`）
+- [Poetry](https://python-poetry.org/) 2.x
+- 可访问外网（拉 A 股行情）
+- Windows / Linux 均可
+
+### 1.2 安装步骤
 
 ```powershell
-# 安装主依赖（Poetry 会使用/创建项目 .venv）
+cd D:\workspace\GoldQuant
+
+# 安装主依赖（Poetry 会创建/使用项目 .venv）
 poetry install
 
-# 需要 ML 离线校准（IC/拟合等）时再装可选组
+# 做 IC/拟合/walk-forward 等 ML 研究时再装可选组
 poetry install --extras ml
 
+# 从模板生成环境文件
 copy .env.example .env
 ```
 
-编辑 `.env`：至少配置 API 端口、飞书、LLM（见 [CONFIG.md](./CONFIG.md)）。
+然后用编辑器打开 `.env`，至少改这一项（路径按你的机器）：
 
-> 等价写法：激活后直接调解释器  
-> `poetry env activate`（或 `.\.venv\Scripts\Activate.ps1`）→ `python -m ...`  
-> 与 `poetry run python -m ...` 使用同一环境。
+```env
+GOLDQUANT_QUANT_HOME_DIR=D:\ProgramData\.quant
+```
+
+飞书推送、LLM 新闻等按 [CONFIG.md](./CONFIG.md) 填写；只建库/回测可以先不配飞书。
+
+**等价写法**：激活虚拟环境后可直接用 `python`：
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+python -m scripts.data.validate_library --home D:\ProgramData\.quant
+```
+
+与 `poetry run python -m ...` 是同一解释器。确认命令：
+
+```powershell
+poetry run python -c "import sys; print(sys.executable)"
+```
+
+应指向项目下的 `.venv\Scripts\python.exe`。
 
 ---
 
-## 3. 启动数据 API
+## 2. 配置数据目录（必须）
 
-**必须在项目根目录执行。**
+**用途**：告诉系统「行情和报告写到哪里」，避免默认写到用户目录 `~/.quant`，也避免建库时和日常增量互相踩文件。  
+**必须性**：首次必须。调度器、不带 `--home` 的进程都读这里。  
+**你会得到**：一个（或三个）空的 quant-home 目录结构，之后脚本会自动创建 `store/` 等子目录。
 
-- 仅当需要 **内置调度器** 自动跑五时段、或要访问 HTTP API / Swagger 时，才需启动 app。
-- 单次 `poetry run python -m quant <mode>` **直调 service**，不经 HTTP，**不必**先启 API。
+### 2.1 推荐目录布局
+
+```text
+D:\ProgramData\.quant\           ← 正式库（合并后日常只用这个）
+D:\ProgramData\.quant\offline\   ← 首次全量 build_daily 写入（可选分流）
+D:\ProgramData\.quant\daily\     ← 建库期间每天 update_daily 写入（可选分流）
+```
+
+正式库就绪后，`store/` 里常见内容：
+
+| 路径 | 存什么 | 谁依赖它 |
+|---|---|---|
+| `daily_raw/` | 不复权日线 | 一切行情相关 |
+| `adj_factor/` | 后复权因子 | 因子、回测、出场 |
+| `universe/` | 每日股票池 | 选股 |
+| `industry/` | 行业 PIT | 组合行业约束 |
+| `fundamental_pit/` | 财务 PIT | 价值因子（可选补强） |
+| `index_daily/` | 指数日线 | 基准、择时 |
+| `calendar.parquet` | 交易日历 | 缺日检测、回测日期 |
+
+### 2.2 三种指定方式（优先级从高到低）
+
+| 方式 | 示例 | 适用 |
+|---|---|---|
+| CLI `--home` | `--home D:\ProgramData\.quant` | 手动跑脚本、多库并存 |
+| `.env` | `GOLDQUANT_QUANT_HOME_DIR=D:\ProgramData\.quant` | **生产推荐**（调度继承） |
+| 环境变量 | `$env:QUANT_HOME = "D:\ProgramData\.quant"` | 临时覆盖当前终端 |
+
+解析实现见 `quant/store/paths.py`。读写 `store` / `reports` / `paper_account` 的脚本一般都支持 `--home`；`merge_library` 用三个路径参数代替（见 §3.3）。
+
+---
+
+## 3. 从零搭建离线库（首次必须）
+
+**这一节在干什么**：把「能选股、能回测」所需的历史日线库准备好。全量拉取可能要数小时～数天，所以推荐历史与每日增量**分目录**跑，建完再合并。
+
+```text
+offline (build_daily 拉历史)  ──┐
+                               ├── merge_library → 正式 home
+daily   (update_daily 每日)  ──┘         ↓
+                                   backfill_daily_meta（补市值）
+                                         ↓
+                                   validate_library（校验）
+                                         ↓
+                              若 FAIL → scrub_invalid_bars → 再校验
+```
+
+若你愿意建库期间**不跑**每日增量，也可以只用一个正式目录跑 `build_daily`，跳过 §3.2～§3.3，直接 §3.4。
+
+---
+
+### 3.1 拉离线历史 `build_daily`（首次必须）
+
+**用途**：从行情源按日期区间拉取全 A 股日线（不复权 OHLCV）、主要指数、交易日历，并在拉取结束后初始化后复权因子等，写入指定 quant-home。这是离线库的「主体数据」。  
+**必须性**：首次建库必须。同一命令可反复执行（智能断点续传，已齐全的股票会跳过）。  
+**前置**：§1～§2 完成；外网可用；建议 `--end` 设为**已收盘的最近交易日**（不要跨到未收盘的今天，避免半日数据）。  
+**后续**：若用了分流 → §3.3 合并；否则 → §3.4 补缺。  
+**你会得到**：`--home` 下 `store/daily_raw/`、`adj_factor/`、`index_daily/`、`calendar` 等；进度日志里会看到已拉码数/失败清单。
 
 ```powershell
-# 推荐（读取 .env 端口）
+poetry run python -m scripts.data.build_daily `
+  --home D:\ProgramData\.quant\offline `
+  --start 2021-01-01 --end 2026-08-07 `
+  --workers 1 --req-interval 5,10
+```
+
+| 参数 | 默认 | 推荐 | 含义 |
+|---|---|---|---|
+| `--home` | 当前 QUANT_HOME | 建库用 `...\offline` | quant-home 根（含 `store/`） |
+| `--start` | `2021-01-01` | `2021-01-01` | 建库/完整性检查起始日 |
+| `--end` | 今天 | 已收盘昨日 | 结束日 |
+| `--workers` | `3` | `1`（避东财限流） | 并发线程数；过高易被封 |
+| `--req-interval` | `1,3` | `5,10` | 请求间隔秒，格式 `MIN,MAX` 或单值 `N` |
+| `--limit` | — | 仅调试 | 只拉前 N 只（试跑通流程） |
+| `--codes` | — | 仅调试 | 逗号分隔代码，只拉这些票 |
+| `--ignore-existing` | off | 补某段缺口时开 | 跳过「已齐全则跳过」检查，强制再拉；并跳过市场缺口第二轮 |
+| `--no-gap-fill` | off | 一般不开 | 不做「全市场缺某天」的第二轮补拉 |
+| `--no-delisted` | off | 一般不开 | 不并入退市股（默认并入，减轻幸存者偏差） |
+| `--no-adj` | off | **不要开** | 跳过复权因子；会导致回测除权假跳空 |
+| `--retry-failed` | off | maintain/补救时开 | 只重试 `build_failed.jsonl` 里的失败代码 |
+| `--dead-threshold` | `5` | `5` | 同一代码失败次数达此值标为 dead，不再自动重试 |
+
+**续传怎么理解**：相对 `[start,end]`，某只股票缺任意一天就再拉；齐全则跳过。停牌导致源站无 K 线的交易日会记入 `no_bar_dates.json`，避免反复空打。复权步骤在全部拉取循环之后；若中断在拉取阶段、adj 还没生成，**再跑同一条命令**即可续上并补复权。
+
+只补某几天（跳过智能扫描）：
+
+```powershell
+poetry run python -m scripts.data.build_daily `
+  --home D:\ProgramData\.quant\offline `
+  --start 2026-07-20 --end 2026-07-25 `
+  --ignore-existing --workers 1 --req-interval 5,10
+```
+
+| 常见告警 | 原因 | 处理 |
+|---|---|---|
+| `ProxyError` / 连不上代理 | Clash 等注入了系统代理 | `.env` 保持 `GOLDQUANT_PROXY_ENABLED=false` |
+| parquet 读损坏 | 历史并发写坏过分区 | 损坏文件会改名 `.corrupt.*`；重跑同命令续传即可 |
+
+---
+
+### 3.2 建库期间每日增量 `update_daily`（强烈建议）
+
+**用途**：在**每个交易日收盘后**，用东财 spot 等接口抓「当天」全市场行情与快照（指数、行业、universe、资金流/热度等因子快照），追加进库。spot 自带流通市值与股票名称，日常不必再为当天跑 backfill。  
+**必须性**：建库拖很久时强烈建议另开 `...\daily` 每天跑，避免合并后正式库缺最近几天；正式库启用后变为**每日必须**（见 §6.1）。  
+**前置**：可与 §3.1 并行（不同 `--home`）。非交易日会自动跳过。  
+**后续**：建库结束后与 offline 一并 §3.3 合并。  
+**你会得到**：当日 `daily_raw` 一行/每股、相关快照文件；无效盘口（`close<=0`、OHLC 不自洽）会被丢弃不落库。
+
+```powershell
+# 建库期间：写到 daily 分流目录
+poetry run python -m scripts.data.update_daily --home D:\ProgramData\.quant\daily
+
+# 指定某一天补跑
+poetry run python -m scripts.data.update_daily --home D:\ProgramData\.quant\daily --date 2026-08-07
+```
+
+| 参数 | 默认 | 推荐 | 含义 |
+|---|---|---|---|
+| `--home` | 当前 QUANT_HOME | 建库期 `...\daily`；日常正式库 | quant-home 根 |
+| `--date` | 今天 | 一般不设 | 交易日 YYYY-MM-DD；非交易日跳过 |
+| `--force-fundamental-pit` | off | 披露季外要强刷财务时开 | 无视披露窗口，增量刷新 `fundamental_pit` |
+| `--flush-every` | `50` | `50` | 资金流每成功拉 N 只落盘一次（断点续传粒度） |
+
+**资金流断点**：进度在 `$QUANT_HOME/data/fund_flow_progress/{date}.json`。中断后重跑同一命令会跳过已完成代码；网络失败不记完成。若要全量重拉，删掉当日 progress 与对应 parquet。
+
+**注意**：spot 没有「补历史某一天盘口」的能力——当天没抓成功，只能靠告警重跑当天，无法事后完美还原。
+
+---
+
+### 3.3 合并 `merge_library`（用了分流则必须）
+
+**用途**：把「离线历史库」和「每日增量库」拼成一份时间连续的统一库，供校验、回测、日常决策使用。  
+**必须性**：若 §3.1 / §3.2 用了两个不同 home，则必须执行；若始终写在同一个正式目录，可跳过本节。  
+**前置**：offline 的 `build_daily` 已跑完（或足够覆盖）；daily 侧至少有近期增量更佳。  
+**后续**：把 `.env` 的 `GOLDQUANT_QUANT_HOME_DIR` 指到 `--out`，再跑 §3.4。  
+**你会得到**：`--out` 下完整的 `store/`（历史 + 增量拼好）。  
+**参数说明**：本脚本**没有** `--home`，而是三个都是 quant-home 根（均应直接含或将生成 `store/`）。
+
+```powershell
+poetry run python -m scripts.data.merge_library `
+  --offline D:\ProgramData\.quant\offline `
+  --daily D:\ProgramData\.quant\daily `
+  --out D:\ProgramData\.quant
+```
+
+| 参数 | 默认 | 含义 |
+|---|---|---|
+| `--offline` | 必填 | 离线库根（`build_daily` 写入处） |
+| `--daily` | 必填 | 增量库根（`update_daily` 写入处） |
+| `--out` | 必填 | 合并输出的正式库根 |
+
+合并后请确认：
+
+```env
+GOLDQUANT_QUANT_HOME_DIR=D:\ProgramData\.quant
+```
+
+---
+
+### 3.4 补缺 `backfill_daily_meta`（必须）
+
+**用途**：给历史日线补上更精确的流通/总市值（`float_mv`/`total_mv`）和昨收 `pre_close`。`build_daily` 历史段往往缺这些字段；选股过滤与部分因子需要它们。默认只拉「仍缺市值」的股票，边拉边落盘，可安全重跑。  
+**必须性**：合并后（或单库 `build_daily` 完成后）至少跑一次。  
+**前置**：正式库已有 `daily_raw`。  
+**后续**：§3.5 校验。  
+**你会得到**：更多行带上市值/昨收；日志里有进度与 ETA。
+
+```powershell
+poetry run python -m scripts.data.backfill_daily_meta --home D:\ProgramData\.quant
+
+# 强制全市场重拉市值（慢，一般不需要）
+# poetry run python -m scripts.data.backfill_daily_meta --home D:\ProgramData\.quant --force
+```
+
+| 参数 | 默认 | 推荐 | 含义 |
+|---|---|---|---|
+| `--home` | 当前 QUANT_HOME | 正式库 | quant-home 根 |
+| `--codes` | 库内全部候选 | 一般不设 | 逗号分隔，只补这些码 |
+| `--workers` | `1` | `1`～`2` | 并发线程 |
+| `--req-interval` | `0,2` | 默认即可 | 请求间隔秒 |
+| `--force` | off | 一般不开 | 忽略「已有市值」判断，全量重拉 |
+| `--flush-every` | 脚本默认（常见 20） | 默认 | 每处理 N 只写盘一次，便于断点续传 |
+| `--fill-name` | off | **不要开**（除非你清楚风险） | 用「当前股票名」灌历史行，会污染 ST 历史过滤（前视） |
+
+---
+
+### 3.5 校验 `validate_library`（必须）
+
+**用途**：对正式库做「能不能放心用来回测/选股」的体检：行数与股票数、复权覆盖、指数是否齐全、有无重复键、价格是否合理、后复权是否出现异常尖刺跳空等。  
+**必须性**：§3.4 之后必须；以后大改数据也建议再跑。  
+**前置**：指向要检查的正式 `--home`。  
+**后续**：退出码 0 可进日常/回测；有 FAIL 先按提示处理（价格问题见 §3.6）。  
+**你会得到**：终端分段报告；`0`=通过（可以有 WARN），`1`=存在 FAIL。
+
+```powershell
+poetry run python -m scripts.data.validate_library --home D:\ProgramData\.quant
+```
+
+| 参数 | 默认 | 含义 |
+|---|---|---|
+| `--home` | 当前 QUANT_HOME | 要检查的 quant-home |
+| `--start` | `2000-01-01` | 检查窗口起点（一般不用改） |
+| `--end` | `2099-12-31` | 检查窗口终点 |
+
+**怎样算过关（期望）**：
+
+- `adj_factor` 覆盖足够高（过低会 FAIL）
+- 指数日线 `000300` / `000905` / `000852` 都有
+- 无重复 `(code, date)`
+- 价格 sanity：`close>0`、high/low 夹住 open/close、量额非负
+- 后复权相邻交易日异常跳空为 0（停牌复牌/次新大波动已豁免）
+- `float_mv` / `pre_close` 覆盖达标（过低会 WARN，可再跑 backfill）
+
+WARN 里常见「某几只股票日历覆盖偏低」——次新/长期停牌往往合法，可查可不查。
+
+---
+
+### 3.6 清理脏盘口 `scrub_invalid_bars`（数据不对时必须）
+
+**用途**：从已入库的 `daily_raw` 里删掉无效 K 线行（例如停牌被写成全 0、`close<=0`、最高价夹不住开收盘等）。新数据在 `update_daily` 入口已拒写；本脚本专门清理**历史脏行**。  
+**必须性**：仅当 `validate_library` 报「价格 sanity FAIL」时必须处理；平时不必跑。  
+**前置**：先 `--dry-run` 看清会删哪些；确认后再 `--apply`。  
+**后续**：再跑一遍 `validate_library`。  
+**你会得到**：dry-run 打印样本行；apply 后按年分区重写，行数减少。
+
+```powershell
+# 1）只看不删
+poetry run python -m scripts.data.scrub_invalid_bars --home D:\ProgramData\.quant --dry-run
+
+# 2）确认无误后真正删除
+poetry run python -m scripts.data.scrub_invalid_bars --home D:\ProgramData\.quant --apply
+
+# 3）复验
+poetry run python -m scripts.data.validate_library --home D:\ProgramData\.quant
+```
+
+| 参数 | 默认 | 含义 |
+|---|---|---|
+| `--home` | 当前 QUANT_HOME | quant-home 根 |
+| `--dry-run` | 默认即 dry-run（未传 `--apply` 时） | 只统计、打印样本，不写盘 |
+| `--apply` | off | 真正按年分区重写并删除脏行（不可与「只想看」同时当作互斥目标乱用） |
+
+---
+
+## 4. 可选数据补强
+
+§3 跑通后，已经可以回测和日决策。下面这些用来**激活更多因子**或**排查问题**，不阻塞主路径。
+
+---
+
+### 4.1 财务 PIT `build_fundamental_pit`（可选）
+
+**用途**：按公告日构建财务 Point-in-Time 库（利润、净资产等），从而激活价值类日频因子（如 EP、BP、ROE、收入同比等）。没有它，这些因子算不出来或为空。  
+**必须性**：要用价值因子时建议跑；只做价量动量可暂缓。  
+**前置**：正式库已有股票列表/universe。耗时较长，建议加 `--resume` 断点续跑。  
+**后续**：无需立刻 validate；日决策/面板构建时会自动读到。  
+**你会得到**：`store/fundamental_pit/` 下按代码或分区的财务 PIT 数据。
+
+```powershell
+poetry run python -m scripts.data.build_fundamental_pit --home D:\ProgramData\.quant --resume
+```
+
+| 参数 | 默认 | 含义 |
+|---|---|---|
+| `--home` | 当前 QUANT_HOME | quant-home 根 |
+| `--codes` | universe 全量 | 逗号分隔，只拉指定码 |
+| `--limit` | `0`（不限） | 最多拉取只数（调试可设小） |
+| `--batch-size` | `50` | 批量写相关兼容参数 |
+| `--sleep` | `0.3` | 单只请求间隔秒，防限流 |
+| `--retries` | `3` | 单只失败重试次数 |
+| `--resume` | off | **推荐打开**：跳过库中已有代码，续跑 |
+
+---
+
+### 4.2 主题等因子快照回填 `backfill_factor_snapshots`（可选）
+
+**用途**：按交易日回填历史「主题/概念动量」等因子 PIT 快照（例如 theme 相关），让历史回测区间里也能用到这些因子。基本面请用 §4.1，不要混用本脚本。  
+**必须性**：回测/研究要用 theme 等快照因子时再跑。  
+**前置**：正式库日历与日线已就绪；区间勿过大一次打爆接口。  
+**后续**：构建面板或回测时自动可用。  
+**你会得到**：对应日期的因子快照文件落在 store 约定目录。
+
+```powershell
+poetry run python -m scripts.data.backfill_factor_snapshots `
+  --home D:\ProgramData\.quant --start 2024-01-01 --end 2026-08-07
+```
+
+| 参数 | 默认 | 含义 |
+|---|---|---|
+| `--home` | 当前 QUANT_HOME | quant-home 根 |
+| `--start` | 必填 | 回填起始日（含） |
+| `--end` | 必填 | 回填结束日（含） |
+
+---
+
+### 4.3 上市日表 `build_listing_dates`（可选）
+
+**用途**：拉取/整理每只股票的上市日期，写入库中。`build_daily` 做「完整性期望窗口」时会参考上市日（次新股不应要求上市前也有 K 线），减少误报缺日。  
+**必须性**：可选；缺日 WARN 很多或频繁全量补漏时值得跑。  
+**前置**：正式 home 可写。  
+**后续**：之后再跑 `build_daily` / `maintain` 时生效。  
+**你会得到**：上市日相关表/文件（供完整性检查使用）。
+
+```powershell
+poetry run python -m scripts.data.build_listing_dates --home D:\ProgramData\.quant
+```
+
+| 参数 | 默认 | 含义 |
+|---|---|---|
+| `--home` | 当前 QUANT_HOME | quant-home 根 |
+
+---
+
+### 4.4 抽样核对 `verify_daily`（可选排查）
+
+**用途**：随机抽 N 只股票，核对本地日线与源站是否大致一致，用于怀疑「某段数据不对」时的抽查，**不能替代** `validate_library`。  
+**必须性**：可选。  
+**前置**：库非空。  
+**你会得到**：抽样对比日志（一致/偏差提示）。
+
+```powershell
+poetry run python -m scripts.data.verify_daily --home D:\ProgramData\.quant --sample 20
+```
+
+| 参数 | 默认 | 含义 |
+|---|---|---|
+| `--home` | 当前 QUANT_HOME | quant-home 根 |
+| `--sample` | `20` | 随机抽样只数 |
+| `--start` | 不限 | 校验日期下限 |
+| `--end` | 不限 | 校验日期上限 |
+
+---
+
+### 4.5 健康审计 `audit_data_health`（可选排查）
+
+**用途**：检查库的整体健康度，并可用一只股票探测 akshare 等源站字段/名称列是否变化（源站改版时排查）。  
+**必须性**：可选；接口报错或列对不上时使用。  
+**前置**：网络可用。  
+**你会得到**：健康报告与探测结果。
+
+```powershell
+poetry run python -m scripts.data.audit_data_health --home D:\ProgramData\.quant --probe-code 000001
+```
+
+| 参数 | 默认 | 含义 |
+|---|---|---|
+| `--home` | 当前 QUANT_HOME | quant-home 根 |
+| `--probe-code` | `000001` | 用于探测源站历史行情名称列的股票代码 |
+
+---
+
+## 5. 回测（库就绪后：研究时建议跑）
+
+**这一节在干什么**：用历史数据模拟「按当前选股规则持仓」的绩效，检查因子/组合是否离谱。  
+**前置**：正式库覆盖回测区间（至少 `daily_raw` + `adj`）；建议 `validate_library` 已通过。  
+**注意**：默认是 **strict** 口径（T-1 收盘算因子 → T 开盘成交），与实盘「作战池 + T+1 盘中择时」不完全相同；Sharpe 等指标作参考，不是实盘预期。详见 [ARCHITECTURE.md §4.5](./ARCHITECTURE.md#45-回测-vs-实盘纸面)。
+
+---
+
+### 5.1 主回测 `backtest.run`（研究时建议）
+
+**用途**：按官方日频选股/组合/出场规则，在指定区间跑完整回测，并导出绩效指标与报告。  
+**必须性**：改策略或想确认系统可用性时建议跑；不是每日运维必须。  
+**前置**：§3 完成。区间建议覆盖趋势与震荡各一段。  
+**后续**：报告在 `--out`；不满意再调参或跑 §8 研究脚本。  
+**你会得到**：`$QUANT_HOME/reports/bt/` 下报告；终端打印交易笔数、胜率、回撤、Sharpe/Sortino/Calmar、换手、出场归因等。
+
+```powershell
+poetry run python -m scripts.backtest.run `
+  --home D:\ProgramData\.quant --start 2024-01-01 --end 2026-08-07
+```
+
+| 参数 | 默认 | 含义 |
+|---|---|---|
+| `--home` | 当前 QUANT_HOME | 读库与默认报告根 |
+| `--start` / `--end` | 必填 | 回测区间（含） |
+| `--max-positions` | `10` | 最大持股只数 |
+| `--n-enter` / `--n-exit` | `8` / `15` | 纳入/剔除的排名 buffer（减轻换手抖动） |
+| `--target-vol` | `0.15` | 目标年化波动，用于仓位缩放 |
+| `--loose` | off | 关闭 strict（变成更乐观的成交假设，非官方口径） |
+| `--no-exit` | off | 关掉 L4 出场规则，只看选股 alpha |
+| `--registry-weights` | off | 忽略 IC/校准权重，改用 registry 默认权重 |
+| `--sensitivity` | off | 额外跑参数敏感性扫描（更慢） |
+| `--out` | `$QUANT_HOME/reports/bt` | 报告输出目录 |
+
+---
+
+### 5.2 随机基准与泄漏检验 `backtest.validate`（可选）
+
+**用途**：用随机 alpha 做对照，并做简单的前视泄漏检验，判断回测框架是否「虚高」。  
+**必须性**：可选；改引擎或怀疑结果造假时跑。  
+**前置**：同主回测。  
+**你会得到**：终端检验结论（随机基准表现 vs 真实规则量级等）。
+
+```powershell
+poetry run python -m scripts.backtest.validate `
+  --home D:\ProgramData\.quant --start 2024-01-01 --end 2024-06-30
+```
+
+| 参数 | 默认 | 含义 |
+|---|---|---|
+| `--home` | 当前 QUANT_HOME | quant-home 根 |
+| `--start` / `--end` | 必填 | 检验区间 |
+| `--max-positions` | `10` | 最大持股 |
+| `--seed` | `42` | 随机 alpha 的随机种子（可复现） |
+
+---
+
+### 5.3 盘中择时增益 `run_intraday_timing`（可选）
+
+**用途**：用日频数据代理验证「盘中 θ 择时」相对直接持有作战池是否有增益（不是完整 tick 回测）。  
+**必须性**：可选；调盘中阈值 θ 时参考。  
+**前置**：库覆盖区间。  
+**你会得到**：JSON 报告（默认在 `$QUANT_HOME/reports/intraday_timing/`）。
+
+```powershell
+poetry run python -m scripts.backtest.run_intraday_timing `
+  --home D:\ProgramData\.quant --start 2024-01-01 --end 2024-06-30
+```
+
+| 参数 | 默认 | 含义 |
+|---|---|---|
+| `--home` | 当前 QUANT_HOME | quant-home 根 |
+| `--start` / `--end` | 必填 | 区间 |
+| `--theta` | `1.0` | 盘中择时触发阈值；越低触发越多 |
+| `--pool` | `30` | 每日作战池规模 |
+| `--horizon` | `5` | 持有期评估窗口（交易日） |
+| `--out` | 自动路径 | JSON 报告路径 |
+
+---
+
+## 6. 日常数据维护（库就绪后必须）
+
+正式库通过校验后，**不要天天全量 build**。日常只做增量；每周做一次自愈。
+
+---
+
+### 6.1 每日增量 `update_daily`（必须）
+
+**用途**：每个交易日盘后，把「今天」的行情与快照写入正式库，供当晚选股使用。  
+**必须性**：**日常必须**。漏跑则 `daily_decision` 可能缺少当日数据。  
+**时机**：调度默认 **18:00**；也可手动。  
+**前置**：`.env` 已指向正式库，或命令带 `--home`。  
+**后续**：当晚选股见 [DAILY_OPS.md](./DAILY_OPS.md)。  
+**参数**：与 §3.2 相同。
+
+```powershell
+poetry run python -m scripts.data.update_daily --home D:\ProgramData\.quant
+```
+
+生产环境更推荐在 `.env` 写死 `GOLDQUANT_QUANT_HOME_DIR`，调度子进程自动继承，命令里可不写 `--home`。
+
+---
+
+### 6.2 每周自愈 `maintain`（强烈建议）
+
+**用途**：自动检查离线库是否空、是否缺交易日，必要时触发 `build_daily` 建库/补漏，再跑当天 `update_daily`，并重试历史失败清单。避免「静默缺几天数据」拖垮后续选股。  
+**必须性**：强烈建议每周跑；调度默认 **周五 22:00**。  
+**时机**：避开白天，以免长 `build_daily` 堵住日常增量。  
+**前置**：正式 `--home`；子进程会自动带上同一 `--home`。  
+**后续**：可选再跑 `backfill_daily_meta`（只补新票缺市值）；有怀疑则 `validate_library`。  
+**你会得到**：缺口被回补、失败码重试、当日增量更新；日志里分步打印子任务。
+
+```powershell
+poetry run python -m scripts.data.maintain --home D:\ProgramData\.quant
+
+# 指定维护截至日与空库时的历史起点
+poetry run python -m scripts.data.maintain `
+  --home D:\ProgramData\.quant --date 2026-08-07 --start 2021-01-01
+```
+
+| 参数 | 默认 | 含义 |
+|---|---|---|
+| `--home` | 当前 QUANT_HOME | 会转发给子进程 `build_daily` / `update_daily` |
+| `--date` | 今天 | 维护截至日；非交易日回退到最近交易日 |
+| `--start` | `2021-01-01` | 若库为空，全量建库的起始日 |
+
+**内部顺序**（理解即可，一般不用手拆）：
+
+1. 库空 → 全量 `build_daily`  
+2. 有库 → 对照交易日历找缺口 → `build_daily --ignore-existing` 回补  
+3. `update_daily` 当日增量  
+4. `build_daily --retry-failed` 重试失败清单  
+
+---
+
+## 7. 启动定时任务（要无人值守则必须）
+
+**用途**：启动 FastAPI 应用；若 `scheduler.enabled: true`，会按 `quant.yml` 自动注册「新闻 / 盘前 / 盘中买卖 / 午间复盘 / 每日增量 / 晚间选股 / 周五维护」等任务。  
+**必须性**：要 7×24 自动跑则必须；**单次**手动 `poetry run python -m quant <mode>` **不必**先开 API。  
+**前置**：§2 的 home 已在 `.env`；飞书/LLM 按需配置。  
+**你会得到**：本机 HTTP API + 后台调度；浏览器可打开 Swagger。
+
+```powershell
 poetry run python -m app
 
-# 或（需自行带 host/port；不读 GOLDQUANT_PORT）
+# 等价（需自己带 host/port；不一定读 GOLDQUANT_PORT）
 poetry run uvicorn app.main:app --host 0.0.0.0 --port 8085
 ```
 
-- Swagger：<http://127.0.0.1:8085/docs>
-- 健康检查：<http://127.0.0.1:8085/health>
+| 检查项 | 地址/命令 |
+|---|---|
+| Swagger 文档 | <http://127.0.0.1:8085/docs> |
+| 健康检查 | <http://127.0.0.1:8085/health> |
+| Linux 常驻 | `chmod +x run.sh && ./run.sh start`（需先 `poetry install`） |
 
-Linux 后台常驻：
-
-```bash
-chmod +x run.sh
-./run.sh start
-```
-
-（`run.sh` / `run.ps1` 调用项目 `.venv` 中的 Python，需先 `poetry install`。）
-
-**Fixture 模式**：设 `GOLDQUANT_QUANT_USE_LOCAL_FIXTURE=true`，quant CLI 读 `data/fixtures/*.json`，不请求外网/service（联调/离线测试）。
+联调可不碰外网：设 `GOLDQUANT_QUANT_USE_LOCAL_FIXTURE=true`，quant CLI 读 `data/fixtures/*.json`。
 
 ---
 
-## 4. 运行量化机器人
+### 7.1 调度任务一览（默认时间）
 
-### 4.1 CLI 模式
+配置键见 [CONFIG.md](./CONFIG.md)；实现：`app/scheduling/quant_scheduler.py`。
 
-```powershell
-# 运维推送
-poetry run python -m quant news
-poetry run python -m quant pre_market
-poetry run python -m quant during_market          # 盘中先卖后买 + 推送
-poetry run python -m quant post_market_lunch
-poetry run python -m quant post_market_evening
+| 时间（默认） | 任务名 | 入口 | 必须性 | 用途（白话） |
+|---|---|---|---|---|
+| 05:00 | `prefetch_concepts` | `quant prefetch_concepts` | 可选 | 预取持仓/自选的概念与基本信息，减轻盘中耗时 |
+| 8–22 整点 | `news` | `quant news` | 可选 | LLM 新闻摘要推送到飞书 |
+| 09:25 | `pre_market` | `quant pre_market` | 建议 | 盘前指数/账户/关注推送 |
+| 09:37–15:00 约每 7 分钟 | `during_market` | `quant during_market` | **模拟交易必须** | 盘中先按监控卖出，再按作战池择时买入（纸面） |
+| 11:50 | `post_market_lunch` | `quant post_market_lunch` | 可选 | 午间复盘推送 |
+| 收盘后（配置） | `post_market_evening` | `quant post_market_evening` | 可选 | 收盘复盘推送 |
+| **18:00** | `update_daily` | `scripts.data.update_daily` | **数据必须** | 把当天行情写入正式库 |
+| **20:10** | `daily_decision` | `quant daily_decision` | **选股必须** | 算因子选股，写作战池与卖出监控 |
+| **周五 22:00** | `maintain` | `scripts.data.maintain` | **库自愈强烈建议** | 查缺补漏 + 当日增量 + 重试失败 |
 
-# 日决策（T 晚选股 + 作战池/卖出监控 + 推送）
-poetry run python -m quant daily_decision
-poetry run python -m scripts.decision.daily --no-push    # 仅落盘
-poetry run python -m scripts.decision.daily --dry-run     # 不撮合
-
-# 预取概念/基本信息（可选）
-poetry run python -m quant prefetch_concepts
-```
-
-`scripts.decision.daily` 常用参数：
-
-| 参数 | 默认 | 说明 |
-|---|---|---|
-| `--date` | 今天 | 决策日 YYYY-MM-DD |
-| `--out` | `$QUANT_HOME/reports/decision` | 报告目录 |
-| `--n-enter` / `--n-exit` | 8 / 15 | 排名 buffer |
-| `--max-positions` | 10 | 最大持股 |
-| `--battle-pool-size` | 30 | 作战池规模（alpha top N） |
-| `--no-paper` | — | 仅决策卡，不撮合 |
-| `--dry-run` | — | 干跑 |
-| `--no-push` | — | 不推飞书 |
-
-### 4.2 建议调度（quant.yml → scheduler）
-
-| 时间 | 模式 | 说明 |
-|---|---|---|
-| 05:00 | `prefetch_concepts` | 预取持仓/自选概念与 jbxx |
-| 8–22 每个整点 | `news` | LLM 新闻摘要 |
-| 09:25 | `pre_market` | 盘前推送 |
-| 09:37–15:00 每 7 分钟 | `during_market` | 盘中择时买卖 |
-| 11:50 | `post_market_lunch` | 午间复盘 |
-| 18:00 | `update_daily` | 每日盘后增量（spot_em + 快照，分钟级，只补当天） |
-| 周五 22:00 | `maintain` | 每周离线库自愈（建库/补漏/retry-failed，重） |
-| 20:10 | `daily_decision` | T 晚选股 |
-
-启动 API 时若 `scheduler.enabled: true`，`app/scheduling/quant_scheduler.py` 会自动注册上述任务。也可 cron / 任务计划手动调用：
+不用调度、用系统「任务计划程序」时，可直接调同一解释器，例如：
 
 ```text
-# 示例：指向 Poetry 创建的同一解释器
+D:\workspace\GoldQuant\.venv\Scripts\python.exe -m scripts.data.update_daily --home D:\ProgramData\.quant
+D:\workspace\GoldQuant\.venv\Scripts\python.exe -m quant daily_decision
 D:\workspace\GoldQuant\.venv\Scripts\python.exe -m quant during_market
 ```
 
-### 4.3 飞书推送事件
-
-| 标签 | 模式 | 要点 |
-|---|---|---|
-| 新闻聚焦 | `news` | LLM 去噪 + 综合解读 |
-| 开盘啦 | `pre_market` | 指数 / 纸面账户 / 关注 |
-| 智能盯盘 | `during_market` | 指数 / 持仓 / 异动 + **盘中买卖** |
-| 午间复盘 | `post_market_lunch` | 午前指数 + 纸面账户 |
-| 收盘复盘 | `post_market_evening` | 收盘指数 + 纸面绩效 |
-| 晚间复盘 | `daily_decision` | 明日作战池 / 卖出监控 / 账户 |
-
-格式：`quant/push/format.py` — 纯文本，`标题 + 时间 + 【小节】要点`。
+**选股怎么读报告、纸面怎么成交** → 专门文档 [DAILY_OPS.md](./DAILY_OPS.md)。
 
 ---
 
-## 5. 离线库构建与维护
+## 8. 因子研究脚本（可选）
 
-离线库是因子计算、日决策、回测的**共同依赖**。
+**这一节在干什么**：用历史数据评估因子有效性、拟合权重、做 walk-forward，减少「拍脑袋权重」。日常选股不强制先做完这些（系统有默认/registry 权重）。  
+**前置**：正式库就绪；部分步骤需要 `poetry install --extras ml`。  
+**说明**：下列脚本均支持 `--home`。
 
-### 5.0 执行步骤总览（从零到可回测）
+---
 
-> 思路：全量 build 需数小时/数天，与每日增量分 **home** 跑；build 完成后**合并 → 补缺 → 校验**。
-> 三个 home：`~/.quant/offline`（离线 build）、`~/.quant/daily`（每日增量）、`~/.quant`（统一库）。
-> 各脚本目录参数均指 **quant-home 根**（直接含 `store/` 的那级，见 §5.6a）。
+### 8.1 构建因子面板 `build_panel`
 
-**① 拉离线历史（到昨日）** — build 与 update 同时进行、互不干扰：
-
-```powershell
-# 离线历史（建议盘后/周末起跑；--end 钉到已收盘的昨日，避免跨交易日数据不一致）
-QUANT_HOME=~/.quant/offline poetry run python -m scripts.data.build_daily --start 2021-01-01 --end 2026-08-02 --workers 1 --req-interval 5,10
-```
+**用途**：把指定区间每个交易日、每只股票的因子值算出来，存成一张面板（parquet），供 IC 报告、拟合权重等下游使用。  
+**必须性**：做因子研究时必须先有面板（或等价数据）。  
+**你会得到**：默认 `$QUANT_HOME/reports/panel/panel.parquet`。
 
 ```powershell
-# 每日增量（另一 home）—— 启动 app 后调度器每日 18:00 自动跑；或手动：
-QUANT_HOME=~/.quant/daily poetry run python -m scripts.data.update_daily
+poetry run python -m scripts.factors.build_panel `
+  --home D:\ProgramData\.quant --start 2024-01-01 --end 2026-08-07
 ```
 
-> ⚠️ **复权因子**：build_daily 在拉取循环**之后**跑 `_refresh_adj_all` 落 adj_factor。若中断在拉取阶段、没跑到复权步骤，adj_factor 会缺——validate 会报 FAIL。补法：重跑同命令（智能续传跳过已拉码、直接到复权步骤）。
-
-**② 合并**（build 完成后）— 把离线历史 + 每日增量拼成一段连续区间：
-
-```powershell
-poetry run python -m scripts.data.merge_library --offline ~/.quant/offline --daily ~/.quant/daily --out ~/.quant
-```
-
-**③ 补缺**（合并后跑；默认可重跑且只拉仍缺市值的码；边拉边落盘可断点续传）— 补历史段 `float_mv/total_mv`（精确市值）+ `pre_close`：
-
-```powershell
-poetry run python -m scripts.data.backfill_daily_meta --home ~/.quant
-# 强制全量重拉市值（一般不需要）：
-# poetry run python -m scripts.data.backfill_daily_meta --home ~/.quant --force
-```
-
-**④ 校验** — 一键确认完整性与正确性（退出码 0=通过）：
-
-```powershell
-poetry run python -m scripts.data.validate_library --home ~/.quant
-```
-
-> 期望：`adj_factor 覆盖 ≥90%`、`index 000300·000905·000852` 齐、无重复、价格 sanity 过、
-> **后复权单日跳空 0**（复权无尖刺）、`float_mv`/`pre_close` 覆盖达标。有 FAIL 先处理再往下。
-
-**⑤ 日常运行**（此后无需再 build/merge/backfill）：
-
-| 时机 | 动作 | 说明 |
+| 参数 | 默认 | 含义 |
 |---|---|---|
-| 每日 18:00 | `update_daily`（定时） | 当日 spot + 快照，自带 float_mv/name，无需补缺 |
-| 每周五 22:00 | `maintain`（定时） | 自愈：查缺口回补 + update_daily + retry-failed |
-| 每周五后（可选） | `backfill_daily_meta --home ~/.quant` | 默认只拉缺市值码，兜住新入库票；`--force` 全量重拉 |
-| 每次改动后 | `validate_library --home ~/.quant` | 复验 |
+| `--home` | 当前 QUANT_HOME | 读库；影响默认 `--out` 根路径 |
+| `--start` / `--end` | 必填 | 面板日期区间 |
+| `--out` | `$QUANT_HOME/reports/panel/panel.parquet` | 输出路径 |
 
-**⑥ 可选·因子数据**（激活更多因子）：
+---
+
+### 8.2 IC 报告 `ic_report`
+
+**用途**：对已有因子面板计算 IC / ICIR 等，判断哪些因子历史上有预测力、方向是否正确。  
+**必须性**：研究权重前建议跑。  
+**前置**：已有 `--panel` 文件（常来自 §8.1）。  
+**你会得到**：`$QUANT_HOME/reports/ic/` 下报告。
 
 ```powershell
-poetry run python -m scripts.data.build_fundamental_pit   # 激活 EP/BP/ROE/rev_yoy（价值因子）
-poetry run python -m scripts.data.backfill_factor_snapshots --start <起> --end <止>  # 激活 flow_ratio_5
+poetry run python -m scripts.factors.ic_report `
+  --home D:\ProgramData\.quant `
+  --panel D:\ProgramData\.quant\reports\panel\panel.parquet
 ```
 
-### 5.1 目录结构
+| 参数 | 默认 | 含义 |
+|---|---|---|
+| `--home` | 当前 QUANT_HOME | 影响默认报告目录 |
+| `--panel` | 必填 | 因子面板 parquet 路径 |
+| `--out` | `$QUANT_HOME/reports/ic` | 报告输出目录 |
 
-数据根：`$QUANT_HOME/data/`（与 `quant/data/store.py` 一致）
+---
 
-| 内容 | 说明 |
+### 8.3 拟合因子权重 `fit_weights`
+
+**用途**：按 IC/统计显著性等规则筛选因子并拟合权重，写出可供决策使用的权重配置。  
+**必须性**：可选；要用数据驱动静态/滚动权重时跑。  
+**前置**：库覆盖拟合区间；建议先看过 IC 报告。  
+**你会得到**：权重文件（写入配置约定路径，详见脚本输出日志）。
+
+```powershell
+poetry run python -m scripts.factors.fit_weights `
+  --home D:\ProgramData\.quant --start 2022-01-01 --end 2026-08-07
+```
+
+| 参数 | 默认 | 含义 |
+|---|---|---|
+| `--home` | 当前 QUANT_HOME | quant-home 根 |
+| `--start` / `--end` | 必填 | 拟合区间 |
+| `--min-icir` | `0.0` | 入选最低 ICIR（0=不过滤） |
+| `--min-tstat` | `1.0` | 入选最低 \|t\| |
+| `--static` | off | 拟合静态权重（否则偏 walk-forward 式） |
+| `--train-window` | `504` | 训练窗口长度（交易日） |
+| `--step` | `63` | 滚动步长（交易日） |
+| `--fdr-alpha` | `0.05` | BH-FDR 显著性；`0` 关闭 FDR |
+| `--horizon` | `5` | IC 主持有期（交易日） |
+| `--horizons` | `5,10,20` | 多持有期混合，逗号分隔 |
+
+---
+
+### 8.4 Walk-forward `walk_forward`
+
+**用途**：按「训练窗口 → 测试窗口」滚动评估策略，并产出时序权重（`factor_weights_ts` 一类），减轻单段过拟合。  
+**必须性**：可选；上线前做稳健性检查时强烈建议。  
+**你会得到**：`$QUANT_HOME/reports/wf/` 报告与权重时序文件。
+
+```powershell
+poetry run python -m scripts.research.walk_forward `
+  --home D:\ProgramData\.quant --start 2022-01-01 --end 2026-08-07
+```
+
+| 参数 | 默认 | 含义 |
+|---|---|---|
+| `--home` | 当前 QUANT_HOME | quant-home 根 |
+| `--start` / `--end` | 必填 | 全样本区间 |
+| `--out` | `$QUANT_HOME/reports/wf` | 报告目录 |
+| `--train-months` | `24` | 每折训练月数 |
+| `--test-months` | `6` | 每折测试月数 |
+| `--max-positions` | `10` | 最大持股 |
+
+---
+
+### 8.5 退市偏差审计 `delist_bias_audit`
+
+**用途**：检查选股结果是否严重偏向「活到今天的股票」、忽略退市股带来的偏差（幸存者偏差审计）。  
+**必须性**：可选；写研究报告或怀疑偏差时跑。  
+**你会得到**：终端/报告中的偏差统计。
+
+```powershell
+poetry run python -m scripts.research.delist_bias_audit `
+  --home D:\ProgramData\.quant --as-of 2026-08-07
+```
+
+| 参数 | 默认 | 含义 |
+|---|---|---|
+| `--home` | 当前 QUANT_HOME | quant-home 根 |
+| `--as-of` | 必填 | 评估日 |
+| `--lookback-days` | `400` | 回看自然日窗口 |
+| `--top-n` | `30` | 作战池规模（alpha top N） |
+| `--refresh-delisted` | off | 重新拉取退市清单（默认用库内近似） |
+
+---
+
+### 8.6 滑点校准 `calibrate_slippage`
+
+**用途**：根据纸面账户近期实际成交，估计滑点假设是否合理，供回测/撮合参数参考。  
+**必须性**：可选；已有一段纸面成交记录后再跑更有意义。  
+**你会得到**：滑点统计输出。
+
+```powershell
+poetry run python -m scripts.research.calibrate_slippage --home D:\ProgramData\.quant --days 90
+```
+
+| 参数 | 默认 | 含义 |
+|---|---|---|
+| `--home` | 当前 QUANT_HOME | 读取该 home 下纸面成交归档 |
+| `--days` | `90` | 回看自然日 |
+
+---
+
+## 9. 报告落盘与本地自检
+
+### 9.1 报告与账户目录
+
+默认都在 `$QUANT_HOME` 下：
+
+| 路径 | 用途 |
 |---|---|
-| `daily_raw/` | 不复权 OHLCV + 市值等 |
-| `adj_factor/` | 后复权因子 |
-| `universe/` | 每日 universe 快照 |
-| `industry/` | 行业 PIT |
-| `fundamental_pit/` | 财务 PIT |
-| `index_daily/` | 指数日线 |
-| `calendar.parquet` | 交易日历 |
-
-### 5.2 首次建库（手动，建议夜间）
-
-```powershell
-poetry run python -m scripts.data.build_daily --start 2021-01-01 --workers 1 --req-interval 5,10
-```
-
-| 参数 | 默认 | 说明 |
-|---|---|---|
-| `--start` | `2021-01-01` | 起始日 YYYY-MM-DD |
-| `--end` | 今天 | 结束日 YYYY-MM-DD |
-| `--workers` | `3` | 并发数（建议 1–3；过高易被东财限流） |
-| `--req-interval` | `1,3` | 东财请求间隔秒，`MIN,MAX` 或单值 `N`；降频如 `5,10` 避频控 |
-| `--limit` | — | 只拉前 N 只（调试） |
-| `--codes` | — | 逗号分隔代码列表（调试） |
-| `--ignore-existing` | — | 跳过完整性检查，强制全拉；并跳过市场缺口第二轮 |
-| `--no-gap-fill` | — | 只做代码级续传，不做市场级缺失交易日第二轮 |
-| `--no-delisted` | — | 不并入退市股（默认并入，修幸存者偏差） |
-| `--no-adj` | — | 跳过后复权因子全量初始化 |
-| `--retry-failed` | — | 只重试 `build_failed.jsonl` 中的失败 code |
-| `--dead-threshold` | `5` | 失败次数达此值标 dead，不再自动重试 |
-
-**默认智能断点续传（推荐反复跑同一命令直到完成）：**
-
-1. **逐只完整性检查**：相对 `[start,end]`（默认 `end=今天`，与 `--start 2021-01-01` 等 CLI 一致），**缺任意一天**则补拉；齐全则跳过。若有 `listing_dates`，期望从 `max(start, 上市日)` 起算。
-2. **补拉窗口 = 完整检查区间**：待拉码按 `{start}~{end}` 整段请求（write 去重，不重复堆行）。停牌等源站无 K 线的交易日记入 `$QUANT_HOME/data/no_bar_dates.json` 豁免，避免反复补拉。
-3. **自动并入** `build_failed.jsonl` 中非 dead 失败码
-4. **市场级第二轮**：若日历上存在「全市场都没有数据」的交易日，对该缺口窗全代码补拉；`--no-gap-fill` / `--ignore-existing` / `--retry-failed` 时跳过
-
-- 拉全 A 历史（`stock_zh_a_hist` 不复权）+ 指数 + 日历 + 退市股
-- 中断后或隔几天未做增量，再执行同一命令即可按完整性续补到 `end`
-- 日常增量仍推荐 `update_daily` / `maintain`；`build_daily` 适合建库与查漏补缺
-
-**常见告警：**
-
-| 现象 | 原因 | 处理 |
-|---|---|---|
-| `ProxyError` / `Unable to connect to proxy` | Clash 等注入了系统 `HTTP(S)_PROXY`，请求被劫持 | 默认 `PROXY_ENABLED=false` 时已显式禁用系统代理；确认 `.env` 未误开代理即可重跑 |
-| `Couldn't deserialize thrift` / `Unexpected end of stream` | 多线程并发写同一 `year=*/part.parquet` 曾写坏分区 | 现已文件锁+原子写；读到损坏会改名为 `part.parquet.corrupt.<ts>`。重跑同一 `build_daily` 命令即可回补丢失年份 |
-
-若本地已有损坏分区，也可手动删掉对应 `year=*/part.parquet`（或保留 `.corrupt.*` 备份）后重跑续传。
-
-强制补一段日期（跳过智能扫描）：
-
-```powershell
-poetry run python -m scripts.data.build_daily --start 2026-07-20 --end 2026-07-25 --ignore-existing --workers 1 --req-interval 5,10
-```
-
-### 5.3 日增量
-
-```powershell
-poetry run python -m scripts.data.update_daily
-poetry run python -m scripts.data.update_daily --date 2026-07-25
-poetry run python -m scripts.data.update_daily --force-fundamental-pit
-poetry run python -m scripts.data.update_daily --flush-every 50
-```
-
-| 参数 | 默认 | 说明 |
-|---|---|---|
-| `--date` | 今天 | 指定日 YYYY-MM-DD |
-| `--force-fundamental-pit` | — | 无视披露季窗口，增量刷新 fundamental_pit |
-| `--flush-every` | `50` | fund_flow 每拉 N 只落盘一次（断点续传粒度） |
-
-收盘后执行：`spot_em` → 过滤无效盘口（`close<=0` / OHLC 不自洽不落库）→ 追加当日 daily_raw、除权检测、复权刷新、universe/行业/listing、fundamental_pit、因子快照（flow/hot/theme）。
-
-**fund_flow 断点续传**：因子快照里最慢的是全市场资金流。每批 upsert 到
-`store/fund_flow/year={Y}/{date}.parquet`，并把已尝试码（含确认无 5 日数据）记入
-`$QUANT_HOME/data/fund_flow_progress/{date}.json`。中断后重跑同一命令会跳过已完成码；
-网络失败不记完成，下次重试。若需全量重拉，删掉当日 progress 文件与对应 parquet 即可。
-
-**注意**：spot_em 无历史，当日没抓就补不回来，失败须告警。停牌源常返回全 0，入口已丢弃，不写入 daily_raw。
-
-### 5.4 自动维护（推荐）
-
-```powershell
-poetry run python -m scripts.data.maintain
-poetry run python -m scripts.data.maintain --date 2026-07-25
-poetry run python -m scripts.data.maintain --start 2021-01-01
-```
-
-| 参数 | 默认 | 说明 |
-|---|---|---|
-| `--date` | 今天 | 维护截至日（非交易日回退最近交易日） |
-| `--start` | `2021-01-01` | 无库时全量起始日 |
-
-逻辑（`scripts/data/maintain.py`）：
-
-1. 库为空 → 全量 `build_daily`
-2. 有库 → 扫描交易日历缺口 → `build_daily --ignore-existing` 回补
-3. 最后跑 `update_daily` 当日增量
-
-默认由调度器 **周五 22:00** 触发（每日 18:00 只跑 `update_daily` 当日增量，分钟级；重活的建库/补漏/retry-failed 拆到周五晚，避免日常 `update_daily` 被长 `build_daily` 阻塞）。
-
-### 5.5 其他数据脚本
-
-| 命令 | 主要参数 | 作用 |
-|---|---|---|
-| `poetry run python -m scripts.data.build_fundamental_pit` | `--codes` `--limit` `--batch-size` `--sleep` `--retries` `--resume` | 批量建财务 PIT |
-| `poetry run python -m scripts.data.build_listing_dates` | （无 CLI 参数） | 上市日表 |
-| `poetry run python -m scripts.data.backfill_factor_snapshots` | `--start` `--end`（必填） | 因子快照回填 |
-| `poetry run python -m scripts.data.verify_daily` | `--sample` `--start` `--end` | 数据校验 |
-| `poetry run python -m scripts.data.audit_data_health` | `--probe-code` | 健康审计 |
-| `poetry run python -m scripts.data.merge_library` | `--offline` `--daily` `--out` | 合并离线库与每日增量 |
-| `poetry run python -m scripts.data.backfill_daily_meta` | `--home` `--codes` `--workers` `--req-interval` `--force` `--flush-every` | 补历史段 float_mv/total_mv/pre_close（默认只拉缺市值码；边拉边落盘可续传） |
-| `poetry run python -m scripts.data.validate_library` | `--home` `--start` `--end` | 离线库完整性与正确性校验（含复权连续性） |
-| `poetry run python -m scripts.data.scrub_invalid_bars` | `--home` `--dry-run` / `--apply` | 剔除已入库无效盘口（close=0 等）；默认 dry-run |
-
-### 5.6a 离线库与每日增量合并（`merge_library`）
-
-**场景**：全量 `build_daily` 需数小时/数天，期间不想让日常 `update_daily` 与它抢同一 store。
-
-**目录级别（重要）**：`--offline` / `--daily` / `--out`（以及校验脚本的 `--home`）都指向
-**quant-home 根**——即**直接包含 `store/` 子目录**的那一级，不是 `store/` 本身、也不是 `data/`：
-
-```text
-~/.quant/offline/            ← --offline 指到这级（含 store/）
-├── store/                   # daily_raw / adj_factor / index_daily / calendar.parquet / 快照…
-└── data/                    # build_failed.jsonl、no_bar_dates.json、no_mv_dates.json 等
-~/.quant/daily/              ← --daily 指到这级
-~/.quant/                    ← --out / --home 指到这级
-```
-
-```powershell
-# 1. 离线 build 到昨日（home 分开）
-QUANT_HOME=~/.quant/offline poetry run python -m scripts.data.build_daily --start 2021-01-01 --end 2026-08-02 --workers 1 --req-interval 5,10
-# 2. 每日盘后增量（另一 home）
-QUANT_HOME=~/.quant/daily poetry run python -m scripts.data.update_daily
-# 3. build 完成后合并到统一 home
-poetry run python -m scripts.data.merge_library --offline ~/.quant/offline --daily ~/.quant/daily --out ~/.quant
-# 4. 补历史段缺列（float_mv/total_mv 精确市值 + pre_close；默认只拉仍缺市值的码，可重跑）
-poetry run python -m scripts.data.backfill_daily_meta --home ~/.quant
-#    强制全量重拉：加 --force
-# 5. 校验合并结果
-poetry run python -m scripts.data.validate_library --home ~/.quant
-```
-
-**`backfill_daily_meta`**：用 `stock_value_em`（东财估值分析，逐日历史）把历史段 `float_mv/total_mv`
-**精确**补上、`pre_close` 用 `close[t-1]` 推导。参数 `--home`（quant-home 根）/ `--codes`
-（只补指定码）/ `--workers` / `--req-interval` / `--force`（默认只拉仍缺市值的码；`--force`
-才全量重拉）/ `--flush-every`（默认 50：每成功 N 只落盘，中断后重跑只补未落盘缺码）。
-写回对已有非空值 `fillna` 不覆盖。退市等源无市值的码记入 `data/backfill_mv_unavailable.json`，
-下次默认跳过（`--force` 重试）。**成功拉过一次后仍缺的日期**记入 `data/no_mv_dates.json`
-（结构同 `no_bar_dates.json`，语义是「源无市值」而非「源无 K 线」，**禁止混用**），下次不再为这些日重拉；
-新入库且未豁免的缺日仍会触发再拉。运行时会打印计划（总共/已齐·豁免跳过/源无跳过/待执行）
-与周期性进度（ok/fail/unavail/flushed/速率/ETA），失败码带原因。**name 刻意不灌历史**（当前名灌历史 = ST 过滤前视），PIT 名靠 `update_daily` 的
-`name_snapshot` 逐日积累；确需当前名兜底用 `--fill-name`。日常增量不需要补（spot 当天自带这些列）；
-每周五 `maintain` 后可选重跑兜住新入库票。
-
-**build_daily 与 update_daily 的 daily_raw 列差异及影响**：
-
-| 列 | build（`stock_zh_a_hist`） | update（spot_em） | 缺失影响 |
-|---|---|---|---|
-| `name` | ❌ 无 | ✅ | ST 过滤走 `name_snapshot`（update 每日落），**无影响**（无快照则 ST 过滤退化，属既有限制） |
-| `pre_close` | ❌ 无 | ✅ | 回测 `prev_close` 由序列前一日 close 现算，**基本无影响** |
-| `float_mv` | ❌ 无 | ✅ | **有影响**：`neutralize.py` 用 `log(float_mv)` 做市值中性化，全缺则 `use_size=0` → **跳过市值中性化**，因子保留 size 暴露。可选近似：`当前流通股本 × 后复权 close` 生成代理 float_mv |
-| `total_mv` | ❌ 无 | ✅ | 极少直接用，无影响 |
-
-合并脚本把 build 行缺的列补 NaN 后归一到统一 13 列，所以**合并后行为 = 纯 build 库行为**，
-合并本身不放大缺失。
-
-一致性保证：
-
-- **daily_raw 归一到 13 列**（`DAILY_RAW_COLUMNS`）：统一 schema 后按 `(code, date)` 去重、
-  **update 覆盖 build**（重叠日以增量为准）。
-- **复权不复发除权尖刺 bug**：合并只做 raw + `adj_factor` 的并集去重，**不自己算复权**；
-  读时经 `quant/data/adjust.py:apply_hfq`（merge_asof 还原累积因子）得连续后复权价。
-- `index_daily` / `calendar` / snapshot 目录（universe/industry/name_snapshot/
-  fundamental_pit/因子快照等）取并集，snapshot 冲突 daily 优先。
-
-**注意**：`merge_library` 不补 adj_factor——若 build 中断未跑 `_refresh_adj_all`，须先补复权因子
-（重跑 build_daily 到 `_refresh_adj_all` 阶段，或 `refresh_adj_for_codes`），否则 `validate_library`
-会报 adj 覆盖 FAIL、回测除权假跳空。
-
-### 5.6b 完整性与正确性校验（`validate_library`）
-
-```powershell
-poetry run python -m scripts.data.validate_library            # 校验当前 QUANT_HOME
-poetry run python -m scripts.data.validate_library --home ~/.quant
-```
-
-**`--home` 级别**：同 merge——**quant-home 根**（直接包含 `store/` 的那一级，见 §5.6a 目录树）。
-所有检查（daily_raw / adj_factor / index_daily / calendar / no_bar 豁免）都从该目录读，
-不读当前 QUANT_HOME。
-
-跑一遍即知数据是否完整、是否正确（退出码 0=通过，1=发现问题）：
-
-- **[1] 基础**：calendar 天数 / daily_raw 行·码·日期区间 / name 非空率
-- **[2] 完整性**：`adj_factor` 覆盖（<90% FAIL）/ `index_daily` 000300·000905·000852（缺 FAIL）/
-  per-code 日历覆盖（低 WARN，次新/停牌为合法缺日）/ `float_mv` 市值覆盖（<50% WARN，可跑
-  `backfill_daily_meta`）/ `pre_close` 覆盖（<90% WARN）
-- **[3] 正确性**：重复 `(code,date)`（>0 FAIL）/ 价格 sanity（close>0、high>=low、high·low 夹住
-  open·close、volume·amount>=0，违规 FAIL）/ **后复权异常跳空**（日历相邻交易日上，后复权
-  跳 >28% 且原料价未同步大跳 → FAIL；停牌复牌缺口、次新大波动豁免）
-
-历史已入库的 `close=0` / OHLC 不自洽行：`update_daily` 入口已拒写；清理用
-
-```powershell
-poetry run python -m scripts.data.scrub_invalid_bars --home ~/.quant --dry-run
-poetry run python -m scripts.data.scrub_invalid_bars --home ~/.quant --apply
-```
-
-### 5.6 复权说明
-
-- 因子/回测/出场：**必须**用 `load_adjusted_daily()`（后复权）
-- 撮合/涨跌停：用 daily_raw 真实价
-- 除权检测：`detect_ex_dividend_codes` → `refresh_adj_for_codes`
-
----
-
-## 6. 回测
-
-### 6.1 主回测
-
-```powershell
-poetry run python -m scripts.backtest.run --home D:\ProgramData\.quant --start 2024-01-01 --end 2024-06-30
-```
-
-| 参数 | 默认 | 说明 |
-|---|---|---|
-| `--home` | 当前 `QUANT_HOME` | quant-home 根（含 `store/`）；不设则读环境变量 |
-| `--start` / `--end` | 必填 | YYYY-MM-DD |
-| `--max-positions` | 10 | 最大持股 |
-| `--n-enter` / `--n-exit` | 8 / 15 | 排名 buffer |
-| `--target-vol` | 0.15 | 波动目标 |
-| `--loose` | — | 关闭 strict（T 信号 T 收盘成交，乐观上界） |
-| `--no-exit` | — | 禁用 L4 出场 |
-| `--registry-weights` | — | 忽略 IC 权重，用 registry 默认 |
-| `--sensitivity` | — | 输出参数敏感性 |
-| `--out` | `$QUANT_HOME/reports/bt` | 报告目录（受 `--home` 影响） |
-
-**strict 口径（默认）**：T-1 收盘因子 → T 开盘成交；与选股因子口径对齐。
-
-**输出**：交易笔数、胜率、盈亏比、最大回撤、Sharpe/Sortino/Calmar、年化换手、出场归因等。报告写 `$QUANT_HOME/reports/bt/`。
-
-### 6.2 其他回测/验证
-
-| 命令 | 主要参数 | 作用 |
-|---|---|---|
-| `poetry run python -m scripts.backtest.validate` | `--start` `--end`（必填）`--max-positions` `--seed` | 随机 alpha 基准 + 前视泄漏检验 |
-| `poetry run python -m scripts.backtest.run_intraday_timing` | `--start` `--end`（必填）`--theta` `--pool` `--horizon` `--out` | 盘中择时 θ 增益验证（日频代理） |
-
-### 6.3 回测前置条件
-
-- 离线库覆盖回测区间（至少 daily_raw + adj）
-- ML/IC 校准建议 ≥100 样本；结论宜覆盖趋势+震荡各一轮
-- 回测路径（差额 rebalance）与实盘（作战池+盘中择时）**不完全一致**，Sharpe 作参考而非实盘预期
-
----
-
-## 7. 因子研究脚本
-
-| 命令 | 主要参数 | 作用 |
-|---|---|---|
-| `poetry run python -m scripts.factors.build_panel` | `--start` `--end`（必填）`--out` | 构建因子面板 |
-| `poetry run python -m scripts.factors.ic_report` | `--panel`（必填）`--out` | IC/ICIR 报告 → `$QUANT_HOME/reports/ic/` |
-| `poetry run python -m scripts.factors.fit_weights` | `--start` `--end`（必填）`--min-icir` `--min-tstat` `--static` `--train-window` `--step` `--fdr-alpha` `--horizon` `--horizons` | 拟合 factor_weights.yml |
-| `poetry run python -m scripts.research.walk_forward` | `--start` `--end`（必填）`--out` `--train-months` `--test-months` `--max-positions` | walk-forward → factor_weights_ts.yml |
-| `poetry run python -m scripts.research.delist_bias_audit` | `--as-of`（必填）`--lookback-days` `--top-n` `--refresh-delisted` | 退市偏差审计 |
-| `poetry run python -m scripts.research.calibrate_slippage` | `--days` | 滑点校准 |
-
----
-
-## 8. 报告与落盘
-
-全部默认 `$QUANT_HOME/reports/`：
-
-| 子目录 | 内容 |
-|---|---|
-| `reports/decision/` | 日决策卡 |
-| `reports/ops/` | 推送正文 |
-| `reports/bt/` | 回测 |
+| `reports/decision/` | 日决策卡文本/JSON |
+| `reports/ops/` | 推送正文归档 |
+| `reports/bt/` | 回测报告 |
 | `reports/wf/` | walk-forward |
 | `reports/ic/` | IC 报告 |
-
-按日归档：`$QUANT_HOME/daily/{date}/raw|derived|trades|review/`。
-
-### 纸面持仓字段
-
-- **不再写入「战法」**
-- 买入原因示例：`intraday α_z=1.12|tw=8.0%`
-- 卖出原因：`exit:hard_stop` 或 `exit:atr_trailing` 等
+| `reports/panel/` | 因子面板 |
+| `reports/intraday_timing/` | 盘中择时验证 |
+| `daily/{date}/raw\|derived\|trades\|review/` | 按日归档 |
+| `paper_account/` | 纸面作战池、卖出监控、模拟持仓 |
+| `state/` | 人工持仓（与纸面隔离） |
 
 ---
 
-## 9. 本地自检
+### 9.2 日决策脚本自检（可选）
+
+**用途**：不依赖调度，手动跑一遍「今晚选股」流程，确认库与因子能出决策卡。  
+**必须性**：联调/排查时可选。  
+**说明**：`--dry-run` / `--no-push` 都不推飞书；加 `--no-paper` 则不写纸面文件。完整参数见 [DAILY_OPS.md](./DAILY_OPS.md)。
+
+```powershell
+poetry run python -m scripts.decision.daily --home D:\ProgramData\.quant --dry-run --no-push
+```
+
+---
+
+### 9.3 端到端冒烟 `smoke_e2e`（可选）
+
+**用途**：在**临时目录**里造最小合成库，跑面板 + 回测链路，验证代码安装是否正常。**不读写**你的真实 `D:\ProgramData\.quant`。  
+**必须性**：改完代码或新环境安装后建议跑一次。  
+**你会得到**：通过/失败日志；退出码非 0 表示链路坏了。
+
+```powershell
+poetry run python -m scripts.smoke_e2e
+```
+
+---
+
+### 9.4 分层检查 `check_layering`（可选）
+
+**用途**：静态检查 import 方向是否符合 `common ← quant ← {app, scripts}`，防止 `quant` 误依赖 `app`。  
+**必须性**：改架构/挪模块后建议跑；与行情数据无关。  
+**你会得到**：`[OK]` 或违规 import 列表。
+
+```powershell
+poetry run python -m scripts.check_layering
+```
+
+---
+
+### 9.5 HTTP 健康检查（可选）
+
+**用途**：确认 API 进程已起来（调度依赖它）。  
+**必须性**：开了 `poetry run python -m app` 后可用来确认。
 
 ```powershell
 curl http://127.0.0.1:8085/health
-curl http://127.0.0.1:8085/api/v1/quant/market/pre_market
-poetry run python -m scripts.decision.daily --dry-run
-poetry run python -m scripts.smoke_e2e          # 端到端冒烟（合成数据，不碰网络）
 ```
 
 ---
 
-## 10. 常见问题
+## 10. 复权约定（必读）
+
+弄错复权会导致回测「假赚/假亏」：
+
+| 场景 | 应该用什么 |
+|---|---|
+| 因子、回测收益、出场（ATR 等） | **`load_adjusted_daily()` 后复权价** |
+| 纸面撮合、涨跌停判断 | **`daily_raw` 真实价** |
+| 发现除权 | 系统内 `detect_ex_dividend_codes` → `refresh_adj_for_codes`（`update_daily` 会做） |
+
+若 `validate_library` 报 adj 覆盖 FAIL 或复权跳空 FAIL：先保证 `build_daily` 跑完复权步骤，再查是否有脏价需 §3.6 清理。
+
+---
+
+## 11. 常见问题
 
 **Q：`ModuleNotFoundError: No module named 'pandas'`？**  
-A：系统 `python` 与 Poetry 环境不是同一个。请用 `poetry run python -m ...`，或先 `.\.venv\Scripts\Activate.ps1`。用 `poetry run python -c "import sys; print(sys.executable)"` 确认解释器路径落在项目 `.venv`。
+A：你用的不是 Poetry 环境。请用 `poetry run python -m ...`，或先 `.\.venv\Scripts\Activate.ps1`。用 `poetry run python -c "import sys; print(sys.executable)"` 确认路径落在项目 `.venv`。
+
+**Q：数据写到了错误目录 / 库是空的？**  
+A：检查 `.env` 的 `GOLDQUANT_QUANT_HOME_DIR`、当前终端的 `QUANT_HOME`，以及命令是否传了正确的 `--home`。用资源管理器看该目录下是否出现 `store/daily_raw`。
+
+**Q：`build_daily` 跑了很久中断了怎么办？**  
+A：用**完全相同**的命令再跑一遍即可续传。不要随便改 `--start/--end` 除非你有意缩小窗口。
 
 **Q：quant 报连接失败？**  
-A：单次 CLI **不依赖** HTTP。若仍报错，检查是否误开了旧路径/错误环境；或设 fixture 模式。仅调度器自动跑五时段时需 `poetry run python -m app`。
+A：单次 `python -m quant ...` **不依赖** HTTP API。若仍报错，检查环境/fixture；只有要自动调度五时段时才必须 `poetry run python -m app`。
 
-**Q：面板为空 / 决策失败？**  
-A：检查离线库是否已 build；至少需覆盖决策日前若干交易日。
+**Q：面板为空 / 日决策失败？**  
+A：确认正式库 `validate_library` 通过，且当天（或最近交易日）已跑过 `update_daily`。
 
 **Q：`.env` 端口不生效？**  
-A：使用 `poetry run python -m app` 启动；裸 `uvicorn` 需显式 `--port`。
+A：用 `poetry run python -m app` 启动；裸 `uvicorn` 需自己写 `--port`。
 
-**Q：回测与实盘差异？**  
-A：回测用 strict 差额 rebalance；实盘 T+1 盘中 intraday_alpha 触发。见 [ARCHITECTURE.md §4.5](./ARCHITECTURE.md#45-回测-vs-实盘纸面)。
+**Q：回测很好、纸面差距大？**  
+A：正常现象。回测是日频差额调仓；纸面是 T+1 盘中 θ 触发。见 [ARCHITECTURE.md §4.5](./ARCHITECTURE.md#45-回测-vs-实盘纸面)。
 
-**Q：缺依赖怎么装？**  
-A：`poetry install`；ML 相关再加 `--extras ml`。不要再维护平行的 `requirements.txt`。
+**Q：价格 sanity FAIL？**  
+A：按 §3.6：`scrub_invalid_bars --dry-run` → 确认 → `--apply` → 再 `validate_library`。
+
+**Q：缺依赖 / ML 相关报错？**  
+A：`poetry install`；研究脚本再加 `poetry install --extras ml`。不要再维护平行的 `requirements.txt`。
+
+**Q：下一步如何每天选股、模拟买卖？**  
+A：库养好并开调度后，按 [DAILY_OPS.md](./DAILY_OPS.md) 操作（18:00 增量 → 20:10 选股 → 次日盘中纸面成交）。

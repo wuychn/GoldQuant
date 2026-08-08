@@ -12,12 +12,11 @@ from __future__ import annotations
 
 import argparse
 import sys
-from pathlib import Path
 
 import pandas as pd
 
 from quant.data.schema import DAILY_RAW_COLUMNS
-from quant.store.paths import override_quant_home
+from scripts.cli_home import add_home_argument, home_context
 
 
 def invalid_bar_mask(daily: pd.DataFrame) -> pd.Series:
@@ -62,9 +61,9 @@ def _rewrite_year_partitions(daily: pd.DataFrame) -> int:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="剔除 daily_raw 无效盘口行")
-    ap.add_argument("--home", required=True, help="quant-home 根（含 store/）")
-    ap.add_argument("--dry-run", action="store_true", help="只统计不写（默认）")
-    ap.add_argument("--apply", action="store_true", help="真正按年分区重写")
+    add_home_argument(ap)
+    ap.add_argument("--dry-run", action="store_true", help="只统计脏行数量，不写盘（默认行为）")
+    ap.add_argument("--apply", action="store_true", help="按年分区重写 daily_raw，真正删除无效行")
     args = ap.parse_args()
     if args.apply and args.dry_run:
         print("不能同时 --apply 与 --dry-run", file=sys.stderr)
@@ -73,12 +72,11 @@ def main() -> None:
     if not apply:
         args.dry_run = True
 
-    home = Path(args.home).expanduser()
-    print(f"[scrub] home={home} mode={'APPLY' if apply else 'DRY-RUN'}", flush=True)
+    print(f"[scrub] home={args.home or '当前'} mode={'APPLY' if apply else 'DRY-RUN'}", flush=True)
 
     from quant.data.store import read_daily_raw
 
-    with override_quant_home(home):
+    with home_context(args.home):
         daily = read_daily_raw()
         if daily.empty:
             print("[scrub] daily_raw 为空，退出")

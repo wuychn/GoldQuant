@@ -9,7 +9,8 @@
 |------|------|
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | 系统定位、分层架构、选股→买卖闭环、数据层与数据源抽象、候选池与 LLM 分工 |
 | [FACTORS.md](./FACTORS.md) | 20 个日频因子 + 5 个盘中因子：含义、公式、方向、权重、数据来源 |
-| [OPERATIONS.md](./OPERATIONS.md) | 安装、启动 API/量化机器人、调度、离线库、回测、研究脚本 |
+| [OPERATIONS.md](./OPERATIONS.md) | 从零建库、合并/补缺/校验、日常 update/maintain、回测、定时任务与参数表 |
+| [DAILY_OPS.md](./DAILY_OPS.md) | 数据完备后：每日选股、纸面模拟交易、调度闭环 |
 | [CONFIG.md](./CONFIG.md) | `.env` 环境变量 + `quant.yml` 配置项含义与覆盖方式；配置键→代码映射 |
 | [API.md](./API.md) | FastAPI 数据服务路由概览 |
 
@@ -53,11 +54,10 @@ poetry run python -m quant daily_decision
 # 盘中择时买卖
 poetry run python -m quant during_market
 
-# 离线库维护
-poetry run python -m scripts.data.maintain
-
-# 回测
-poetry run python -m scripts.backtest.run --home D:\ProgramData\.quant --start 2024-01-01 --end 2024-06-30 --max-positions 10
+# 离线库维护 / 回测（读写库脚本均可加 --home）
+poetry run python -m scripts.data.maintain --home D:\ProgramData\.quant
+poetry run python -m scripts.backtest.run --home D:\ProgramData\.quant --start 2024-01-01 --end 2024-06-30
 ```
 
-详细说明见 [OPERATIONS.md](./OPERATIONS.md)。
+- 从零建库与参数表：[OPERATIONS.md](./OPERATIONS.md)  
+- 每日选股与模拟交易：[DAILY_OPS.md](./DAILY_OPS.md)

@@ -26,6 +26,7 @@ from quant.factors.panel_builder import build_panel
 from quant.factors.registry import REGISTRY
 from quant.factors.weights import full_weight_map
 from quant.store.paths import config_file
+from scripts.cli_home import add_home_argument, home_context
 
 _SCOPE = "fit_weights"
 
@@ -104,100 +105,106 @@ def fit_walk_forward_weights(
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--start", required=True, help="YYYY-MM-DD")
-    ap.add_argument("--end", required=True, help="YYYY-MM-DD")
-    ap.add_argument("--min-icir", type=float, default=0.0)
-    ap.add_argument("--min-tstat", type=float, default=1.0)
-    ap.add_argument("--static", action="store_true", help="写静态全样本权重（勿用于 live；默认 walk-forward）")
-    ap.add_argument("--train-window", type=int, default=504)
-    ap.add_argument("--step", type=int, default=63)
-    ap.add_argument("--fdr-alpha", type=float, default=0.05, help="BH-FDR 显著性水平（0=关闭）")
-    ap.add_argument("--horizon", type=int, default=5, help="主持有期（日）")
-    ap.add_argument("--horizons", default="5,10,20", help="多持有期 ICIR 混合，逗号分隔")
+    ap = argparse.ArgumentParser(description="离线拟合 IC 驱动因子权重并写入 config")
+    add_home_argument(ap)
+    ap.add_argument("--start", required=True, help="拟合区间起始日 YYYY-MM-DD（含）")
+    ap.add_argument("--end", required=True, help="拟合区间结束日 YYYY-MM-DD（含）")
+    ap.add_argument("--min-icir", type=float, default=0.0, help="因子入选最低 ICIR 阈值（默认 0，不过滤）")
+    ap.add_argument("--min-tstat", type=float, default=1.0, help="因子入选最低 |t_stat| 阈值（默认 1.0）")
+    ap.add_argument(
+        "--static",
+        action="store_true",
+        help="写静态全样本权重到 factor_weights.yml（勿用于 live；默认 walk-forward）",
+    )
+    ap.add_argument("--train-window", type=int, default=504, help="walk-forward 训练窗口长度（交易日，默认 504）")
+    ap.add_argument("--step", type=int, default=63, help="walk-forward 步长（交易日，默认 63）")
+    ap.add_argument("--fdr-alpha", type=float, default=0.05, help="BH-FDR 显著性水平（0 表示关闭 FDR 过滤）")
+    ap.add_argument("--horizon", type=int, default=5, help="IC 报告主持有期（交易日，默认 5）")
+    ap.add_argument("--horizons", default="5,10,20", help="多持有期 ICIR 混合，逗号分隔（默认 5,10,20）")
     args = ap.parse_args()
 
     horizons = tuple(int(x.strip()) for x in args.horizons.split(",") if x.strip())
 
-    log_progress_start(_SCOPE, "开始", detail=f"{args.start} ~ {args.end}")
-    try:
-        dates = [
-            to_iso(d)
-            for d in trading_day_list(date.fromisoformat(args.start), date.fromisoformat(args.end))
-        ]
-        if not dates:
-            log_progress_error(_SCOPE, "失败", detail="无交易日")
-            sys.exit(1)
+    with home_context(args.home):
+        log_progress_start(_SCOPE, "开始", detail=f"{args.start} ~ {args.end}")
+        try:
+            dates = [
+                to_iso(d)
+                for d in trading_day_list(date.fromisoformat(args.start), date.fromisoformat(args.end))
+            ]
+            if not dates:
+                log_progress_error(_SCOPE, "失败", detail="无交易日")
+                sys.exit(1)
 
-        daily = load_adjusted_daily()
-        if not args.static:
-            ts = fit_walk_forward_weights(
-                dates,
-                daily,
-                train_window=args.train_window,
-                step=args.step,
-                min_icir=args.min_icir,
-                min_tstat=args.min_tstat,
-                fdr_alpha=args.fdr_alpha,
-                horizon=args.horizon,
-                horizons=horizons,
-            )
-            path = config_file("factor_weights_ts.yml")
-            path.parent.mkdir(parents=True, exist_ok=True)
-            payload = {
-                "apply": True,
-                "meta": {
-                    "train_window": args.train_window,
-                    "step": args.step,
-                    "horizon": args.horizon,
-                    "horizons": list(horizons),
-                    "fit_start": args.start,
-                    "fit_end": args.end,
-                },
-                "weights_ts": ts,
-            }
-            with open(path, "w", encoding="utf-8") as f:
-                yaml.safe_dump(payload, f, allow_unicode=True, sort_keys=False)
-            print(f"walk-forward 权重表 → {path} | {len(ts)} 个日期")
-            log_progress_done(_SCOPE, "成功", detail=f"{len(ts)} folds → {path}")
-            return
-
-        panel = build_panel(dates, daily=daily, universe_by_date=_universe_by_date(dates, daily))
-        print(f"面板 {len(panel)} 行")
-        names = REGISTRY.names()
-        report_list = factor_ic_report(panel, names, horizon=args.horizon, horizons=horizons)
-        report = {r["factor"]: r for r in report_list if r.get("factor")}
-        full = full_weight_map(
-            report, names, min_icir=args.min_icir, min_tstat=args.min_tstat, fdr_alpha=args.fdr_alpha or None
-        )
-        weights = {k: round(v, 4) for k, v in full.items()}
-        n_pos = sum(1 for v in weights.values() if v > 0)
-
-        out = {
-            "apply": True,
-            "fit_start": args.start,
-            "fit_end": args.end,
-            "weights": weights,
-            "meta": {
-                n: {
-                    "ic_mean": round(float(report.get(n, {}).get("ic_mean") or 0.0), 4),
-                    "icir": round(float(report.get(n, {}).get("icir") or 0.0), 4),
-                    "t_stat": round(float(report.get(n, {}).get("t_stat") or 0.0), 4),
+            daily = load_adjusted_daily()
+            if not args.static:
+                ts = fit_walk_forward_weights(
+                    dates,
+                    daily,
+                    train_window=args.train_window,
+                    step=args.step,
+                    min_icir=args.min_icir,
+                    min_tstat=args.min_tstat,
+                    fdr_alpha=args.fdr_alpha,
+                    horizon=args.horizon,
+                    horizons=horizons,
+                )
+                path = config_file("factor_weights_ts.yml")
+                path.parent.mkdir(parents=True, exist_ok=True)
+                payload = {
+                    "apply": True,
+                    "meta": {
+                        "train_window": args.train_window,
+                        "step": args.step,
+                        "horizon": args.horizon,
+                        "horizons": list(horizons),
+                        "fit_start": args.start,
+                        "fit_end": args.end,
+                    },
+                    "weights_ts": ts,
                 }
-                for n in names
-            },
-        }
-        path = config_file("factor_weights.yml")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            yaml.safe_dump(out, f, allow_unicode=True, sort_keys=False)
-        print(f"写入 {path} | 入选 {n_pos}/{len(names)} 因子（静态，勿用于 strict OOS live）")
-        log_progress_done(_SCOPE, "成功", detail=f"static {n_pos}/{len(names)} → {path}")
-    except SystemExit:
-        raise
-    except Exception as e:
-        log_progress_error(_SCOPE, "失败", detail=f"{type(e).__name__}: {e}")
-        raise
+                with open(path, "w", encoding="utf-8") as f:
+                    yaml.safe_dump(payload, f, allow_unicode=True, sort_keys=False)
+                print(f"walk-forward 权重表 → {path} | {len(ts)} 个日期")
+                log_progress_done(_SCOPE, "成功", detail=f"{len(ts)} folds → {path}")
+                return
+
+            panel = build_panel(dates, daily=daily, universe_by_date=_universe_by_date(dates, daily))
+            print(f"面板 {len(panel)} 行")
+            names = REGISTRY.names()
+            report_list = factor_ic_report(panel, names, horizon=args.horizon, horizons=horizons)
+            report = {r["factor"]: r for r in report_list if r.get("factor")}
+            full = full_weight_map(
+                report, names, min_icir=args.min_icir, min_tstat=args.min_tstat, fdr_alpha=args.fdr_alpha or None
+            )
+            weights = {k: round(v, 4) for k, v in full.items()}
+            n_pos = sum(1 for v in weights.values() if v > 0)
+
+            out = {
+                "apply": True,
+                "fit_start": args.start,
+                "fit_end": args.end,
+                "weights": weights,
+                "meta": {
+                    n: {
+                        "ic_mean": round(float(report.get(n, {}).get("ic_mean") or 0.0), 4),
+                        "icir": round(float(report.get(n, {}).get("icir") or 0.0), 4),
+                        "t_stat": round(float(report.get(n, {}).get("t_stat") or 0.0), 4),
+                    }
+                    for n in names
+                },
+            }
+            path = config_file("factor_weights.yml")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                yaml.safe_dump(out, f, allow_unicode=True, sort_keys=False)
+            print(f"写入 {path} | 入选 {n_pos}/{len(names)} 因子（静态，勿用于 strict OOS live）")
+            log_progress_done(_SCOPE, "成功", detail=f"static {n_pos}/{len(names)} → {path}")
+        except SystemExit:
+            raise
+        except Exception as e:
+            log_progress_error(_SCOPE, "失败", detail=f"{type(e).__name__}: {e}")
+            raise
 
 
 if __name__ == "__main__":

@@ -43,7 +43,8 @@ import pandas as pd
 
 from quant.data.schema import DAILY_RAW_COLUMNS
 from quant.data.store import read_daily_raw, write_daily_raw
-from quant.store.paths import override_quant_home
+from quant.store.paths import override_quant_home, quant_home
+from scripts.cli_home import add_home_argument, home_context
 
 _MV_COLS = ("float_mv", "total_mv")
 _PROGRESS_EVERY = 50  # 每完成 N 只打一行进度
@@ -343,11 +344,11 @@ def _progress_line(
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--home", required=True, help="quant-home 根（直接含 store/ 的那级）")
-    ap.add_argument("--codes", default=None, help="逗号分隔代码；默认补库内全部")
-    ap.add_argument("--workers", type=int, default=1, help="并发（默认 1；datacenter 接口较稳，可适度升）")
-    ap.add_argument("--req-interval", default=None, help="请求间隔秒 MIN,MAX 或 N（默认 0,2）")
+    ap = argparse.ArgumentParser(description="补缺离线库历史段 float_mv/total_mv 与 pre_close")
+    add_home_argument(ap)
+    ap.add_argument("--codes", default=None, help="逗号分隔股票代码；默认补库内全部候选码")
+    ap.add_argument("--workers", type=int, default=1, help="并发拉取线程数（默认 1；datacenter 接口较稳，可适度升高）")
+    ap.add_argument("--req-interval", default=None, help="请求间隔秒 MIN,MAX 或单值 N（默认 0,2）")
     ap.add_argument(
         "--force",
         action="store_true",
@@ -364,10 +365,6 @@ def main() -> None:
 
     flush_every = max(1, int(args.flush_every))
 
-    # 尽早打日志，避免 patch/读库前干等无输出
-    home = Path(args.home).expanduser()
-    _log(f"[backfill] 开始 home={home}")
-
     from common.utils.source_headers import apply_source_header_patch
 
     apply_source_header_patch()
@@ -378,217 +375,219 @@ def main() -> None:
     else:
         interval = (0.0, 2.0)
 
-    _log("[backfill] 读取 daily_raw …")
-    t_read = time.time()
-    with override_quant_home(home):
+    with home_context(args.home):
+        home = quant_home()
+        _log(f"[backfill] 开始 home={home}")
+
+        _log("[backfill] 读取 daily_raw …")
+        t_read = time.time()
         daily = read_daily_raw()
-    if daily.empty:
-        _log_err(f"[FATAL] {home} daily_raw 为空")
-        sys.exit(1)
-    _log(
-        f"[backfill] daily_raw 就绪：{len(daily):,} 行 / "
-        f"{daily['code'].nunique():,} 码  ({time.time() - t_read:.1f}s)"
-    )
-
-    daily["code"] = daily["code"].astype(str).str.strip()
-    codes = list(daily["code"].unique())
-    # 前缀过滤：与 build_daily/update_daily 一致
-    from quant.config import load_quant_config
-
-    prefixes = (
-        (load_quant_config().get("gates") or {}).get("symbol_pool", {}).get("prefixes", ["60", "00", "30", "688"])
-    )
-    codes = [c for c in codes if c.startswith(tuple(prefixes))]
-    if args.codes:
-        want = {c.strip() for c in args.codes.split(",") if c.strip()}
-        codes = [c for c in codes if c in want]
-    n_total = len(codes)
-    _log(f"[backfill] 候选码（前缀/指定后）: {n_total}")
-
-    _log("[backfill] 扫描缺市值码 …")
-    t_scan = time.time()
-    unavailable_map = load_unavailable(home)
-    no_mv_map = {} if args.force else load_no_mv_map(home)
-    n_no_mv_codes = len(no_mv_map)
-    n_no_mv_dates = sum(len(v) for v in no_mv_map.values())
-    if args.force:
+        if daily.empty:
+            _log_err(f"[FATAL] {home} daily_raw 为空")
+            sys.exit(1)
         _log(
-            f"[backfill] --force：忽略已登记无市值码 {len(unavailable_map)} 只、"
-            f"no_mv 豁免 {n_no_mv_codes} 码/{n_no_mv_dates} 日，将重试"
+            f"[backfill] daily_raw 就绪：{len(daily):,} 行 / "
+            f"{daily['code'].nunique():,} 码  ({time.time() - t_read:.1f}s)"
         )
-    else:
-        _log(f"[backfill] 已登记无市值（多退市）: {len(unavailable_map)} 只 → {unavailable_path(home).name}")
+
+        daily["code"] = daily["code"].astype(str).str.strip()
+        codes = list(daily["code"].unique())
+        # 前缀过滤：与 build_daily/update_daily 一致
+        from quant.config import load_quant_config
+
+        prefixes = (
+            (load_quant_config().get("gates") or {}).get("symbol_pool", {}).get("prefixes", ["60", "00", "30", "688"])
+        )
+        codes = [c for c in codes if c.startswith(tuple(prefixes))]
+        if args.codes:
+            want = {c.strip() for c in args.codes.split(",") if c.strip()}
+            codes = [c for c in codes if c in want]
+        n_total = len(codes)
+        _log(f"[backfill] 候选码（前缀/指定后）: {n_total}")
+
+        _log("[backfill] 扫描缺市值码 …")
+        t_scan = time.time()
+        unavailable_map = load_unavailable(home)
+        no_mv_map = {} if args.force else load_no_mv_map(home)
+        n_no_mv_codes = len(no_mv_map)
+        n_no_mv_dates = sum(len(v) for v in no_mv_map.values())
+        if args.force:
+            _log(
+                f"[backfill] --force：忽略已登记无市值码 {len(unavailable_map)} 只、"
+                f"no_mv 豁免 {n_no_mv_codes} 码/{n_no_mv_dates} 日，将重试"
+            )
+        else:
+            _log(f"[backfill] 已登记无市值（多退市）: {len(unavailable_map)} 只 → {unavailable_path(home).name}")
+            _log(
+                f"[backfill] 已登记无市值日（成功拉取后仍缺）: "
+                f"{n_no_mv_codes} 码 / {n_no_mv_dates} 日 → {no_mv_path(home).name}"
+            )
+        codes_todo = codes_needing_mv_fetch(
+            daily,
+            codes,
+            force=args.force,
+            unavailable=None if args.force else set(unavailable_map),
+            no_mv_map=None if args.force else no_mv_map,
+        )
+        n_need = len(codes_todo)
+        n_unavail_skip = 0 if args.force else len([c for c in codes if c in unavailable_map])
+        n_skip_filled = n_total - n_need - n_unavail_skip
+        mode = "强制全量" if args.force else "仅未豁免缺市值"
         _log(
-            f"[backfill] 已登记无市值日（成功拉取后仍缺）: "
-            f"{n_no_mv_codes} 码 / {n_no_mv_dates} 日 → {no_mv_path(home).name}"
+            f"[backfill] 计划 {mode}：总共 {n_total} 码 · "
+            f"已齐/豁免跳过 {n_skip_filled} · 源无跳过 {n_unavail_skip} · 待执行 {n_need}  "
+            f"(扫描 {time.time() - t_scan:.1f}s；间隔 {interval[0]:.0f},{interval[1]:.0f}s；"
+            f"workers={max(1, args.workers)}；flush_every={flush_every})"
         )
-    codes_todo = codes_needing_mv_fetch(
-        daily,
-        codes,
-        force=args.force,
-        unavailable=None if args.force else set(unavailable_map),
-        no_mv_map=None if args.force else no_mv_map,
-    )
-    n_need = len(codes_todo)
-    n_unavail_skip = 0 if args.force else len([c for c in codes if c in unavailable_map])
-    n_skip_filled = n_total - n_need - n_unavail_skip
-    mode = "强制全量" if args.force else "仅未豁免缺市值"
-    _log(
-        f"[backfill] 计划 {mode}：总共 {n_total} 码 · "
-        f"已齐/豁免跳过 {n_skip_filled} · 源无跳过 {n_unavail_skip} · 待执行 {n_need}  "
-        f"(扫描 {time.time() - t_scan:.1f}s；间隔 {interval[0]:.0f},{interval[1]:.0f}s；"
-        f"workers={max(1, args.workers)}；flush_every={flush_every})"
-    )
-    if not codes_todo:
-        _log("[backfill] 无待拉码，跳过市值请求；仍推导 pre_close 并写回")
+        if not codes_todo:
+            _log("[backfill] 无待拉码，跳过市值请求；仍推导 pre_close 并写回")
 
-    # 1) 逐只拉精确历史市值，边拉边落盘（支持断点续传）
-    fail_codes: list[tuple[str, str]] = []
-    unavail_codes: list[tuple[str, str]] = []
-    t0 = time.time()
-    done = fail = unavail = flushed = 0
-    pending: dict[str, dict[str, tuple[float, float]]] = {}
-    lock = threading.Lock()
-    unavailable_dirty = False
-    no_mv_added = 0
-
-    def _persist_unavailable() -> None:
-        nonlocal unavailable_dirty
-        if not unavailable_dirty:
-            return
-        save_unavailable(home, unavailable_map)
+        # 1) 逐只拉精确历史市值，边拉边落盘（支持断点续传）
+        fail_codes: list[tuple[str, str]] = []
+        unavail_codes: list[tuple[str, str]] = []
+        t0 = time.time()
+        done = fail = unavail = flushed = 0
+        pending: dict[str, dict[str, tuple[float, float]]] = {}
+        lock = threading.Lock()
         unavailable_dirty = False
+        no_mv_added = 0
 
-    def _record_no_mv_after_merge(codes_batch: list[str]) -> None:
-        """成功拉取并 merge 后：仍缺的日期写入 no_mv_dates（下次不再重拉）。"""
-        nonlocal no_mv_added, no_mv_map
-        for code in codes_batch:
-            holes = remaining_mv_miss_dates(daily, code)
-            if not holes:
-                continue
-            n = add_no_mv_dates(home, code, holes)
-            no_mv_added += n
-            if n:
-                no_mv_map.setdefault(code, set()).update(holes)
+        def _persist_unavailable() -> None:
+            nonlocal unavailable_dirty
+            if not unavailable_dirty:
+                return
+            save_unavailable(home, unavailable_map)
+            unavailable_dirty = False
 
-    def _flush_pending(*, reason: str) -> None:
-        nonlocal daily, pending, flushed
-        if not pending:
-            return
-        batch = pending
-        pending = {}
-        codes_batch = list(batch.keys())
-        _log(f"[backfill] 落盘 {len(codes_batch)} 码（{reason}）…")
-        t_f = time.time()
-        daily = merge_mv_into_daily(daily, batch)
-        flush_mv_codes(home, daily, codes_batch)
-        _record_no_mv_after_merge(codes_batch)
-        flushed += len(codes_batch)
-        _persist_unavailable()
-        _log(f"[backfill] 落盘完成 +{len(codes_batch)} → 累计 flushed={flushed} ({time.time() - t_f:.1f}s)")
+        def _record_no_mv_after_merge(codes_batch: list[str]) -> None:
+            """成功拉取并 merge 后：仍缺的日期写入 no_mv_dates（下次不再重拉）。"""
+            nonlocal no_mv_added, no_mv_map
+            for code in codes_batch:
+                holes = remaining_mv_miss_dates(daily, code)
+                if not holes:
+                    continue
+                n = add_no_mv_dates(home, code, holes)
+                no_mv_added += n
+                if n:
+                    no_mv_map.setdefault(code, set()).update(holes)
 
-    if codes_todo:
-        _log(f"[backfill] 开始拉取市值：0/{n_need}（边拉边落盘）")
-        with ThreadPoolExecutor(max_workers=max(1, args.workers)) as ex:
-            futs = {ex.submit(_fetch_value_meta, c, interval=interval): c for c in codes_todo}
-            for i, fut in enumerate(as_completed(futs), 1):
-                code = futs[fut]
-                try:
-                    mv, err = fut.result()
-                except Exception as e:  # noqa: BLE001
-                    mv, err = None, f"{type(e).__name__}: {e}"
-                if mv:
-                    with lock:
-                        pending[code] = mv
-                        done += 1
-                        if len(pending) >= flush_every:
-                            _flush_pending(reason=f"满 {flush_every}")
-                elif is_value_em_unavailable(err):
-                    reason = err or "源无市值数据"
-                    unavail += 1
-                    unavail_codes.append((code, reason))
-                    with lock:
-                        unavailable_map[code] = {
-                            "reason": reason,
-                            "updated": date.today().isoformat(),
-                        }
-                        unavailable_dirty = True
-                    _log(f"  [SKIP] {code} {reason}")
-                else:
-                    fail += 1
-                    reason = err or "未知"
-                    fail_codes.append((code, reason))
-                    _log_err(f"  [WARN] {code} 失败: {reason}")
-                if i == 1 or i % _PROGRESS_EVERY == 0 or i == n_need:
-                    _log(
-                        _progress_line(
-                            i=i,
-                            total=n_need,
-                            ok=done,
-                            fail=fail,
-                            unavail=unavail,
-                            flushed=flushed,
-                            t0=t0,
-                        )
-                    )
-        with lock:
-            _flush_pending(reason="收尾")
+        def _flush_pending(*, reason: str) -> None:
+            nonlocal daily, pending, flushed
+            if not pending:
+                return
+            batch = pending
+            pending = {}
+            codes_batch = list(batch.keys())
+            _log(f"[backfill] 落盘 {len(codes_batch)} 码（{reason}）…")
+            t_f = time.time()
+            daily = merge_mv_into_daily(daily, batch)
+            flush_mv_codes(home, daily, codes_batch)
+            _record_no_mv_after_merge(codes_batch)
+            flushed += len(codes_batch)
             _persist_unavailable()
-        _log(
-            f"[backfill] 市值拉取结束：ok={done} fail={fail} unavail={unavail} "
-            f"flushed={flushed} 耗时 {time.time() - t0:.0f}s"
-        )
-        if unavail_codes:
-            sample = ", ".join(c for c, _ in unavail_codes[:10])
-            more = f" …另有 {len(unavail_codes) - 10} 只" if len(unavail_codes) > 10 else ""
+            _log(f"[backfill] 落盘完成 +{len(codes_batch)} → 累计 flushed={flushed} ({time.time() - t_f:.1f}s)")
+
+        if codes_todo:
+            _log(f"[backfill] 开始拉取市值：0/{n_need}（边拉边落盘）")
+            with ThreadPoolExecutor(max_workers=max(1, args.workers)) as ex:
+                futs = {ex.submit(_fetch_value_meta, c, interval=interval): c for c in codes_todo}
+                for i, fut in enumerate(as_completed(futs), 1):
+                    code = futs[fut]
+                    try:
+                        mv, err = fut.result()
+                    except Exception as e:  # noqa: BLE001
+                        mv, err = None, f"{type(e).__name__}: {e}"
+                    if mv:
+                        with lock:
+                            pending[code] = mv
+                            done += 1
+                            if len(pending) >= flush_every:
+                                _flush_pending(reason=f"满 {flush_every}")
+                    elif is_value_em_unavailable(err):
+                        reason = err or "源无市值数据"
+                        unavail += 1
+                        unavail_codes.append((code, reason))
+                        with lock:
+                            unavailable_map[code] = {
+                                "reason": reason,
+                                "updated": date.today().isoformat(),
+                            }
+                            unavailable_dirty = True
+                        _log(f"  [SKIP] {code} {reason}")
+                    else:
+                        fail += 1
+                        reason = err or "未知"
+                        fail_codes.append((code, reason))
+                        _log_err(f"  [WARN] {code} 失败: {reason}")
+                    if i == 1 or i % _PROGRESS_EVERY == 0 or i == n_need:
+                        _log(
+                            _progress_line(
+                                i=i,
+                                total=n_need,
+                                ok=done,
+                                fail=fail,
+                                unavail=unavail,
+                                flushed=flushed,
+                                t0=t0,
+                            )
+                        )
+            with lock:
+                _flush_pending(reason="收尾")
+                _persist_unavailable()
             _log(
-                f"[backfill] 源无市值 {len(unavail_codes)} 只（多退市）已登记跳过: "
-                f"{sample}{more} → {unavailable_path(home)}"
+                f"[backfill] 市值拉取结束：ok={done} fail={fail} unavail={unavail} "
+                f"flushed={flushed} 耗时 {time.time() - t0:.0f}s"
             )
-        if no_mv_added:
-            _log(
-                f"[backfill] 成功拉取后仍缺市值日新增豁免 {no_mv_added} 条 → {no_mv_path(home)}"
-            )
-        if fail_codes:
-            sample = ", ".join(f"{c}({r})" for c, r in fail_codes[:10])
-            more = f" …另有 {len(fail_codes) - 10} 只" if len(fail_codes) > 10 else ""
-            _log_err(f"[backfill] 失败样例: {sample}{more}（可重跑本脚本只补缺）")
+            if unavail_codes:
+                sample = ", ".join(c for c, _ in unavail_codes[:10])
+                more = f" …另有 {len(unavail_codes) - 10} 只" if len(unavail_codes) > 10 else ""
+                _log(
+                    f"[backfill] 源无市值 {len(unavail_codes)} 只（多退市）已登记跳过: "
+                    f"{sample}{more} → {unavailable_path(home)}"
+                )
+            if no_mv_added:
+                _log(
+                    f"[backfill] 成功拉取后仍缺市值日新增豁免 {no_mv_added} 条 → {no_mv_path(home)}"
+                )
+            if fail_codes:
+                sample = ", ".join(f"{c}({r})" for c, r in fail_codes[:10])
+                more = f" …另有 {len(fail_codes) - 10} 只" if len(fail_codes) > 10 else ""
+                _log_err(f"[backfill] 失败样例: {sample}{more}（可重跑本脚本只补缺）")
 
-    # 2) 推导 pre_close（本地，整表一次）
-    _log("[backfill] 推导 pre_close …")
-    t_pc = time.time()
-    daily = _derive_pre_close(daily)
-    _log(f"[backfill] pre_close 完成 ({time.time() - t_pc:.1f}s)")
+        # 2) 推导 pre_close（本地，整表一次）
+        _log("[backfill] 推导 pre_close …")
+        t_pc = time.time()
+        daily = _derive_pre_close(daily)
+        _log(f"[backfill] pre_close 完成 ({time.time() - t_pc:.1f}s)")
 
-    # 3) 可选当前名（默认不灌历史）
-    if args.fill_name:
-        _log("[backfill] --fill-name：拉取当前名表 …")
-        names = _fetch_code_names()
-        daily["name"] = daily["code"].map(names).fillna(daily.get("name", ""))
-        _log(f"[backfill] name 填充：映射 {len(names)} 只")
+        # 3) 可选当前名（默认不灌历史）
+        if args.fill_name:
+            _log("[backfill] --fill-name：拉取当前名表 …")
+            names = _fetch_code_names()
+            daily["name"] = daily["code"].map(names).fillna(daily.get("name", ""))
+            _log(f"[backfill] name 填充：映射 {len(names)} 只")
 
-    # 4) 最终写回（确保 pre_close / name 落盘；市值已在批次中写入）
-    _log("[backfill] 最终写回 daily_raw（含 pre_close）…")
-    t_w = time.time()
-    daily = daily.reindex(columns=DAILY_RAW_COLUMNS)
-    with override_quant_home(home):
+        # 4) 最终写回（确保 pre_close / name 落盘；市值已在批次中写入）
+        _log("[backfill] 最终写回 daily_raw（含 pre_close）…")
+        t_w = time.time()
+        daily = daily.reindex(columns=DAILY_RAW_COLUMNS)
         write_daily_raw(daily)
-    _log(f"[backfill] 最终写回完成 ({time.time() - t_w:.1f}s)")
+        _log(f"[backfill] 最终写回完成 ({time.time() - t_w:.1f}s)")
 
-    # 覆盖报告
-    n = len(daily)
-    mv = daily["float_mv"].notna().sum()
-    pc = daily["pre_close"].notna().sum()
-    _log(
-        f"[backfill] 汇总：{n:,} 行 · float_mv 非空 {mv:,}（{mv / max(n, 1):.1%}）· "
-        f"pre_close 非空 {pc:,}（{pc / max(n, 1):.1%}）"
-    )
-    _log(
-        f"[backfill] 拉取统计：计划 {n_need} · 成功 {done} · 失败 {fail} · "
-        f"源无 {unavail} · 已齐跳过 {n_skip_filled} · 源无预跳过 {n_unavail_skip} · "
-        f"落盘累计 {flushed} · no_mv 新增豁免 {no_mv_added}"
-    )
-    _log(f"[backfill] 建议校验：python -m scripts.data.validate_library --home {home}")
+        # 覆盖报告
+        n = len(daily)
+        mv = daily["float_mv"].notna().sum()
+        pc = daily["pre_close"].notna().sum()
+        _log(
+            f"[backfill] 汇总：{n:,} 行 · float_mv 非空 {mv:,}（{mv / max(n, 1):.1%}）· "
+            f"pre_close 非空 {pc:,}（{pc / max(n, 1):.1%}）"
+        )
+        _log(
+            f"[backfill] 拉取统计：计划 {n_need} · 成功 {done} · 失败 {fail} · "
+            f"源无 {unavail} · 已齐跳过 {n_skip_filled} · 源无预跳过 {n_unavail_skip} · "
+            f"落盘累计 {flushed} · no_mv 新增豁免 {no_mv_added}"
+        )
+        _log(f"[backfill] 建议校验：python -m scripts.data.validate_library --home {home}")
 
 
 if __name__ == "__main__":

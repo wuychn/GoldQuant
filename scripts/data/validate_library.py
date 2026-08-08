@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -36,7 +35,7 @@ from quant.data.store import (
     read_daily_raw,
     read_index_daily,
 )
-from quant.store.paths import override_quant_home
+from scripts.cli_home import add_home_argument, home_context
 
 JUMP_PCT = 28.0          # 后复权单日跳空阈值：合法 A 股涨停/跌停 ≤20%，>28% 必为复权/数据 bug
 ADJ_COVER_MIN = 0.90     # adj_factor 覆盖率红线
@@ -215,24 +214,20 @@ def _check_calendar_coverage(daily: pd.DataFrame, cal: list[str], start: str, en
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--home", default=None, help="quant-home 根；默认当前 QUANT_HOME")
-    ap.add_argument("--start", default="2000-01-01", help="检查起始日（默认全区间）")
-    ap.add_argument("--end", default="2099-12-31", help="检查结束日（默认全区间）")
+    ap = argparse.ArgumentParser(description="离线库完整性与正确性校验")
+    add_home_argument(ap)
+    ap.add_argument("--start", default="2000-01-01", help="检查起始日 YYYY-MM-DD（默认 2000-01-01，全区间）")
+    ap.add_argument("--end", default="2099-12-31", help="检查结束日 YYYY-MM-DD（默认 2099-12-31，全区间）")
     args = ap.parse_args()
 
-    home = Path(args.home).expanduser() if args.home else None
-    log_progress_start(_SCOPE, "开始", detail=f"home={home or '当前'} [{args.start},{args.end}]")
-    # 全部检查（含 read_index_daily / read_adj_factor / load_no_bar_map）都须在
-    # override 上下文内，否则 --home 只作用于前三读、其余读错目录。
-    ctx = override_quant_home(home) if home else __import__("contextlib").nullcontext()
+    log_progress_start(_SCOPE, "开始", detail=f"home={args.home or '当前'} [{args.start},{args.end}]")
     try:
-        with ctx:
+        with home_context(args.home):
             daily = read_daily_raw()
             adj = read_adj_factor()
             cal = read_calendar()
 
-            print(f"=== 校验 home: {home or '当前'}  窗口 [{args.start}, {args.end}] ===\n")
+            print(f"=== 校验 home: {args.home or '当前'}  窗口 [{args.start}, {args.end}] ===\n")
 
             # [1] 基础
             print("[1] 基础")

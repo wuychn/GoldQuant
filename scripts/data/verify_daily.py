@@ -16,6 +16,7 @@ import pandas as pd
 from common.progress_log import log_progress_done, log_progress_error, log_progress_start
 from quant.data.adjust import apply_hfq, read_adj_factor
 from quant.data.store import read_daily_raw
+from scripts.cli_home import add_home_argument, home_context
 
 _SCOPE = "verify_daily"
 
@@ -52,10 +53,11 @@ def _check_ex_div_continuity(daily: pd.DataFrame, adj: pd.DataFrame) -> list[str
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--sample", type=int, default=20, help="抽样代码数")
-    ap.add_argument("--start", default=None)
-    ap.add_argument("--end", default=None)
+    ap = argparse.ArgumentParser(description="抽样校验 daily_raw 连续性与后复权跨除权日跳变")
+    add_home_argument(ap)
+    ap.add_argument("--sample", type=int, default=20, help="随机抽样校验的股票只数（默认 20）")
+    ap.add_argument("--start", default=None, help="校验日期下限 YYYY-MM-DD，默认不限")
+    ap.add_argument("--end", default=None, help="校验日期上限 YYYY-MM-DD，默认不限")
     args = ap.parse_args()
 
     log_progress_start(
@@ -64,42 +66,43 @@ def main() -> None:
         detail=f"sample={args.sample} start={args.start} end={args.end}",
     )
     try:
-        daily = read_daily_raw(start=args.start, end=args.end)
-        if daily.empty:
-            log_progress_error(_SCOPE, "失败", detail="daily_raw 为空，请先运行 build_daily")
-            sys.exit(1)
+        with home_context(args.home):
+            daily = read_daily_raw(start=args.start, end=args.end)
+            if daily.empty:
+                log_progress_error(_SCOPE, "失败", detail="daily_raw 为空，请先运行 build_daily")
+                sys.exit(1)
 
-        print(f"daily_raw: {len(daily)} 行, {daily['code'].nunique()} 只, "
-              f"{daily['date'].min()} ~ {daily['date'].max()}")
+            print(f"daily_raw: {len(daily)} 行, {daily['code'].nunique()} 只, "
+                  f"{daily['date'].min()} ~ {daily['date'].max()}")
 
-        issues = _check_continuity(daily)
-        adj = read_adj_factor()
-        issues += _check_ex_div_continuity(daily, adj)
+            issues = _check_continuity(daily)
+            adj = read_adj_factor()
+            issues += _check_ex_div_continuity(daily, adj)
 
-        # 抽样：检查每只票的日期覆盖是否连续（无大段缺失）
-        codes = daily["code"].astype(str).unique().tolist()
-        sample = random.sample(codes, min(args.sample, len(codes)))
-        for code in sample:
-            g = daily[daily["code"] == code].sort_values("date")
-            dates = pd.to_datetime(g["date"])
-            if len(dates) < 2:
-                continue
-            gaps = dates.diff().dt.days
-            # 交易日间隔正常 ≤ 8 天（含节假日），> 15 天视为可疑缺失
-            big_gaps = gaps[gaps > 15]
-            for d, gap in big_gaps.items():
-                issues.append(f"{code} @ {d.date()} 缺失区间 {gap} 天")
+            # 抽样：检查每只票的日期覆盖是否连续（无大段缺失）
+            codes = daily["code"].astype(str).unique().tolist()
+            sample = random.sample(codes, min(args.sample, len(codes)))
+            for code in sample:
+                g = daily[daily["code"] == code].sort_values("date")
+                dates = pd.to_datetime(g["date"])
+                if len(dates) < 2:
+                    continue
+                gaps = dates.diff().dt.days
+                # 交易日间隔正常 ≤ 8 天（含节假日），> 15 天视为可疑缺失
+                big_gaps = gaps[gaps > 15]
+                for d, gap in big_gaps.items():
+                    issues.append(f"{code} @ {d.date()} 缺失区间 {gap} 天")
 
-        if issues:
-            print(f"\n发现 {len(issues)} 个问题:")
-            for s in issues[:30]:
-                print("  -", s)
-            if len(issues) > 30:
-                print(f"  ... 还有 {len(issues)-30} 条")
-            log_progress_error(_SCOPE, "失败", detail=f"{len(issues)} 个问题")
-            sys.exit(1)
-        print("校验通过，无断裂/缺失/复权异常")
-        log_progress_done(_SCOPE, "成功")
+            if issues:
+                print(f"\n发现 {len(issues)} 个问题:")
+                for s in issues[:30]:
+                    print("  -", s)
+                if len(issues) > 30:
+                    print(f"  ... 还有 {len(issues)-30} 条")
+                log_progress_error(_SCOPE, "失败", detail=f"{len(issues)} 个问题")
+                sys.exit(1)
+            print("校验通过，无断裂/缺失/复权异常")
+            log_progress_done(_SCOPE, "成功")
     except SystemExit:
         raise
     except Exception as e:

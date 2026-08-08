@@ -26,6 +26,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from scripts.cli_home import add_home_argument, home_context
+
 from quant.data.delist import fetch_delisted_codes, fetch_delisted_daily
 from quant.data.fetch import fetch_hist, fetch_index, fetch_trade_calendar
 from quant.data.store import (
@@ -494,12 +496,13 @@ def _refresh_adj_all(codes: list[str]) -> None:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--start", default="2021-01-01", help="起始日 YYYY-MM-DD")
-    ap.add_argument("--end", default=None, help="结束日 YYYY-MM-DD，默认今天")
-    ap.add_argument("--workers", type=int, default=3, help="并发数（建议 3-5）")
-    ap.add_argument("--limit", type=int, default=None, help="只拉前 N 只（调试用）")
-    ap.add_argument("--codes", default=None, help="逗号分隔的代码列表（调试用）")
+    ap = argparse.ArgumentParser(description="全量初始化离线日线库（逐只 hist + 指数 + 日历）")
+    add_home_argument(ap)
+    ap.add_argument("--start", default="2021-01-01", help="建库/检查起始日 YYYY-MM-DD（默认 2021-01-01）")
+    ap.add_argument("--end", default=None, help="建库/检查结束日 YYYY-MM-DD，默认今天")
+    ap.add_argument("--workers", type=int, default=3, help="并发拉取线程数（建议 3–5，夜间低并发更稳）")
+    ap.add_argument("--limit", type=int, default=None, help="只拉前 N 只股票（调试用）")
+    ap.add_argument("--codes", default=None, help="逗号分隔股票代码，仅拉指定码（调试用）")
     ap.add_argument(
         "--ignore-existing",
         action="store_true",
@@ -551,180 +554,181 @@ def main() -> None:
         set_eastmoney_interval(lo, hi)
         print(f"东财请求间隔: {lo},{hi}s", flush=True)
 
-    end = args.end or cn_now().strftime("%Y-%m-%d")
-    log_progress_start(
-        "build_daily",
-        "开始",
-        detail=f"start={args.start} end={end} workers={args.workers}",
-    )
-    do_gap_fill = False
-    plans: list[tuple[str, str, str]] = []
-
-    if args.retry_failed:
-        failed = _read_failed()
-        todo = [c for c, e in failed.items() if not e.get("dead")]
-        print(
-            f"--retry-failed: 清单 {len(failed)} 只（dead {len(failed) - len(todo)}），"
-            f"重试 {len(todo)} 只"
+    with home_context(args.home):
+        end = args.end or cn_now().strftime("%Y-%m-%d")
+        log_progress_start(
+            "build_daily",
+            "开始",
+            detail=f"start={args.start} end={end} workers={args.workers}",
         )
-        if not todo:
-            log_progress_done("build_daily", "成功", detail="无待重试 code，跳过")
-            return
-        codes = list(todo)
-        plans = [(c, args.start, end) for c in todo]
-        # 增量更新 listing_dates（retry 成功的码下次跑需要）
-        try:
-            from quant.data.listing import read_listing_map, build_listing_map_from_daily, write_listing_table
+        do_gap_fill = False
+        plans: list[tuple[str, str, str]] = []
 
-            listing_map = read_listing_map()
-            daily = read_daily_raw(start=args.start, end=end)
-            if not daily.empty:
-                raw_codes = set(daily["code"].astype(str).str.strip())
-                missing = raw_codes - set(listing_map.keys())
-                if missing:
-                    new_map = build_listing_map_from_daily(
-                        daily[daily["code"].astype(str).str.strip().isin(missing)]
-                    )
-                    listing_map.update(new_map)
-                    write_listing_table(listing_map)
-        except Exception:  # noqa: BLE001
-            pass
-    else:
-        # 交易日历
-        try:
-            cal = fetch_trade_calendar()
-            write_calendar([d for d in cal if d <= end])
-            print(f"交易日历: {len(cal)} 条")
-        except Exception as e:  # noqa: BLE001
-            print(f"[WARN] 交易日历拉取失败: {e}", file=sys.stderr)
-
-        # 基准指数
-        for idx in ("000300", "000905", "000852"):
-            try:
-                df = fetch_index(idx, start=args.start, end=end)
-                write_index_daily(df)
-                print(f"指数 {idx}: {len(df)} 行")
-            except Exception as e:  # noqa: BLE001
-                print(f"[WARN] 指数 {idx} 失败: {e}", file=sys.stderr)
-
-        # 代码表
-        if args.codes:
-            codes = [c.strip() for c in args.codes.split(",") if c.strip()]
-        else:
-            try:
-                codes = _all_codes()
-            except Exception as e:  # noqa: BLE001
-                print(f"[FATAL] 无法获取代码表（spot_em 失败）: {e}", file=sys.stderr)
-                sys.exit(1)
-            if not args.no_delisted:
-                try:
-                    del_codes = fetch_delisted_codes()["code"].astype(str).str.strip().tolist()
-                    # 退市股也按前缀过滤（排除三板退市 4xx、B股 9xx）
-                    del_codes = [c for c in del_codes if c.startswith(tuple(_load_prefixes()))]
-                    codes = list(dict.fromkeys(codes + del_codes))
-                    print(f"退市股并入: +{len(del_codes)} → 代码总数 {len(codes)}")
-                except Exception as e:  # noqa: BLE001
-                    print(f"[WARN] 退市清单拉取失败（跳过）: {e}", file=sys.stderr)
-        if args.limit:
-            codes = codes[: args.limit]
-        print(f"全A 代码数: {len(codes)}")
-
-        if args.ignore_existing:
-            plans = [(c, args.start, end) for c in codes]
+        if args.retry_failed:
+            failed = _read_failed()
+            todo = [c for c, e in failed.items() if not e.get("dead")]
             print(
-                f"--ignore-existing：强制全拉 {len(plans)} 只 "
-                f"{args.start}~{end}（write 按 code+date 去重，不重复）"
+                f"--retry-failed: 清单 {len(failed)} 只（dead {len(failed) - len(todo)}），"
+                f"重试 {len(todo)} 只"
             )
-        else:
-            daily = read_daily_raw(start=args.start, end=end)
-            cal_local = read_calendar()
-            listing_map: dict[str, str] = {}
+            if not todo:
+                log_progress_done("build_daily", "成功", detail="无待重试 code，跳过")
+                return
+            codes = list(todo)
+            plans = [(c, args.start, end) for c in todo]
+            # 增量更新 listing_dates（retry 成功的码下次跑需要）
             try:
-                from quant.data.listing import read_listing_map
+                from quant.data.listing import read_listing_map, build_listing_map_from_daily, write_listing_table
 
                 listing_map = read_listing_map()
-            except Exception as e:  # noqa: BLE001
-                print(f"[WARN] 读取 listing_dates 失败: {e}", file=sys.stderr)
-            # listing_dates 增量更新：只补 daily_raw 中尚未记录的码（库首日 = 上市日近似）
-            # 避免每次全量重建（与 build_daily 的断点续传理念一致）
-            if not daily.empty:
-                from quant.data.listing import build_listing_map_from_daily, write_listing_table
-
-                raw_codes = set(daily["code"].astype(str).str.strip())
-                missing = raw_codes - set(listing_map.keys())
-                if missing:
-                    new_map = build_listing_map_from_daily(
-                        daily[daily["code"].astype(str).str.strip().isin(missing)]
-                    )
-                    listing_map.update(new_map)
-                    write_listing_table(listing_map)
-                    print(f"listing_dates 增量更新: +{len(new_map)} 只 → 共 {len(listing_map)} 只")
-            plans = incomplete_fetch_plans(
-                codes,
-                start=args.start,
-                end=end,
-                daily=daily,
-                calendar=cal_local,
-                listing_map=listing_map,
-                no_bar_map=load_no_bar_map(),
-            )
-            n_have = 0 if daily.empty else daily["code"].astype(str).nunique()
-            print(f"完整性检查区间: {args.start} ~ {end}")
-            print(
-                f"完整性检查: 区间内已有 {n_have} 只，"
-                f"缺日待拉 {len(plans)}/{len(codes)}（待拉码按全区间 {args.start}~{end} 补拉）"
-            )
-            # 自动并入非 dead 失败码（尚无计划的用全区间；已有计划保留缺失窗）
-            failed_map = _read_failed()
-            planned = {c for c, _, _ in plans}
-            extra_all = [
-                c for c, e in failed_map.items() if not e.get("dead") and c not in planned
-            ]
-            if args.codes or args.limit:
-                code_set = set(codes)
-                extra = [c for c in extra_all if c in code_set]
-            else:
-                extra = extra_all
-            if extra:
-                plans.extend((c, args.start, end) for c in extra)
-                print(f"并入失败清单非 dead: +{len(extra)} → 待拉 {len(plans)}")
-            do_gap_fill = not args.no_gap_fill
-
-    # 第一轮拉取
-    results = _run_pull(plans, workers=args.workers, label="[轮1] ")
-    failed = _update_failed(results, dead_threshold=args.dead_threshold)
-    n_dead = sum(1 for e in failed.values() if e.get("dead"))
-    print(f"失败清单: {len(failed)} 只（dead {n_dead}）→ {_failed_file()}")
-
-    # 第二轮：市场级缺失交易日窗口补拉
-    if do_gap_fill:
-        try:
-            missing = market_missing_dates(start=args.start, end=end)
-        except Exception as e:  # noqa: BLE001
-            print(f"[WARN] 市场缺口扫描失败: {e}", file=sys.stderr)
-            missing = []
-        if missing:
-            gap_start, gap_end = missing[0], missing[-1]
-            print(
-                f"[轮2] 市场级缺口 {len(missing)} 个交易日: "
-                f"{gap_start} ~ {gap_end} → 全代码补拉该窗"
-            )
-            plans2 = [(c, gap_start, gap_end) for c in codes]
-            results2 = _run_pull(plans2, workers=args.workers, label="[轮2] ")
-            failed = _update_failed(results2, dead_threshold=args.dead_threshold)
-            n_dead = sum(1 for e in failed.values() if e.get("dead"))
-            print(f"失败清单: {len(failed)} 只（dead {n_dead}）→ {_failed_file()}")
+                daily = read_daily_raw(start=args.start, end=end)
+                if not daily.empty:
+                    raw_codes = set(daily["code"].astype(str).str.strip())
+                    missing = raw_codes - set(listing_map.keys())
+                    if missing:
+                        new_map = build_listing_map_from_daily(
+                            daily[daily["code"].astype(str).str.strip().isin(missing)]
+                        )
+                        listing_map.update(new_map)
+                        write_listing_table(listing_map)
+            except Exception:  # noqa: BLE001
+                pass
         else:
-            print("[轮2] 市场级日期完整，无缺口")
+            # 交易日历
+            try:
+                cal = fetch_trade_calendar()
+                write_calendar([d for d in cal if d <= end])
+                print(f"交易日历: {len(cal)} 条")
+            except Exception as e:  # noqa: BLE001
+                print(f"[WARN] 交易日历拉取失败: {e}", file=sys.stderr)
 
-    # 后复权因子（默认开；--no-adj 跳过）：增量补拉缺失码
-    if not args.no_adj:
-        print("\n=== 检查复权因子 ===", flush=True)
-        _refresh_adj_all(codes)
-        log_progress_done("build_daily", "成功", detail="含复权因子")
-    else:
-        print("\n=== --no-adj 跳过复权因子 ===", flush=True)
-        log_progress_done("build_daily", "成功", detail="不含复权因子（--no-adj）")
+            # 基准指数
+            for idx in ("000300", "000905", "000852"):
+                try:
+                    df = fetch_index(idx, start=args.start, end=end)
+                    write_index_daily(df)
+                    print(f"指数 {idx}: {len(df)} 行")
+                except Exception as e:  # noqa: BLE001
+                    print(f"[WARN] 指数 {idx} 失败: {e}", file=sys.stderr)
+
+            # 代码表
+            if args.codes:
+                codes = [c.strip() for c in args.codes.split(",") if c.strip()]
+            else:
+                try:
+                    codes = _all_codes()
+                except Exception as e:  # noqa: BLE001
+                    print(f"[FATAL] 无法获取代码表（spot_em 失败）: {e}", file=sys.stderr)
+                    sys.exit(1)
+                if not args.no_delisted:
+                    try:
+                        del_codes = fetch_delisted_codes()["code"].astype(str).str.strip().tolist()
+                        # 退市股也按前缀过滤（排除三板退市 4xx、B股 9xx）
+                        del_codes = [c for c in del_codes if c.startswith(tuple(_load_prefixes()))]
+                        codes = list(dict.fromkeys(codes + del_codes))
+                        print(f"退市股并入: +{len(del_codes)} → 代码总数 {len(codes)}")
+                    except Exception as e:  # noqa: BLE001
+                        print(f"[WARN] 退市清单拉取失败（跳过）: {e}", file=sys.stderr)
+            if args.limit:
+                codes = codes[: args.limit]
+            print(f"全A 代码数: {len(codes)}")
+
+            if args.ignore_existing:
+                plans = [(c, args.start, end) for c in codes]
+                print(
+                    f"--ignore-existing：强制全拉 {len(plans)} 只 "
+                    f"{args.start}~{end}（write 按 code+date 去重，不重复）"
+                )
+            else:
+                daily = read_daily_raw(start=args.start, end=end)
+                cal_local = read_calendar()
+                listing_map: dict[str, str] = {}
+                try:
+                    from quant.data.listing import read_listing_map
+
+                    listing_map = read_listing_map()
+                except Exception as e:  # noqa: BLE001
+                    print(f"[WARN] 读取 listing_dates 失败: {e}", file=sys.stderr)
+                # listing_dates 增量更新：只补 daily_raw 中尚未记录的码（库首日 = 上市日近似）
+                # 避免每次全量重建（与 build_daily 的断点续传理念一致）
+                if not daily.empty:
+                    from quant.data.listing import build_listing_map_from_daily, write_listing_table
+
+                    raw_codes = set(daily["code"].astype(str).str.strip())
+                    missing = raw_codes - set(listing_map.keys())
+                    if missing:
+                        new_map = build_listing_map_from_daily(
+                            daily[daily["code"].astype(str).str.strip().isin(missing)]
+                        )
+                        listing_map.update(new_map)
+                        write_listing_table(listing_map)
+                        print(f"listing_dates 增量更新: +{len(new_map)} 只 → 共 {len(listing_map)} 只")
+                plans = incomplete_fetch_plans(
+                    codes,
+                    start=args.start,
+                    end=end,
+                    daily=daily,
+                    calendar=cal_local,
+                    listing_map=listing_map,
+                    no_bar_map=load_no_bar_map(),
+                )
+                n_have = 0 if daily.empty else daily["code"].astype(str).nunique()
+                print(f"完整性检查区间: {args.start} ~ {end}")
+                print(
+                    f"完整性检查: 区间内已有 {n_have} 只，"
+                    f"缺日待拉 {len(plans)}/{len(codes)}（待拉码按全区间 {args.start}~{end} 补拉）"
+                )
+                # 自动并入非 dead 失败码（尚无计划的用全区间；已有计划保留缺失窗）
+                failed_map = _read_failed()
+                planned = {c for c, _, _ in plans}
+                extra_all = [
+                    c for c, e in failed_map.items() if not e.get("dead") and c not in planned
+                ]
+                if args.codes or args.limit:
+                    code_set = set(codes)
+                    extra = [c for c in extra_all if c in code_set]
+                else:
+                    extra = extra_all
+                if extra:
+                    plans.extend((c, args.start, end) for c in extra)
+                    print(f"并入失败清单非 dead: +{len(extra)} → 待拉 {len(plans)}")
+                do_gap_fill = not args.no_gap_fill
+
+        # 第一轮拉取
+        results = _run_pull(plans, workers=args.workers, label="[轮1] ")
+        failed = _update_failed(results, dead_threshold=args.dead_threshold)
+        n_dead = sum(1 for e in failed.values() if e.get("dead"))
+        print(f"失败清单: {len(failed)} 只（dead {n_dead}）→ {_failed_file()}")
+
+        # 第二轮：市场级缺失交易日窗口补拉
+        if do_gap_fill:
+            try:
+                missing = market_missing_dates(start=args.start, end=end)
+            except Exception as e:  # noqa: BLE001
+                print(f"[WARN] 市场缺口扫描失败: {e}", file=sys.stderr)
+                missing = []
+            if missing:
+                gap_start, gap_end = missing[0], missing[-1]
+                print(
+                    f"[轮2] 市场级缺口 {len(missing)} 个交易日: "
+                    f"{gap_start} ~ {gap_end} → 全代码补拉该窗"
+                )
+                plans2 = [(c, gap_start, gap_end) for c in codes]
+                results2 = _run_pull(plans2, workers=args.workers, label="[轮2] ")
+                failed = _update_failed(results2, dead_threshold=args.dead_threshold)
+                n_dead = sum(1 for e in failed.values() if e.get("dead"))
+                print(f"失败清单: {len(failed)} 只（dead {n_dead}）→ {_failed_file()}")
+            else:
+                print("[轮2] 市场级日期完整，无缺口")
+
+        # 后复权因子（默认开；--no-adj 跳过）：增量补拉缺失码
+        if not args.no_adj:
+            print("\n=== 检查复权因子 ===", flush=True)
+            _refresh_adj_all(codes)
+            log_progress_done("build_daily", "成功", detail="含复权因子")
+        else:
+            print("\n=== --no-adj 跳过复权因子 ===", flush=True)
+            log_progress_done("build_daily", "成功", detail="不含复权因子（--no-adj）")
 
 
 if __name__ == "__main__":

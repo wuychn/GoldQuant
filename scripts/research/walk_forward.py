@@ -23,6 +23,7 @@ from quant.portfolio.target import TargetPortfolio
 from quant.research.sensitivity import parameter_budget, scan_param
 from quant.research.significance import deflated_sharpe
 from quant.research.walk_forward import walk_forward
+from scripts.cli_home import add_home_argument, home_context
 
 _SCOPE = "walk_forward"
 
@@ -32,197 +33,197 @@ def _build_alpha(dates: list[str], daily):
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--start", required=True)
-    ap.add_argument("--end", required=True)
-    ap.add_argument("--out", default=None, help="默认 $QUANT_HOME/reports/wf")
-    ap.add_argument("--train-months", type=int, default=24)
-    ap.add_argument("--test-months", type=int, default=6)
-    ap.add_argument("--max-positions", type=int, default=10)
+    ap = argparse.ArgumentParser(description="Walk-forward 回测 + DSR + 参数敏感性研究")
+    add_home_argument(ap)
+    ap.add_argument("--start", required=True, help="全样本起始日 YYYY-MM-DD（含）")
+    ap.add_argument("--end", required=True, help="全样本结束日 YYYY-MM-DD（含）")
+    ap.add_argument("--out", default=None, help="报告输出目录；默认 $QUANT_HOME/reports/wf")
+    ap.add_argument("--train-months", type=int, default=24, help="每折训练窗口（月，默认 24）")
+    ap.add_argument("--test-months", type=int, default=6, help="每折测试窗口（月，默认 6）")
+    ap.add_argument("--max-positions", type=int, default=10, help="最大持仓只数（默认 10）")
     args = ap.parse_args()
 
-    log_progress_start(_SCOPE, "开始", detail=f"{args.start} ~ {args.end}")
-    try:
-        dates = [
-            to_iso(d)
-            for d in trading_day_list(date.fromisoformat(args.start), date.fromisoformat(args.end))
-        ]
-        if len(dates) < 300:
-            log_progress_error(_SCOPE, "失败", detail=f"交易日过少 ({len(dates)})，无法 walk-forward")
-            sys.exit(1)
-
-        if not args.out:
+    with home_context(args.home):
+        log_progress_start(_SCOPE, "开始", detail=f"{args.start} ~ {args.end}")
+        try:
             from quant.store.paths import reports_dir
 
-            args.out = str(reports_dir("wf"))
+            dates = [
+                to_iso(d)
+                for d in trading_day_list(date.fromisoformat(args.start), date.fromisoformat(args.end))
+            ]
+            if len(dates) < 300:
+                log_progress_error(_SCOPE, "失败", detail=f"交易日过少 ({len(dates)})，无法 walk-forward")
+                sys.exit(1)
 
-        daily = load_adjusted_daily()
-        log_progress(_SCOPE, "构建全区间因子面板 …")
-        alpha_all = _build_alpha(dates, daily)
+            out_dir = Path(args.out) if args.out else Path(reports_dir("wf"))
 
-        train_size = int(args.train_months * 21)
-        test_size = int(args.test_months * 21)
-        step = test_size
+            daily = load_adjusted_daily()
+            log_progress(_SCOPE, "构建全区间因子面板 …")
+            alpha_all = _build_alpha(dates, daily)
 
-        grid = {
-            "n_enter": [6, 8, 10],
-            "n_exit": [12, 15, 18],
-            "target_vol": [0.12, 0.15, 0.18],
-        }
-        n_trials = parameter_budget(3, 3)
-        print(f"网格组合数≈{n_trials}")
+            train_size = int(args.train_months * 21)
+            test_size = int(args.test_months * 21)
+            step = test_size
 
-        best_params_by_fold: list[dict] = []
-        tried_sharpes: list[float] = []
-        fold_i = 0
+            grid = {
+                "n_enter": [6, 8, 10],
+                "n_exit": [12, 15, 18],
+                "target_vol": [0.12, 0.15, 0.18],
+            }
+            n_trials = parameter_budget(3, 3)
+            print(f"网格组合数≈{n_trials}")
 
-        def run_fn(train_dates: list[str], test_dates: list[str]) -> dict:
-            nonlocal fold_i
-            fold_i += 1
-            log_progress(
-                _SCOPE,
-                "fold",
-                detail=f"#{fold_i} train={train_dates[0]}~{train_dates[-1]} test={test_dates[0]}~{test_dates[-1]}",
-            )
-            best_sh = -1e9
-            best_p = {"n_enter": 8, "n_exit": 15, "target_vol": 0.15}
-            for ne, nx, tv in itertools.product(grid["n_enter"], grid["n_exit"], grid["target_vol"]):
-                if nx < ne:
-                    continue
+            best_params_by_fold: list[dict] = []
+            tried_sharpes: list[float] = []
+            fold_i = 0
 
-                def alpha_fn(d, _rows, _a=alpha_all):
+            def run_fn(train_dates: list[str], test_dates: list[str]) -> dict:
+                nonlocal fold_i
+                fold_i += 1
+                log_progress(
+                    _SCOPE,
+                    "fold",
+                    detail=f"#{fold_i} train={train_dates[0]}~{train_dates[-1]} test={test_dates[0]}~{test_dates[-1]}",
+                )
+                best_sh = -1e9
+                best_p = {"n_enter": 8, "n_exit": 15, "target_vol": 0.15}
+                for ne, nx, tv in itertools.product(grid["n_enter"], grid["n_exit"], grid["target_vol"]):
+                    if nx < ne:
+                        continue
+
+                    def alpha_fn(d, _rows, _a=alpha_all):
+                        return _a.get(d, {})
+
+                    policy = TargetPortfolio(
+                        n_enter=ne, n_exit=nx, max_stocks=args.max_positions, target_vol=tv, daily=daily
+                    )
+                    broker = run_backtest(
+                        daily=daily,
+                        dates=train_dates,
+                        alpha_fn=alpha_fn,
+                        policy=policy,
+                        max_positions=args.max_positions,
+                        exit_config=ExitConfig(),
+                        strict_signals=True,
+                    )
+                    m = compute_metrics(broker)
+                    sh = float(m.get("sharpe") or 0.0)
+                    tried_sharpes.append(sh)
+                    if sh > best_sh:
+                        best_sh = sh
+                        best_p = {"n_enter": ne, "n_exit": nx, "target_vol": tv}
+
+                best_params_by_fold.append(best_p)
+
+                def alpha_fn_test(d, _rows, _a=alpha_all):
                     return _a.get(d, {})
 
                 policy = TargetPortfolio(
-                    n_enter=ne, n_exit=nx, max_stocks=args.max_positions, target_vol=tv, daily=daily
+                    n_enter=best_p["n_enter"],
+                    n_exit=best_p["n_exit"],
+                    max_stocks=args.max_positions,
+                    target_vol=best_p["target_vol"],
+                    daily=daily,
                 )
                 broker = run_backtest(
                     daily=daily,
-                    dates=train_dates,
-                    alpha_fn=alpha_fn,
+                    dates=test_dates,
+                    alpha_fn=alpha_fn_test,
                     policy=policy,
                     max_positions=args.max_positions,
                     exit_config=ExitConfig(),
                     strict_signals=True,
                 )
-                m = compute_metrics(broker)
-                sh = float(m.get("sharpe") or 0.0)
-                tried_sharpes.append(sh)
-                if sh > best_sh:
-                    best_sh = sh
-                    best_p = {"n_enter": ne, "n_exit": nx, "target_vol": tv}
+                eq = [v for _, v in broker.equity_curve]
+                return {"equity": eq, "metrics": compute_metrics(broker), "params": best_p}
 
-            best_params_by_fold.append(best_p)
-
-            def alpha_fn_test(d, _rows, _a=alpha_all):
-                return _a.get(d, {})
-
-            policy = TargetPortfolio(
-                n_enter=best_p["n_enter"],
-                n_exit=best_p["n_exit"],
-                max_stocks=args.max_positions,
-                target_vol=best_p["target_vol"],
-                daily=daily,
+            wf = walk_forward(
+                dates,
+                train_size=train_size,
+                test_size=test_size,
+                step=step,
+                run_fn=run_fn,
             )
-            broker = run_backtest(
-                daily=daily,
-                dates=test_dates,
-                alpha_fn=alpha_fn_test,
-                policy=policy,
-                max_positions=args.max_positions,
-                exit_config=ExitConfig(),
-                strict_signals=True,
-            )
-            eq = [v for _, v in broker.equity_curve]
-            return {"equity": eq, "metrics": compute_metrics(broker), "params": best_p}
 
-        wf = walk_forward(
-            dates,
-            train_size=train_size,
-            test_size=test_size,
-            step=step,
-            run_fn=run_fn,
-        )
-
-        def alpha_fn_all(d, _rows):
-            return alpha_all.get(d, {})
-
-        is_broker = run_backtest(
-            daily=daily,
-            dates=dates,
-            alpha_fn=alpha_fn_all,
-            policy=TargetPortfolio(max_stocks=args.max_positions, daily=daily),
-            max_positions=args.max_positions,
-            exit_config=ExitConfig(),
-            strict_signals=True,
-        )
-        is_m = compute_metrics(is_broker)
-        is_sh = float(is_m.get("sharpe") or 0.0)
-        oos_is_ratio = (wf.oos_sharpe / is_sh) if abs(is_sh) > 1e-9 else 0.0
-
-        dsr = deflated_sharpe(
-            wf.oos_sharpe,
-            n=max(wf.n_test_days, 2),
-            n_trials=max(n_trials, len(tried_sharpes) or 1),
-        )
-
-        window = dates[-min(252, len(dates)) :]
-
-        def sens_run(val: float) -> float:
-            ne = max(3, int(round(val)))
-
-            def af(d, _r):
+            def alpha_fn_all(d, _rows):
                 return alpha_all.get(d, {})
 
-            b = run_backtest(
+            is_broker = run_backtest(
                 daily=daily,
-                dates=window,
-                alpha_fn=af,
-                policy=TargetPortfolio(
-                    n_enter=ne, n_exit=max(ne + 5, 15), max_stocks=args.max_positions, daily=daily
-                ),
+                dates=dates,
+                alpha_fn=alpha_fn_all,
+                policy=TargetPortfolio(max_stocks=args.max_positions, daily=daily),
                 max_positions=args.max_positions,
                 exit_config=ExitConfig(),
                 strict_signals=True,
             )
-            return float(compute_metrics(b).get("sharpe") or 0.0)
+            is_m = compute_metrics(is_broker)
+            is_sh = float(is_m.get("sharpe") or 0.0)
+            oos_is_ratio = (wf.oos_sharpe / is_sh) if abs(is_sh) > 1e-9 else 0.0
 
-        sens = scan_param("n_enter", [6.0, 8.0, 10.0, 12.0], run_fn=sens_run)
+            dsr = deflated_sharpe(
+                wf.oos_sharpe,
+                n=max(wf.n_test_days, 2),
+                n_trials=max(n_trials, len(tried_sharpes) or 1),
+            )
 
-        out = {
-            "oos_sharpe": wf.oos_sharpe,
-            "oos_ann_return": wf.oos_ann_return,
-            "oos_ann_vol": wf.oos_ann_vol,
-            "n_folds": wf.n_folds,
-            "fold_sharpe": wf.fold_sharpe,
-            "is_sharpe": is_sh,
-            "oos_is_ratio": round(oos_is_ratio, 3),
-            "dsr": dsr,
-            "n_trials": n_trials,
-            "best_params_by_fold": best_params_by_fold,
-            "sensitivity_n_enter": {
-                "param": sens.param,
-                "grid": sens.grid,
-                "sharpes": sens.sharpes,
-                "stability": sens.stability,
-                "peak_to_median": sens.peak_to_median,
-            },
-            "parameter_budget_trials": n_trials,
-            "strict_signals": True,
-            "weights_source": "ic_walk_forward",
-        }
-        out_dir = Path(args.out)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        path = out_dir / "walk_forward.json"
-        path.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
-        print(json.dumps(out, ensure_ascii=False, indent=2))
-        print(f"写入 {path}")
-        log_progress_done(_SCOPE, "成功", detail=f"folds={wf.n_folds} → {path}")
-    except SystemExit:
-        raise
-    except Exception as e:
-        log_progress_error(_SCOPE, "失败", detail=f"{type(e).__name__}: {e}")
-        raise
+            window = dates[-min(252, len(dates)) :]
+
+            def sens_run(val: float) -> float:
+                ne = max(3, int(round(val)))
+
+                def af(d, _r):
+                    return alpha_all.get(d, {})
+
+                b = run_backtest(
+                    daily=daily,
+                    dates=window,
+                    alpha_fn=af,
+                    policy=TargetPortfolio(
+                        n_enter=ne, n_exit=max(ne + 5, 15), max_stocks=args.max_positions, daily=daily
+                    ),
+                    max_positions=args.max_positions,
+                    exit_config=ExitConfig(),
+                    strict_signals=True,
+                )
+                return float(compute_metrics(b).get("sharpe") or 0.0)
+
+            sens = scan_param("n_enter", [6.0, 8.0, 10.0, 12.0], run_fn=sens_run)
+
+            out = {
+                "oos_sharpe": wf.oos_sharpe,
+                "oos_ann_return": wf.oos_ann_return,
+                "oos_ann_vol": wf.oos_ann_vol,
+                "n_folds": wf.n_folds,
+                "fold_sharpe": wf.fold_sharpe,
+                "is_sharpe": is_sh,
+                "oos_is_ratio": round(oos_is_ratio, 3),
+                "dsr": dsr,
+                "n_trials": n_trials,
+                "best_params_by_fold": best_params_by_fold,
+                "sensitivity_n_enter": {
+                    "param": sens.param,
+                    "grid": sens.grid,
+                    "sharpes": sens.sharpes,
+                    "stability": sens.stability,
+                    "peak_to_median": sens.peak_to_median,
+                },
+                "parameter_budget_trials": n_trials,
+                "strict_signals": True,
+                "weights_source": "ic_walk_forward",
+            }
+            out_dir.mkdir(parents=True, exist_ok=True)
+            path = out_dir / "walk_forward.json"
+            path.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+            print(json.dumps(out, ensure_ascii=False, indent=2))
+            print(f"写入 {path}")
+            log_progress_done(_SCOPE, "成功", detail=f"folds={wf.n_folds} → {path}")
+        except SystemExit:
+            raise
+        except Exception as e:
+            log_progress_error(_SCOPE, "失败", detail=f"{type(e).__name__}: {e}")
+            raise
 
 
 if __name__ == "__main__":
