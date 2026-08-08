@@ -310,9 +310,9 @@ def fetch_main_net_inflow_5d(
 
     print(
         f"{_LOG} 【阶段2/2·逐票补缺】源=enrich.fetch_stock_fund_flow_daily · "
-        f"逐票间隔{sym_lo:.0f}~{sym_hi:.0f}s · "
-        f"待补 {len(missing)} · 已有 {len(need) - len(missing)} "
-        f"（分页已有码不重拉；断连休眠后重试同码）",
+        f"间隔{sym_lo:.0f}~{sym_hi:.0f}s · "
+        f"已有 {len(need) - len(missing)} · 待拉 {len(missing)} · 总共 {len(need)} "
+        f"（分页已有不重拉；进度每 50 只汇总；断连休眠后重试）",
         flush=True,
     )
     sources.append("enrich.fetch_stock_fund_flow_daily")
@@ -372,27 +372,38 @@ def _fill_per_symbol(
     done = set() if force else _read_per_symbol_done(as_of)
     filled = {} if force else _read_per_symbol_values(as_of)
     pending = [c for c in codes if c not in done and c not in filled]
-    if len(codes) - len(pending):
-        print(
-            f"{_LOG} 【逐票断点】跳过已完成 {len(codes) - len(pending)} · 待拉 {len(pending)}",
-            flush=True,
-        )
+    total = len(codes)
+    already = total - len(pending)
+    print(
+        f"{_LOG} 【逐票】已完成 {already} · 待拉 {len(pending)} · 总共 {total}",
+        flush=True,
+    )
+    if not pending:
+        return 0, 0, filled
 
     ok_n = 0
     fail_n = 0
+    progress_every = 50
 
     async def _pull(code: str):
         return await try_with_fallback_async(
             "enrich", "fetch_stock_fund_flow_daily", symbol=code, days=10
         )
 
+    def _log_progress(done_n: int) -> None:
+        remain = len(pending) - done_n
+        print(
+            f"{_LOG} 【逐票进度】已成功 {ok_n} · 失败/空 {fail_n} · "
+            f"本批已处理 {done_n}/{len(pending)} · 待拉 {remain} · "
+            f"总共 {total}（含断点已完成 {already}）",
+            flush=True,
+        )
+
     i = 0
     while i < len(pending):
         code = pending[i]
         if i > 0:
-            gap = random.uniform(interval_lo, interval_hi)
-            print(f"{_LOG} 【逐票等待】{gap:.0f}s 后拉 {code}", flush=True)
-            time.sleep(gap)
+            time.sleep(random.uniform(interval_lo, interval_hi))
         try:
             recs = asyncio.run(_pull(code))
             net = _sum_main_net_5d(recs)
@@ -400,43 +411,30 @@ def _fill_per_symbol(
             if _is_disconnect(exc):
                 sec = random.uniform(pause_lo, pause_hi)
                 print(
-                    f"{_LOG} 【逐票断连】{code} · {type(exc).__name__}: {exc}",
-                    flush=True,
-                )
-                print(
-                    f"{_LOG} 【休眠开始】约 {sec / 60:.1f} 分钟（{sec:.0f}s）· "
-                    f"不记完成 · 醒来后重试 {code}",
+                    f"{_LOG} 【逐票断连】{code} · {type(exc).__name__}: {exc} · "
+                    f"休眠 {sec / 60:.1f} 分钟后重试（已成功 {ok_n} · "
+                    f"待拉 {len(pending) - i} · 总共 {total}）",
                     flush=True,
                 )
                 time.sleep(sec)
-                print(f"{_LOG} 【休眠结束】重试 {code}", flush=True)
                 continue  # 同码再试，断点不前进
-            print(
-                f"{_LOG} 【逐票失败】{i + 1}/{len(pending)} {code} · "
-                f"{type(exc).__name__}: {exc}（记完成，不再重打）",
-                flush=True,
-            )
             fail_n += 1
             done.add(code)
             _write_per_symbol_state(as_of, done, filled)
             i += 1
+            if i % progress_every == 0 or i == len(pending):
+                _log_progress(i)
             continue
 
         done.add(code)
         if net is not None:
             filled[code] = float(net)
             ok_n += 1
-            print(
-                f"{_LOG} 【逐票成功】{i + 1}/{len(pending)} {code} net={net:.0f}",
-                flush=True,
-            )
         else:
             fail_n += 1
-            print(
-                f"{_LOG} 【逐票空数据】{i + 1}/{len(pending)} {code}（记完成，不再重打）",
-                flush=True,
-            )
         _write_per_symbol_state(as_of, done, filled)
         i += 1
+        if i % progress_every == 0 or i == len(pending):
+            _log_progress(i)
 
     return ok_n, fail_n, filled

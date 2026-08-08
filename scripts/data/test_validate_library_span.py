@@ -66,6 +66,27 @@ class DataSpanAndMarketGapsTests(unittest.TestCase):
         self.assertIn("2024-01-01", text)
         self.assertIn("2024-01-12", text)
 
+    def test_after_end_excludes_future_beyond_as_of(self):
+        """默认窗口 end 很远时，未来交易日不得计入「未入库」。"""
+        daily = pd.DataFrame(
+            {
+                "code": ["000001", "000001"],
+                "date": ["2026-08-06", "2026-08-07"],
+            }
+        )
+        cal = [
+            "2026-08-06",
+            "2026-08-07",
+            "2026-08-08",
+            "2026-08-10",  # 假设 as_of=08-08 之后
+            "2026-12-31",
+        ]
+        lo, hi, span, missing, after = data_span_and_market_gaps(
+            daily, cal, "2000-01-01", "2099-12-31", as_of="2026-08-08"
+        )
+        self.assertEqual(hi, "2026-08-07")
+        self.assertEqual(after, ["2026-08-08"])  # 仅截至 as_of；不含 08-10/12-31
+
 
 if __name__ == "__main__":
     unittest.main()

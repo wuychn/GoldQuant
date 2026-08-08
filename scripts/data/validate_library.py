@@ -88,14 +88,21 @@ def data_span_and_market_gaps(
     cal: list[str],
     start: str,
     end: str,
+    *,
+    as_of: str | None = None,
 ) -> tuple[str | None, str | None, list[str], list[str], list[str]]:
     """窗口内实际数据起止、市场级缺日、末日之后未入库交易日。
 
     返回 ``(lo, hi, span_days, market_missing, after_end)``：
     - ``span_days``：``[lo, hi]`` 内日历交易日（已排除非交易日）
     - ``market_missing``：跨度内全市场都无 K 线的交易日（「中间缺」）
-    - ``after_end``：数据末日之后、仍在检查窗口内的交易日（「尚未更新到」）
+    - ``after_end``：数据末日之后、且不超过 ``as_of``（默认今天）的交易日
+      （「尚未更新到」；**不含未来日**——日历常铺到远期，未来不可能有数据）
     """
+    from datetime import date as date_cls
+
+    from quant.data.calendar import to_iso
+
     if daily is None or daily.empty or not cal:
         return None, None, [], [], []
     d = daily.copy()
@@ -109,7 +116,11 @@ def data_span_and_market_gaps(
     span = [x for x in days if lo <= x <= hi]
     have = set(in_win["date"].unique())
     market_missing = [x for x in span if x not in have]
-    after_end = [x for x in days if x > hi]
+    # 未入库只统计到「今天/as_of」：默认 end=2099 时日历含大量未来日，不应报缺
+    cap = to_iso(as_of) if as_of else to_iso(date_cls.today())
+    if end < cap:
+        cap = end
+    after_end = [x for x in days if hi < x <= cap]
     return lo, hi, span, market_missing, after_end
 
 
@@ -245,14 +256,15 @@ def _check_calendar_coverage(daily: pd.DataFrame, cal: list[str], start: str, en
         print("  [OK]   市场级缺日: 0（跨度内每个交易日至少有一只票有 K 线）")
     if after_end:
         print(
-            f"  [INF]  数据末日之后、窗口内仍有 {len(after_end)} 个交易日未入库"
-            f"（尚未更新到；非中间缺日）:\n"
+            f"  [INF]  数据末日之后、截至今日仍有 {len(after_end)} 个交易日未入库"
+            f"（尚未更新到；已排除未来日）:\n"
             f"           {_fmt_dates(after_end)}"
         )
     else:
-        cal_hi = max(days)
-        if hi_lib >= cal_hi:
-            print(f"  [OK]   数据已覆盖到窗口/日历末日 {cal_hi}")
+        print(
+            f"  [OK]   数据末日 {hi_lib} 之后至今日无可更新交易日"
+            f"（未来日历日不计入未入库）"
+        )
 
     # per-code 覆盖：期望 = 该码在库内首末日期夹的日历日 − 无行情豁免（停牌等）
     from scripts.data.build_daily import load_no_bar_map
