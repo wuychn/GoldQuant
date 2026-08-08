@@ -544,15 +544,11 @@ def main() -> None:
     from common.progress_log import log_progress, log_progress_done, log_progress_error, log_progress_start
 
     if args.req_interval:
-        from common.utils.source_headers import set_eastmoney_interval
+        from common.utils.source_headers import parse_interval_range, set_eastmoney_interval
 
-        parts = [p.strip() for p in args.req_interval.split(",") if p.strip()]
-        if len(parts) == 1:
-            lo = hi = int(parts[0])
-        else:
-            lo, hi = int(parts[0]), int(parts[1])
-        set_eastmoney_interval(lo, hi)
-        print(f"东财请求间隔: {lo},{hi}s", flush=True)
+        lo, hi = parse_interval_range(args.req_interval, default=(1.0, 3.0))
+        set_eastmoney_interval(int(lo), int(hi))
+        print(f"东财请求间隔: {int(lo)},{int(hi)}s", flush=True)
 
     with home_context(args.home):
         end = args.end or cn_now().strftime("%Y-%m-%d")

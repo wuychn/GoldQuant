@@ -42,36 +42,89 @@ def _cfg() -> dict:
     return load_quant_config().get("data") or {}
 
 
-def _interval_bounds() -> tuple[float, float]:
+def _parse_cfg_range(
+    *,
+    csv_key: str,
+    min_key: str,
+    max_key: str,
+    default: tuple[float, float],
+    legacy_single: str | None = None,
+) -> tuple[float, float]:
+    from common.utils.source_headers import parse_interval_range
+
     data = _cfg()
-    lo = float(data.get("fund_flow_rank_page_interval_min", data.get("fund_flow_rank_page_interval", 10)))
-    hi = float(data.get("fund_flow_rank_page_interval_max", 30))
+    if data.get(csv_key) is not None:
+        return parse_interval_range(data.get(csv_key), default=default)
+    if legacy_single and data.get(legacy_single) is not None and data.get(min_key) is None:
+        return parse_interval_range(data.get(legacy_single), default=default)
+    if data.get(min_key) is not None or data.get(max_key) is not None:
+        lo = float(data.get(min_key, default[0]))
+        hi = float(data.get(max_key, default[1]))
+        return (lo, hi) if hi >= lo else (hi, lo)
+    return default
+
+
+def _page_interval_bounds() -> tuple[float, float]:
+    """分页页间间隔。优先 page_interval，兼容旧 req_interval。"""
+    lo, hi = _parse_cfg_range(
+        csv_key="fund_flow_rank_page_interval",
+        min_key="fund_flow_rank_page_interval_min",
+        max_key="fund_flow_rank_page_interval_max",
+        default=(10.0, 30.0),
+        legacy_single="fund_flow_rank_req_interval",
+    )
     lo = max(10.0, lo)
     hi = max(lo, hi)
     return lo, hi
 
 
-def _batch_pause_bounds() -> tuple[float, float]:
+def _symbol_interval_bounds() -> tuple[float, float]:
+    """逐票间隔。未配置时回退到页间间隔。"""
     data = _cfg()
-    lo = float(
-        data.get(
-            "fund_flow_rank_batch_pause_min_sec",
-            data.get("fund_flow_rank_fail_cooldown_sec", 120),
+    if (
+        data.get("fund_flow_rank_symbol_interval") is not None
+        or data.get("fund_flow_rank_symbol_interval_min") is not None
+        or data.get("fund_flow_rank_symbol_interval_max") is not None
+    ):
+        lo, hi = _parse_cfg_range(
+            csv_key="fund_flow_rank_symbol_interval",
+            min_key="fund_flow_rank_symbol_interval_min",
+            max_key="fund_flow_rank_symbol_interval_max",
+            default=(10.0, 30.0),
         )
+    else:
+        lo, hi = _page_interval_bounds()
+    lo = max(10.0, lo)
+    hi = max(lo, hi)
+    return lo, hi
+
+
+# 兼容旧测试名
+_interval_bounds = _page_interval_bounds
+
+
+def _batch_pause_bounds() -> tuple[float, float]:
+    lo, hi = _parse_cfg_range(
+        csv_key="fund_flow_rank_batch_pause",
+        min_key="fund_flow_rank_batch_pause_min_sec",
+        max_key="fund_flow_rank_batch_pause_max_sec",
+        default=(120.0, 240.0),
+        legacy_single="fund_flow_rank_fail_cooldown_sec",
     )
-    hi = float(data.get("fund_flow_rank_batch_pause_max_sec", 240))
     lo = max(0.0, lo)
     hi = max(lo, hi)
     return lo, hi
 
 
 def _burst_pages() -> tuple[int, int]:
-    data = _cfg()
-    lo = int(data.get("fund_flow_rank_burst_pages_min", 2))
-    hi = int(data.get("fund_flow_rank_burst_pages_max", 4))
-    lo = max(1, lo)
-    hi = max(lo, hi)
-    return lo, hi
+    lo, hi = _parse_cfg_range(
+        csv_key="fund_flow_rank_burst_pages",
+        min_key="fund_flow_rank_burst_pages_min",
+        max_key="fund_flow_rank_burst_pages_max",
+        default=(2.0, 4.0),
+    )
+    lo_i, hi_i = max(1, int(lo)), max(1, int(hi))
+    return (lo_i, hi_i) if hi_i >= lo_i else (hi_i, lo_i)
 
 
 def _rank_source_label() -> str:
@@ -145,20 +198,47 @@ def fetch_main_net_inflow_5d(
     page_size: int | None = None,
     page_interval_min: float | None = None,
     page_interval_max: float | None = None,
+    symbol_interval_min: float | None = None,
+    symbol_interval_max: float | None = None,
+    batch_pause_min_sec: float | None = None,
+    batch_pause_max_sec: float | None = None,
+    burst_pages_min: int | None = None,
+    burst_pages_max: int | None = None,
     force: bool = False,
 ) -> FundFlow5dResult:
     """取 5 日主力净流入（元）。先分页（接口级换源），完成后逐票补缺。"""
     from quant.data.sources.interface import try_with_fallback
 
-    lo, hi = _interval_bounds()
+    page_lo, page_hi = _page_interval_bounds()
     if page_interval_min is not None:
-        lo = max(10.0, float(page_interval_min))
+        page_lo = max(10.0, float(page_interval_min))
     if page_interval_max is not None:
-        hi = max(lo, float(page_interval_max))
+        page_hi = max(page_lo, float(page_interval_max))
     else:
-        hi = max(lo, hi)
+        page_hi = max(page_lo, page_hi)
+
+    sym_lo, sym_hi = _symbol_interval_bounds()
+    if symbol_interval_min is not None:
+        sym_lo = max(10.0, float(symbol_interval_min))
+    if symbol_interval_max is not None:
+        sym_hi = max(sym_lo, float(symbol_interval_max))
+    else:
+        sym_hi = max(sym_lo, sym_hi)
+
     pause_lo, pause_hi = _batch_pause_bounds()
+    if batch_pause_min_sec is not None:
+        pause_lo = max(0.0, float(batch_pause_min_sec))
+    if batch_pause_max_sec is not None:
+        pause_hi = max(pause_lo, float(batch_pause_max_sec))
+    else:
+        pause_hi = max(pause_lo, pause_hi)
     burst_lo, burst_hi = _burst_pages()
+    if burst_pages_min is not None:
+        burst_lo = max(1, int(burst_pages_min))
+    if burst_pages_max is not None:
+        burst_hi = max(burst_lo, int(burst_pages_max))
+    else:
+        burst_hi = max(burst_lo, burst_hi)
     data = _cfg()
     if page_size is None:
         page_size = int(data.get("fund_flow_rank_page_size", 100))
@@ -168,10 +248,13 @@ def fetch_main_net_inflow_5d(
     sources: list[str] = []
 
     print(
-        f"{_LOG} 开始 as_of={to_iso(as_of)} · 主源={rank_label} "
-        f"· 页间隔=U[{lo:.0f},{hi:.0f}]s · 批=U[{burst_lo},{burst_hi}]页/"
-        f"停U[{pause_lo:.0f},{pause_hi:.0f}]s "
-        f"· 目标码={len(need) if need else '全市场(仅分页)'}",
+        f"{_LOG} 【开始】as_of={to_iso(as_of)} · 目标 {len(need) if need else '全市场'} 码",
+        flush=True,
+    )
+    print(
+        f"{_LOG} 【阶段1/2·分页】源={rank_label} · 页间隔{page_lo:.0f}~{page_hi:.0f}s · "
+        f"每{burst_lo}~{burst_hi}页批停{pause_lo:.0f}~{pause_hi:.0f}s · "
+        f"单页失败长停后跳过该页，缺码由阶段2逐票补（属正常，不是退出）",
         flush=True,
     )
 
@@ -186,8 +269,8 @@ def fetch_main_net_inflow_5d(
             "fetch_stock_fund_flow_rank",
             indicator="5日",
             page_size=page_size,
-            page_interval_min=lo,
-            page_interval_max=hi,
+            page_interval_min=page_lo,
+            page_interval_max=page_hi,
             burst_pages_min=burst_lo,
             burst_pages_max=burst_hi,
             batch_pause_min_sec=pause_lo,
@@ -205,9 +288,10 @@ def fetch_main_net_inflow_5d(
         rank_reason = str(meta.get("abort_reason") or "")
         sources.append(rank_label)
         print(
-            f"{_LOG} 分页结束 source={rank_label} "
-            f"done={not rank_aborted} pages={pages_ok} rows={len(rank_df)} "
-            f"{('· ' + rank_reason) if rank_reason else ''}",
+            f"{_LOG} 【阶段1/2·分页结束】源={rank_label} · "
+            f"{'完成' if not rank_aborted else '未完成'} · "
+            f"{pages_ok} 页 · {len(rank_df)} 码"
+            f"{(' · ' + rank_reason) if rank_reason else ''}",
             flush=True,
         )
     except Exception as exc:  # noqa: BLE001
@@ -215,7 +299,7 @@ def fetch_main_net_inflow_5d(
         rank_reason = f"{type(exc).__name__}: {exc}"
         sources.append(rank_label)
         print(
-            f"{_LOG} 分页异常 source={rank_label} · {rank_reason} → 读断点缓存",
+            f"{_LOG} 【阶段1/2·分页异常】源={rank_label} · {rank_reason} → 尝试读断点缓存",
             flush=True,
         )
         from quant.data.sources.eastmoney.fund_flow_rank import _read_meta, load_cached_rank
@@ -224,7 +308,12 @@ def fetch_main_net_inflow_5d(
         if cached is not None and not cached.empty:
             rank_df = cached
             pages_ok = int(_read_meta(as_of, "5日").get("last_page") or 0)
-            print(f"{_LOG} 断点缓存 pages≈{pages_ok} rows={len(rank_df)}", flush=True)
+            print(
+                f"{_LOG} 【断点缓存】已恢复 {pages_ok} 页 · {len(rank_df)} 码",
+                flush=True,
+            )
+        else:
+            print(f"{_LOG} 【断点缓存】无可用分页数据", flush=True)
 
     have = {
         str(r["code"]).strip(): float(r["main_net_inflow"])
@@ -255,8 +344,8 @@ def fetch_main_net_inflow_5d(
     if not need:
         if not have:
             print(
-                f"{_LOG} 无分页数据且未指定 codes · 无法逐票全市场 · 返回空 "
-                f"(业务层可 --fund-flow-mode per_symbol)",
+                f"{_LOG} 【结束】无分页数据且未指定 codes，跳过逐票 · 返回空 "
+                f"（可用 --fund-flow-mode per_symbol）",
                 flush=True,
             )
         return _result_from_have()
@@ -266,12 +355,17 @@ def fetch_main_net_inflow_5d(
 
     missing = sorted(c for c in need if c not in have)
     if not missing:
-        print(f"{_LOG} 目标已覆盖 {len(need)}/{len(need)} · 无需逐票", flush=True)
+        print(
+            f"{_LOG} 【阶段2/2·跳过】目标已覆盖 {len(need)}/{len(need)}，无需逐票",
+            flush=True,
+        )
         return _result_from_have()
 
     print(
-        f"{_LOG} 分页后逐票补缺 source=enrich.fetch_stock_fund_flow_daily · "
-        f"待补={len(missing)} · 已有={len(have)}",
+        f"{_LOG} 【阶段2/2·逐票补缺】源=enrich.fetch_stock_fund_flow_daily · "
+        f"逐票间隔{sym_lo:.0f}~{sym_hi:.0f}s · "
+        f"待补 {len(missing)} · 已有 {len(need) - len(missing)} "
+        f"（分页已有码不重拉；断连休眠后重试同码）",
         flush=True,
     )
     sources.append("enrich.fetch_stock_fund_flow_daily")
@@ -279,8 +373,8 @@ def fetch_main_net_inflow_5d(
     ok_n, fail_n, filled = _fill_per_symbol(
         as_of=as_of,
         codes=missing,
-        interval_lo=lo,
-        interval_hi=hi,
+        interval_lo=sym_lo,
+        interval_hi=sym_hi,
         pause_lo=pause_lo,
         pause_hi=pause_hi,
         force=force,
@@ -288,8 +382,8 @@ def fetch_main_net_inflow_5d(
     have.update(filled)
     covered = len(set(have) & need)
     print(
-        f"{_LOG} 逐票结束 source=enrich.fetch_stock_fund_flow_daily "
-        f"ok={ok_n} fail/empty={fail_n} · 最终覆盖 {covered}/{len(need)}",
+        f"{_LOG} 【阶段2/2·逐票结束】成功 {ok_n} · 失败/空 {fail_n} · "
+        f"最终覆盖 {covered}/{len(need)}",
         flush=True,
     )
     return _result_from_have(per_ok=ok_n, per_fail=fail_n)
@@ -333,7 +427,7 @@ def _fill_per_symbol(
     pending = [c for c in codes if c not in done and c not in filled]
     if len(codes) - len(pending):
         print(
-            f"{_LOG} 逐票跳过已完成 {len(codes) - len(pending)} · 待拉 {len(pending)}",
+            f"{_LOG} 【逐票断点】跳过已完成 {len(codes) - len(pending)} · 待拉 {len(pending)}",
             flush=True,
         )
 
@@ -350,7 +444,7 @@ def _fill_per_symbol(
         code = pending[i]
         if i > 0:
             gap = random.uniform(interval_lo, interval_hi)
-            print(f"{_LOG} 逐票间隔 {gap:.1f}s", flush=True)
+            print(f"{_LOG} 【逐票等待】{gap:.0f}s 后拉 {code}", flush=True)
             time.sleep(gap)
         try:
             recs = asyncio.run(_pull(code))
@@ -359,15 +453,20 @@ def _fill_per_symbol(
             if _is_disconnect(exc):
                 sec = random.uniform(pause_lo, pause_hi)
                 print(
-                    f"{_LOG} 逐票断连 code={code} source=enrich.fetch_stock_fund_flow_daily · "
-                    f"{type(exc).__name__}: {exc} · 暂停 {sec / 60:.1f} 分钟后重试（不记完成）",
+                    f"{_LOG} 【逐票断连】{code} · {type(exc).__name__}: {exc}",
+                    flush=True,
+                )
+                print(
+                    f"{_LOG} 【休眠开始】约 {sec / 60:.1f} 分钟（{sec:.0f}s）· "
+                    f"不记完成 · 醒来后重试 {code}",
                     flush=True,
                 )
                 time.sleep(sec)
+                print(f"{_LOG} 【休眠结束】重试 {code}", flush=True)
                 continue  # 同码再试，断点不前进
             print(
-                f"{_LOG} 逐票 FAIL code={code} source=enrich.fetch_stock_fund_flow_daily · "
-                f"{type(exc).__name__}: {exc}",
+                f"{_LOG} 【逐票失败】{i + 1}/{len(pending)} {code} · "
+                f"{type(exc).__name__}: {exc}（记完成，不再重打）",
                 flush=True,
             )
             fail_n += 1
@@ -381,14 +480,13 @@ def _fill_per_symbol(
             filled[code] = float(net)
             ok_n += 1
             print(
-                f"{_LOG} 逐票 OK {i + 1}/{len(pending)} {code} "
-                f"source=enrich.fetch_stock_fund_flow_daily net={net:.0f}",
+                f"{_LOG} 【逐票成功】{i + 1}/{len(pending)} {code} net={net:.0f}",
                 flush=True,
             )
         else:
             fail_n += 1
             print(
-                f"{_LOG} 逐票 EMPTY {i + 1}/{len(pending)} {code}（记完成不重打）",
+                f"{_LOG} 【逐票空数据】{i + 1}/{len(pending)} {code}（记完成，不再重打）",
                 flush=True,
             )
         _write_per_symbol_state(as_of, done, filled)

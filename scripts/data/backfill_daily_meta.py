@@ -369,11 +369,9 @@ def main() -> None:
 
     apply_source_header_patch()
 
-    if args.req_interval:
-        parts = [p.strip() for p in args.req_interval.split(",") if p.strip()]
-        interval = (float(parts[0]), float(parts[-1])) if parts else (0.0, 2.0)
-    else:
-        interval = (0.0, 2.0)
+    from common.utils.source_headers import parse_interval_range
+
+    interval = parse_interval_range(args.req_interval, default=(0.0, 2.0))
 
     with home_context(args.home):
         home = quant_home()

@@ -19,7 +19,7 @@ def _patch_fast(mod, monkeypatch):
     monkeypatch.setattr(mod, "_MAX_INTERVAL", 0.0)
     monkeypatch.setattr(mod, "_BATCH_PAUSE_MIN", 0.0)
     monkeypatch.setattr(mod, "_BATCH_PAUSE_MAX", 0.0)
-    monkeypatch.setattr(mod, "_BURST_PAGES_MIN", 100)  # 测试内不触发批停
+    monkeypatch.setattr(mod, "_BURST_PAGES_MIN", 100)
     monkeypatch.setattr(mod, "_BURST_PAGES_MAX", 100)
     monkeypatch.setattr(mod, "_rand_pause", lambda *a, **k: None)
 
@@ -124,7 +124,7 @@ def test_rank_resume_continues_from_next_page(quant_tmp, monkeypatch):
     assert len(df) == 6
 
 
-def test_rank_fail_pauses_then_retries_same_page(quant_tmp, monkeypatch):
+def test_rank_fail_skips_page_then_continues(quant_tmp, monkeypatch):
     from quant.data.sources.eastmoney import fund_flow_rank as mod
 
     _patch_fast(mod, monkeypatch)
@@ -132,18 +132,19 @@ def test_rank_fail_pauses_then_retries_same_page(quant_tmp, monkeypatch):
     monkeypatch.setattr(
         mod,
         "_rand_pause",
-        lambda lo, hi, *, reason: pauses.append(reason),
+        lambda lo, hi, *, what_next: pauses.append(what_next),
     )
     calls: list[int] = []
 
     def fake_page(*, fid, fields, page, page_size):
         calls.append(page)
-        if page == 2 and calls.count(2) == 1:
+        if page == 1:
             raise ConnectionError("RemoteDisconnected")
         rows = [
             {"f12": f"{page * 10 + i:06d}", "f164": float(page * 100 + i)}
             for i in range(2)
         ]
+        # page2 成功时告知共 6 条 → 3 页；第 1 页已跳过
         return pd.DataFrame(rows), 6
 
     monkeypatch.setattr(mod, "_fetch_page_once", fake_page)
@@ -160,7 +161,7 @@ def test_rank_fail_pauses_then_retries_same_page(quant_tmp, monkeypatch):
         force=True,
         return_meta=True,
     )
-    assert meta["done"] is True
-    assert len(df) == 6
-    assert calls == [1, 2, 2, 3]  # 第 2 页失败后同页再打
-    assert any("断连" in p or "page=2" in p for p in pauses)
+    assert calls == [1, 2, 3]  # 第 1 页失败后跳到 2、3，不重打 1
+    assert 1 in meta["skipped_pages"]
+    assert len(df) == 4  # 仅 2、3 页
+    assert any("跳过第 1 页" in p for p in pauses)

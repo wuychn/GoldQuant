@@ -156,32 +156,53 @@ def fetch_stock_fund_flow_rank(
 ):
     """个股资金流排名（分页）→ DataFrame(code, main_net_inflow)。
 
-    页间默认随机 [min,max]（yml ``fund_flow_rank_page_interval_*``，默认 10–30）。
-    编排（分页失败→逐票）见 ``quant.data.fund_flow_5d.fetch_main_net_inflow_5d``。
+    页间默认随机（yml ``fund_flow_rank_page_interval``，默认 ``10,30``）。
+    编排（分页→逐票补缺）见 ``quant.data.fund_flow_5d.fetch_main_net_inflow_5d``。
     """
     from quant.config import load_quant_config
     from quant.data.sources.interface import try_with_fallback
+
+    from common.utils.source_headers import parse_interval_range
 
     data = load_quant_config().get("data") or {}
     if page_size is None:
         page_size = int(data.get("fund_flow_rank_page_size", 100))
     if page_interval is not None:
-        page_interval_min = page_interval_max = max(10.0, float(page_interval))
-    if page_interval_min is None:
-        page_interval_min = float(
-            data.get("fund_flow_rank_page_interval_min", data.get("fund_flow_rank_page_interval", 10))
+        page_interval_min, page_interval_max = parse_interval_range(
+            page_interval, default=(10.0, 30.0)
         )
-    if page_interval_max is None:
-        page_interval_max = float(data.get("fund_flow_rank_page_interval_max", 30))
-    burst_lo = int(data.get("fund_flow_rank_burst_pages_min", 2))
-    burst_hi = int(data.get("fund_flow_rank_burst_pages_max", 4))
-    pause_lo = float(
-        data.get(
-            "fund_flow_rank_batch_pause_min_sec",
-            data.get("fund_flow_rank_fail_cooldown_sec", 120),
+    elif page_interval_min is None and page_interval_max is None:
+        page_interval_min, page_interval_max = parse_interval_range(
+            data.get("fund_flow_rank_page_interval", data.get("fund_flow_rank_req_interval")),
+            default=(
+                float(data.get("fund_flow_rank_page_interval_min", 10)),
+                float(data.get("fund_flow_rank_page_interval_max", 30)),
+            ),
         )
+    else:
+        if page_interval_min is None:
+            page_interval_min = 10.0
+        if page_interval_max is None:
+            page_interval_max = float(page_interval_min)
+    burst_lo, burst_hi = parse_interval_range(
+        data.get("fund_flow_rank_burst_pages"),
+        default=(
+            float(data.get("fund_flow_rank_burst_pages_min", 2)),
+            float(data.get("fund_flow_rank_burst_pages_max", 4)),
+        ),
     )
-    pause_hi = float(data.get("fund_flow_rank_batch_pause_max_sec", 240))
+    pause_lo, pause_hi = parse_interval_range(
+        data.get("fund_flow_rank_batch_pause"),
+        default=(
+            float(
+                data.get(
+                    "fund_flow_rank_batch_pause_min_sec",
+                    data.get("fund_flow_rank_fail_cooldown_sec", 120),
+                )
+            ),
+            float(data.get("fund_flow_rank_batch_pause_max_sec", 240)),
+        ),
+    )
     return try_with_fallback(
         "market",
         "fetch_stock_fund_flow_rank",
@@ -189,10 +210,10 @@ def fetch_stock_fund_flow_rank(
         page_size=max(1, int(page_size)),
         page_interval_min=max(10.0, float(page_interval_min)),
         page_interval_max=max(10.0, float(page_interval_max)),
-        burst_pages_min=max(1, burst_lo),
-        burst_pages_max=max(1, burst_hi),
-        batch_pause_min_sec=max(0.0, pause_lo),
-        batch_pause_max_sec=max(0.0, pause_hi),
+        burst_pages_min=max(1, int(burst_lo)),
+        burst_pages_max=max(1, int(burst_hi)),
+        batch_pause_min_sec=max(0.0, float(pause_lo)),
+        batch_pause_max_sec=max(0.0, float(pause_hi)),
         as_of=as_of,
         force=force,
     )

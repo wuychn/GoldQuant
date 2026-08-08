@@ -233,15 +233,29 @@ poetry run python -m scripts.data.update_daily --home D:\ProgramData\.quant\dail
 | `--home` | 当前 QUANT_HOME | 建库期 `...\daily`；日常正式库 | quant-home 根 |
 | `--date` | 今天 | 一般不设 | 交易日 YYYY-MM-DD；非交易日跳过 |
 | `--force-fundamental-pit` | off | 披露季外要强刷财务时开 | 无视披露窗口，增量刷新 `fundamental_pit` |
-| `--fund-flow-mode` | `rank` | `rank` | `rank`=分页为主、失败回退逐票；`per_symbol`=强制旧逐票 |
+| `--fund-flow-mode` | `rank` | `rank` | `rank`=分页为主、失败后逐票补缺；`per_symbol`=强制旧逐票 |
 | `--fund-flow-page-size` | yml `100` | `100` | rank 每页条数 |
-| `--fund-flow-page-interval` | yml 随机 10–30 | 一般不设 | 若指定则固定页间秒数（下限 10）；默认读 yml min/max 随机 |
+| `--req-page-interval` | yml `10,30` | `10,30` | **分页页间**间隔秒，`MIN,MAX` 或 `N`（下限 10） |
+| `--req-symbol-interval` | yml `10,30` | 按需 | **逐票**间隔秒，`MIN,MAX` 或 `N`（未设则跟页间/yml） |
+| `--fund-flow-batch-pause` | yml `120,240` | 一般不设 | 批间暂停 & 失败跳页前暂停秒，`MIN,MAX` 或 `N` |
+| `--fund-flow-burst-pages` | yml `2,4` | 一般不设 | 每成功 N 页后批停，`MIN,MAX` 或 `N` |
 | `--flush-every` | `50` | `50` | 仅 `per_symbol`：每 N 只落盘 |
 
+示例：
+
+```powershell
+poetry run python -m scripts.data.update_daily `
+  --req-page-interval 10,30 `
+  --req-symbol-interval 15,25 `
+  --fund-flow-batch-pause 120,240
+```
+
 **资金流（默认 rank）**：编排在 `quant/data/fund_flow_5d.py`——先
-`market.fetch_stock_fund_flow_rank`（yml 接口级换源，默认 eastmoney；页间 10–30s；
-每 2–4 页批停 2–4 分钟；单页失败不短重试，断连即停 2–4 分钟后继续同页直至末页），
-分页结束后对缺码走 `enrich.fetch_stock_fund_flow_daily` 逐票（跳过已有码；断连不记完成）。
+`market.fetch_stock_fund_flow_rank`（yml 接口级换源，默认 eastmoney；页间
+`fund_flow_rank_page_interval`；逐票 `fund_flow_rank_symbol_interval`；每
+`fund_flow_rank_burst_pages` 页批停 `fund_flow_rank_batch_pause`；单页失败不重试，
+长停后跳过该页继续下一页），分页结束后对缺码走 `enrich.fetch_stock_fund_flow_daily`
+逐票（跳过已有码；断连不记完成）。
 断点：`$QUANT_HOME/data/fund_flow_rank_progress/{date}/5日/`（pages + meta）与同目录
 `per_symbol.json` / `per_symbol_values.json`。日志前缀 `[fund_flow_5d]` / `[fund_flow_rank]`。
 口径对比（默认 `D:\ProgramData\.quant_tmp`）：`poetry run python -m scripts.data.compare_fund_flow_rank`。

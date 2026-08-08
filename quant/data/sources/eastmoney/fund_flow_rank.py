@@ -3,7 +3,8 @@
 节流策略：
 - 页间随机 10–30s
 - 每成功拉取 2–4 页，批间暂停 2–4 分钟
-- 单页只打 1 次，不做短重试；失败/断连立即暂停 2–4 分钟后再打**同一页**，直到末页
+- 单页只打 1 次；失败/断连立即暂停 2–4 分钟后**跳过该页**继续下一页
+- 跳过页造成的缺码由编排层逐票补全
 - TLS：curl_cffi impersonate；Cookie 每页重读 ``.eastmoney.header``
 """
 
@@ -179,16 +180,16 @@ def _is_disconnect(exc: BaseException) -> bool:
     return any(m in msg for m in _DISCONNECT_MARKERS)
 
 
-def _rand_pause(lo: float, hi: float, *, reason: str) -> None:
+def _rand_pause(lo: float, hi: float, *, what_next: str) -> None:
     lo = max(0.0, float(lo))
     hi = max(lo, float(hi))
     sec = random.uniform(lo, hi)
     print(
-        f"{_LOG} source=eastmoney.clist_rank 暂停 {sec / 60:.1f} 分钟 "
-        f"({sec:.0f}s) · {reason}",
+        f"{_LOG} 【休眠开始】约 {sec / 60:.1f} 分钟（{sec:.0f}s）· 进程未退出 · {what_next}",
         flush=True,
     )
     time.sleep(sec)
+    print(f"{_LOG} 【休眠结束】{what_next}", flush=True)
 
 
 def _fetch_page_once(
@@ -249,7 +250,7 @@ def fetch_stock_fund_flow_rank(
 ):
     """分页拉取 → DataFrame(code, main_net_inflow)。
 
-    页间随机间隔；每 2–4 页批停 2–4 分钟；单页失败不短重试，长停后继续同一页直至末页。
+    页间随机间隔；每 2–4 页批停 2–4 分钟；单页失败不重试，长停后跳过该页继续下一页。
     """
     if indicator not in _INDICATOR_MAP:
         raise ValueError(f"indicator 须为 {list(_INDICATOR_MAP)}，收到 {indicator!r}")
@@ -283,6 +284,11 @@ def fetch_stock_fund_flow_rank(
     total_pages: int | None = None
     frames: list[pd.DataFrame] = []
     last_fail_reason = ""
+    skipped_pages: list[int] = []
+    last_ok_page = 0
+    # 尚不知总页数时，连续失败探页上限（避免无限翻页）
+    _max_probe_without_total = 5
+    probe_fails = 0
 
     if as_of and not force:
         meta = _read_meta(as_of, indicator)
@@ -290,8 +296,8 @@ def fetch_stock_fund_flow_rank(
             cached = _load_page_frames(as_of, indicator, int(meta.get("last_page") or 0))
             if cached:
                 print(
-                    f"{_LOG} source=eastmoney.clist_rank 复用完成断点 "
-                    f"as_of={to_iso(as_of)} pages={len(cached)}",
+                    f"{_LOG} 【断点命中·已完成】as_of={to_iso(as_of)} "
+                    f"直接复用 {len(cached)} 页，不再打网",
                     flush=True,
                 )
                 out = pd.concat(cached, ignore_index=True).drop_duplicates(
@@ -302,17 +308,23 @@ def fetch_stock_fund_flow_rank(
         if meta.get("next_page") and meta.get("indicator") == indicator:
             start_page = int(meta["next_page"])
             total_pages = int(meta["total_pages"]) if meta.get("total_pages") else None
-            frames = _load_page_frames(as_of, indicator, start_page - 1)
+            last_ok_page = int(meta.get("last_page") or 0)
+            skipped_pages = [int(x) for x in (meta.get("skipped_pages") or [])]
+            # 续传时按已尝试上界加载已有成功页（跳过页文件本就不存在）
+            upto = max(last_ok_page, start_page - 1)
+            frames = _load_page_frames(as_of, indicator, upto)
             print(
-                f"{_LOG} source=eastmoney.clist_rank 断点续传 "
-                f"as_of={to_iso(as_of)} from_page={start_page} cached_pages={len(frames)}",
+                f"{_LOG} 【断点续传】as_of={to_iso(as_of)} "
+                f"已缓存 {len(frames)} 页 · 跳过页={skipped_pages or '-'} "
+                f"→ 从第 {start_page} 页继续",
                 flush=True,
             )
 
     print(
-        f"{_LOG} source=eastmoney.clist_rank 开始 indicator={indicator} "
-        f"page_size={page_size} interval=U({lo:.0f},{hi:.0f})s "
-        f"burst=U({b_lo},{b_hi})页 pause=U({p_lo:.0f},{p_hi:.0f})s",
+        f"{_LOG} 【分页开始】源=eastmoney.clist_rank indicator={indicator} "
+        f"每页{page_size}条 · 页间隔{lo:.0f}~{hi:.0f}s · "
+        f"每成功{b_lo}~{b_hi}页批停{p_lo:.0f}~{p_hi:.0f}s · "
+        f"单页失败不重试：长停后跳过该页继续下一页，缺码由逐票补",
         flush=True,
     )
 
@@ -320,6 +332,7 @@ def fetch_stock_fund_flow_rank(
     first_request = True
     burst_target = random.randint(b_lo, b_hi)
     burst_ok = 0
+    highest_attempted = start_page - 1
 
     while True:
         if total_pages is not None and page > total_pages:
@@ -328,13 +341,16 @@ def fetch_stock_fund_flow_rank(
         if not first_request:
             gap = random.uniform(lo, hi)
             print(
-                f"{_LOG} source=eastmoney.clist_rank 页间休眠 {gap:.1f}s "
-                f"(随机[{lo:.0f},{hi:.0f}])",
+                f"{_LOG} 【页间等待】{gap:.0f}s 后请求第 {page} 页",
                 flush=True,
             )
             time.sleep(gap)
         first_request = False
 
+        page_label = (
+            f"第 {page}/{total_pages} 页" if total_pages is not None else f"第 {page} 页"
+        )
+        print(f"{_LOG} 【请求中】{page_label} …", flush=True)
         try:
             raw, total = _fetch_page_once(
                 fid=fid, fields=fields, page=page, page_size=page_size
@@ -343,24 +359,68 @@ def fetch_stock_fund_flow_rank(
             last_fail_reason = f"{type(exc).__name__}: {exc}"
             kind = "断连" if _is_disconnect(exc) else "失败"
             print(
-                f"{_LOG} source=eastmoney.clist_rank page={page} {kind} "
-                f"(不短重试) · {last_fail_reason}",
+                f"{_LOG} 【{page_label}{kind}】未落盘 · {last_fail_reason}",
                 flush=True,
             )
-            _rand_pause(p_lo, p_hi, reason=f"page={page} {kind}后继续同页")
-            # 不前进页码；长停后再打同一页，直至末页
-            first_request = True  # 长停后不再叠加页间间隔
+            print(
+                f"{_LOG} 【说明】本页不重试；长停后跳到下一页，本页缺码稍后逐票补",
+                flush=True,
+            )
+            next_page = page + 1
+            skipped_pages.append(page)
+            highest_attempted = page
+            if as_of:
+                _write_meta(
+                    as_of,
+                    indicator,
+                    {
+                        "indicator": indicator,
+                        "page_size": page_size,
+                        "total_pages": total_pages,
+                        "next_page": next_page,
+                        "last_page": last_ok_page,
+                        "skipped_pages": skipped_pages,
+                        "done": False,
+                        "aborted": False,
+                        "last_error": last_fail_reason,
+                    },
+                )
+            _rand_pause(
+                p_lo,
+                p_hi,
+                what_next=(
+                    f"跳过第 {page} 页，改请求第 {next_page} 页"
+                    if total_pages is None or next_page <= total_pages
+                    else f"跳过第 {page} 页后分页探查结束"
+                ),
+            )
+            if total_pages is None:
+                probe_fails += 1
+                if probe_fails >= _max_probe_without_total:
+                    print(
+                        f"{_LOG} 【停止探页】连续 {probe_fails} 页失败且仍不知总页数 → "
+                        f"结束分页，改由逐票补全",
+                        flush=True,
+                    )
+                    break
+            if total_pages is not None and page >= total_pages:
+                break
+            page = next_page
+            first_request = True
             continue
 
+        probe_fails = 0
         if total_pages is None:
             total_pages = max(1, math.ceil(total / page_size)) if total else 1
             print(
-                f"{_LOG} source=eastmoney.clist_rank total={total} pages={total_pages}",
+                f"{_LOG} 【总量】全市场约 {total} 条 → 共 {total_pages} 页",
                 flush=True,
             )
 
         norm = _normalize(raw, net_field)
         frames.append(norm)
+        last_ok_page = page
+        highest_attempted = page
         if as_of:
             _save_page(as_of, indicator, page, norm)
             _write_meta(
@@ -373,13 +433,15 @@ def fetch_stock_fund_flow_rank(
                     "total_pages": total_pages,
                     "next_page": page + 1,
                     "last_page": page,
+                    "skipped_pages": skipped_pages,
                     "done": False,
                     "aborted": False,
                 },
             )
         print(
-            f"{_LOG} source=eastmoney.clist_rank 进度 {page}/{total_pages} "
-            f"本页={len(norm)} 累计={sum(len(f) for f in frames)}",
+            f"{_LOG} 【成功】第 {page}/{total_pages} 页 · 本页 {len(norm)} 码 · "
+            f"累计 {sum(len(f) for f in frames)} 码（已断点落盘）"
+            f"{(' · 已跳过页=' + str(skipped_pages)) if skipped_pages else ''}",
             flush=True,
         )
 
@@ -389,7 +451,10 @@ def fetch_stock_fund_flow_rank(
             _rand_pause(
                 p_lo,
                 p_hi,
-                reason=f"批间暂停（已连拉 {burst_ok} 页，下次目标 U[{b_lo},{b_hi}]）",
+                what_next=(
+                    f"批间休息结束：已连拉 {burst_ok} 页，"
+                    f"接着从第 {page + 1} 页继续（下次批停阈值仍 {b_lo}~{b_hi} 页）"
+                ),
             )
             burst_ok = 0
             burst_target = random.randint(b_lo, b_hi)
@@ -404,38 +469,50 @@ def fetch_stock_fund_flow_rank(
         meta_out = {
             "indicator": indicator,
             "last_page": 0,
+            "skipped_pages": skipped_pages,
             "aborted": True,
             "abort_reason": last_fail_reason or "no_pages",
             "done": False,
         }
         if as_of:
             _write_meta(as_of, indicator, meta_out)
+        print(
+            f"{_LOG} 【分页结束·无数据】尚未成功落盘任何页 · "
+            f"跳过页={skipped_pages or '-'} · last_error={last_fail_reason or 'no_pages'} "
+            f"→ 将由逐票补全",
+            flush=True,
+        )
         return (empty, meta_out) if return_meta else empty
 
     out = pd.concat(frames, ignore_index=True).drop_duplicates(subset=["code"], keep="last")
-    last_page = page
     if as_of:
         meta_now = _read_meta(as_of, indicator)
-        last_page = int(meta_now.get("last_page") or last_page)
+        last_ok_page = int(meta_now.get("last_page") or last_ok_page)
+        skipped_pages = [int(x) for x in (meta_now.get("skipped_pages") or skipped_pages)]
 
-    done = total_pages is not None and last_page >= total_pages
+    finished_range = total_pages is not None and highest_attempted >= total_pages
     meta_out = {
         "indicator": indicator,
         "page_size": page_size,
         "total_pages": total_pages,
-        "last_page": last_page,
-        "next_page": last_page + 1,
-        "done": done,
-        "aborted": not done,
-        "abort_reason": "" if done else last_fail_reason,
+        "last_page": last_ok_page,
+        "next_page": highest_attempted + 1,
+        "skipped_pages": skipped_pages,
+        "done": finished_range,
+        "aborted": (not finished_range) or bool(skipped_pages),
+        "abort_reason": (
+            f"skipped_pages={skipped_pages}" if skipped_pages else (last_fail_reason or "")
+        ),
         "n_codes": int(len(out)),
     }
     if as_of:
         _write_meta(as_of, indicator, meta_out)
 
     print(
-        f"{_LOG} source=eastmoney.clist_rank 结束 done={done} "
-        f"pages={last_page}/{total_pages} rows={len(out)}",
+        f"{_LOG} 【分页结束】{'页范围走完' if finished_range else '未走完'} · "
+        f"成功至第 {last_ok_page} 页 / 总 {total_pages} · 去重 {len(out)} 码 · "
+        f"跳过页={skipped_pages or '-'}"
+        f"{'（缺码由逐票补）' if skipped_pages else ''}",
         flush=True,
     )
     return (out.reset_index(drop=True), meta_out) if return_meta else out.reset_index(drop=True)

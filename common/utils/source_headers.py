@@ -119,16 +119,43 @@ def register_source_strategy(strategy: SourceHeaderStrategy) -> None:
     _STRATEGIES.append(strategy)
 
 
-def set_eastmoney_interval(min_sec: int, max_sec: int) -> None:
+def parse_interval_range(
+    spec: str | float | int | None,
+    *,
+    default: tuple[float, float] = (1.0, 3.0),
+) -> tuple[float, float]:
+    """解析请求间隔：``MIN,MAX`` / 单值 ``N`` / 数值 → ``(lo, hi)``（秒）。
+
+    与 ``build_daily --req-interval``、``update_daily --req-page-interval`` 及 yml 逗号区间一致。
+    """
+    if spec is None or (isinstance(spec, str) and not str(spec).strip()):
+        lo, hi = float(default[0]), float(default[1])
+    elif isinstance(spec, (int, float)):
+        lo = hi = float(spec)
+    else:
+        parts = [p.strip() for p in str(spec).split(",") if p.strip()]
+        if not parts:
+            lo, hi = float(default[0]), float(default[1])
+        elif len(parts) == 1:
+            lo = hi = float(parts[0])
+        else:
+            lo, hi = float(parts[0]), float(parts[1])
+    if hi < lo:
+        lo, hi = hi, lo
+    return lo, hi
+
+
+def set_eastmoney_interval(min_sec: int | float, max_sec: int | float) -> None:
     """运行时调东财请求间隔（秒）：``build_daily --req-interval`` 等用。
 
     降频（如 3,6）缓解 clist 全市场频控；升频（如 0,1）加速，慎用（易触发限流）。
     """
-    if max_sec < min_sec:
-        min_sec, max_sec = max_sec, min_sec
+    lo, hi = int(min_sec), int(max_sec)
+    if hi < lo:
+        lo, hi = hi, lo
     for s in _STRATEGIES:
         if isinstance(s, EastmoneyStrategy):
-            s.interval_min, s.interval_max = min_sec, max_sec
+            s.interval_min, s.interval_max = lo, hi
             return
 
 

@@ -222,12 +222,41 @@ def main() -> None:
         help="rank 模式每页条数（默认 quant.yml data.fund_flow_rank_page_size）",
     )
     ap.add_argument(
-        "--fund-flow-page-interval",
-        type=float,
+        "--req-page-interval",
         default=None,
-        help="rank 模式固定页间秒数（默认不设：yml min/max 随机 10–30；下限 10）",
+        help="分页页间间隔秒，格式 MIN,MAX 或 N（默认 yml fund_flow_rank_page_interval=10,30；下限 10）",
+    )
+    ap.add_argument(
+        "--req-symbol-interval",
+        default=None,
+        help="逐票间隔秒，格式 MIN,MAX 或 N（默认 yml fund_flow_rank_symbol_interval；未配则同页间）",
+    )
+    ap.add_argument(
+        "--fund-flow-batch-pause",
+        default=None,
+        help="分页批间暂停 & 单页失败跳页前暂停秒，格式 MIN,MAX 或 N（默认 yml 120,240）",
+    )
+    ap.add_argument(
+        "--fund-flow-burst-pages",
+        default=None,
+        help="每成功拉 N 页后批停，格式 MIN,MAX 或 N（默认 yml 2,4）",
     )
     args = ap.parse_args()
+
+    if args.req_page_interval:
+        from common.utils.source_headers import parse_interval_range, set_eastmoney_interval
+
+        lo, hi = parse_interval_range(args.req_page_interval, default=(10.0, 30.0))
+        lo_i, hi_i = max(10, int(lo)), max(10, int(hi))
+        if hi_i < lo_i:
+            lo_i, hi_i = hi_i, lo_i
+        set_eastmoney_interval(lo_i, hi_i)
+        print(f"分页页间/东财请求间隔: {lo_i},{hi_i}s", flush=True)
+    if args.req_symbol_interval:
+        from common.utils.source_headers import parse_interval_range
+
+        s_lo, s_hi = parse_interval_range(args.req_symbol_interval, default=(10.0, 30.0))
+        print(f"逐票间隔: {int(s_lo)},{int(s_hi)}s", flush=True)
 
     with home_context(args.home):
         today = args.date or cn_now().strftime("%Y-%m-%d")
@@ -370,16 +399,25 @@ def main() -> None:
 
             uni = universe_codes(today, rebuild=False)
             # 复用 step 1 已拉的新浪 spot（含 code/float_mv），避免再触发东财 clist 拉全市场
+            print(
+                f"因子快照 @ {today}: fund_flow 开始"
+                f"（mode={args.fund_flow_mode}；分页失败会休眠 2~4 分钟后跳过该页，"
+                f"缺码稍后逐票补，属正常，不是卡死/退出）…",
+                flush=True,
+            )
             counts = capture_all_factor_snapshots(
                 today,
                 spot=spot,
                 universe_codes=uni,
                 flush_every=max(1, int(args.flush_every)),
                 page_size=args.fund_flow_page_size,
-                page_interval=args.fund_flow_page_interval,
+                req_interval=args.req_page_interval,
+                symbol_interval=args.req_symbol_interval,
+                batch_pause=args.fund_flow_batch_pause,
+                burst_pages=args.fund_flow_burst_pages,
                 fund_flow_mode=args.fund_flow_mode,
             )
-            print(f"因子快照 @ {today}: {counts}")
+            print(f"因子快照 @ {today}: 完成 {counts}", flush=True)
         except Exception as e:
             print(f"[WARN] 因子快照失败: {e}", file=sys.stderr)
 

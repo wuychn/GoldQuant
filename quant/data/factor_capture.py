@@ -323,7 +323,11 @@ def capture_fund_flow_rank(
     universe_codes: list[str] | None = None,
     *,
     page_size: int | None = None,
-    page_interval: float | None = None,
+    page_interval: float | str | None = None,
+    req_interval: str | None = None,
+    symbol_interval: str | None = None,
+    batch_pause: str | None = None,
+    burst_pages: str | None = None,
     force: bool = False,
 ) -> int:
     """主力 5 日净流入 / 流通市值。
@@ -355,16 +359,41 @@ def capture_fund_flow_rank(
             )
             return len(existing)
 
+    from common.utils.source_headers import parse_interval_range
     from quant.data.fund_flow_5d import fetch_main_net_inflow_5d
 
-    # CLI 传入 page_interval 时作固定间隔；否则编排层读 yml 随机 [min,max]
-    fixed = max(10.0, float(page_interval)) if page_interval is not None else None
+    # 页间：req_interval / page_interval；逐票：symbol_interval（各自 MIN,MAX 或单值）
+    page_spec = req_interval if req_interval is not None else page_interval
+    page_lo = page_hi = None
+    if page_spec is not None:
+        page_lo, page_hi = parse_interval_range(page_spec, default=(10.0, 30.0))
+        page_lo = max(10.0, page_lo)
+        page_hi = max(page_lo, page_hi)
+    sym_lo = sym_hi = None
+    if symbol_interval is not None:
+        sym_lo, sym_hi = parse_interval_range(symbol_interval, default=(10.0, 30.0))
+        sym_lo = max(10.0, sym_lo)
+        sym_hi = max(sym_lo, sym_hi)
+    pause_lo = pause_hi = None
+    if batch_pause is not None:
+        pause_lo, pause_hi = parse_interval_range(batch_pause, default=(120.0, 240.0))
+    burst_lo = burst_hi = None
+    if burst_pages is not None:
+        b0, b1 = parse_interval_range(burst_pages, default=(2.0, 4.0))
+        burst_lo, burst_hi = int(b0), int(b1)
+
     result = fetch_main_net_inflow_5d(
         as_of=as_of,
         codes=targets,
         page_size=page_size,
-        page_interval_min=fixed,
-        page_interval_max=fixed,
+        page_interval_min=page_lo,
+        page_interval_max=page_hi,
+        symbol_interval_min=sym_lo,
+        symbol_interval_max=sym_hi,
+        batch_pause_min_sec=pause_lo,
+        batch_pause_max_sec=pause_hi,
+        burst_pages_min=burst_lo,
+        burst_pages_max=burst_hi,
         force=force,
     )
     df = result.df
@@ -385,9 +414,10 @@ def capture_fund_flow_rank(
     if rows:
         upsert_fund_flow_snapshot(as_of, rows)
     print(
-        f"fund_flow: 落盘 {len(rows)} · sources={result.sources_used} · "
-        f"rank_pages={result.rank_pages_ok} aborted={result.rank_aborted} · "
-        f"per_symbol ok/fail={result.per_symbol_ok}/{result.per_symbol_fail}",
+        f"fund_flow: 【落盘】{len(rows)} 码 · 源={result.sources_used} · "
+        f"分页页数={result.rank_pages_ok}"
+        f"{'（分页未完成）' if result.rank_aborted else ''} · "
+        f"逐票成功/失败={result.per_symbol_ok}/{result.per_symbol_fail}",
         flush=True,
     )
     return len(read_fund_flow_snapshot(as_of, exact=True))
@@ -400,7 +430,11 @@ def capture_all_factor_snapshots(
     *,
     flush_every: int = _DEFAULT_FLOW_FLUSH_EVERY,
     page_size: int | None = None,
-    page_interval: float | None = None,
+    page_interval: float | str | None = None,
+    req_interval: str | None = None,
+    symbol_interval: str | None = None,
+    batch_pause: str | None = None,
+    burst_pages: str | None = None,
     fund_flow_mode: str = "rank",
 ) -> dict[str, int]:
     """一次性采集 hot/flow/theme 快照（基本面统一走 fundamental_pit）。
@@ -430,6 +464,10 @@ def capture_all_factor_snapshots(
             universe_codes,
             page_size=page_size,
             page_interval=page_interval,
+            req_interval=req_interval,
+            symbol_interval=symbol_interval,
+            batch_pause=batch_pause,
+            burst_pages=burst_pages,
         )
     print(f"因子快照: fund_flow={n_flow} · theme_mom …", flush=True)
     n_theme = capture_theme_mom(as_of, spot if isinstance(spot, pd.DataFrame) else None)
