@@ -423,11 +423,12 @@ poetry run python -m scripts.data.scrub_invalid_bars --home ~/.quant --apply
 ### 6.1 主回测
 
 ```powershell
-poetry run python -m scripts.backtest.run --start 2024-01-01 --end 2024-06-30
+poetry run python -m scripts.backtest.run --home D:\ProgramData\.quant --start 2024-01-01 --end 2024-06-30
 ```
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
+| `--home` | 当前 `QUANT_HOME` | quant-home 根（含 `store/`）；不设则读环境变量 |
 | `--start` / `--end` | 必填 | YYYY-MM-DD |
 | `--max-positions` | 10 | 最大持股 |
 | `--n-enter` / `--n-exit` | 8 / 15 | 排名 buffer |
@@ -436,7 +437,7 @@ poetry run python -m scripts.backtest.run --start 2024-01-01 --end 2024-06-30
 | `--no-exit` | — | 禁用 L4 出场 |
 | `--registry-weights` | — | 忽略 IC 权重，用 registry 默认 |
 | `--sensitivity` | — | 输出参数敏感性 |
-| `--out` | `$QUANT_HOME/reports/bt` | 报告目录 |
+| `--out` | `$QUANT_HOME/reports/bt` | 报告目录（受 `--home` 影响） |
 
 **strict 口径（默认）**：T-1 收盘因子 → T 开盘成交；与选股因子口径对齐。
 

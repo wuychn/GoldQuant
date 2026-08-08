@@ -301,7 +301,7 @@ def main() -> None:
                 print(f"  FAIL  {f}")
             log_progress_error(_SCOPE, "失败", detail=f"{len(FAILS)} FAIL + {len(WARNS)} WARN")
             sys.exit(1)
-        print(f"通过 ✓（{len(WARNS)} 项 WARN 提示，可查可不查）")
+        print(f"通过 OK（{len(WARNS)} 项 WARN 提示，可查可不查）")
         for w in WARNS:
             print(f"  WARN  {w}")
         log_progress_done(_SCOPE, "成功", detail=f"{len(WARNS)} WARN")

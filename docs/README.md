@@ -57,7 +57,7 @@ poetry run python -m quant during_market
 poetry run python -m scripts.data.maintain
 
 # 回测
-poetry run python -m scripts.backtest.run --start 2024-01-01 --end 2024-06-30 --max-positions 10
+poetry run python -m scripts.backtest.run --home D:\ProgramData\.quant --start 2024-01-01 --end 2024-06-30 --max-positions 10
 ```
 
 详细说明见 [OPERATIONS.md](./OPERATIONS.md)。
