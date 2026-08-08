@@ -254,7 +254,7 @@
 | `ths_max_concurrent` | `1` | 同花顺并发 |
 | `eastmoney_max_concurrent` | `1` | 东财并发 |
 | `fund_flow_rank_page_size` | `100` | 个股资金流排名每页条数 |
-| `req_page_interval` | `"29,61"` | 页间间隔秒（`MIN,MAX`/`N`；CLI `--req-page-interval`；下限 10） |
+| `req_page_interval` | `"61,121"` | 页间间隔秒（`MIN,MAX`/`N`；CLI `--req-page-interval`；下限 10） |
 | `req_symbol_interval` | `"10,20"` | 逐票间隔秒（`MIN,MAX`/`N`；CLI `--req-symbol-interval`） |
 | `req_batch_pause` | `"120,240"` | 批间/失败跳页暂停秒（`MIN,MAX`/`N`；CLI `--req-batch-pause`） |
 | `req_burst_pages` | `"1,3"` | 每成功 N 页后批停（`MIN,MAX`/`N`；CLI `--req-burst-pages`） |

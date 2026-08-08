@@ -21,8 +21,8 @@ from common.utils.source_headers import load_headers_from_file
 from quant.data.calendar import to_iso
 from quant.store.paths import quant_home
 
-_MIN_INTERVAL = 10.0  # 页间绝对下限（默认区间见 yml req_page_interval 29,61）
-_MAX_INTERVAL = 61.0
+_MIN_INTERVAL = 10.0  # 页间绝对下限（默认区间见 yml req_page_interval 61,121）
+_MAX_INTERVAL = 121.0
 _BURST_PAGES_MIN = 1
 _BURST_PAGES_MAX = 3
 _BATCH_PAUSE_MIN = 120.0
@@ -260,9 +260,9 @@ def fetch_stock_fund_flow_rank(
         if page_interval is not None:
             lo = hi = max(_MIN_INTERVAL, float(page_interval))
         else:
-            lo, hi = 29.0, _MAX_INTERVAL  # 与 yml req_page_interval 默认一致
+            lo, hi = 61.0, _MAX_INTERVAL  # 与 yml req_page_interval 默认一致
     else:
-        lo = max(_MIN_INTERVAL, float(page_interval_min if page_interval_min is not None else 29.0))
+        lo = max(_MIN_INTERVAL, float(page_interval_min if page_interval_min is not None else 61.0))
         hi = max(lo, float(page_interval_max if page_interval_max is not None else _MAX_INTERVAL))
 
     b_lo = int(burst_pages_min if burst_pages_min is not None else _BURST_PAGES_MIN)

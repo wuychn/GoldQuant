@@ -50,7 +50,7 @@ def _parse_cfg_range(csv_key: str, default: tuple[float, float]) -> tuple[float,
 
 def _page_interval_bounds() -> tuple[float, float]:
     """分页页间间隔（yml ``req_page_interval``）。"""
-    lo, hi = _parse_cfg_range("req_page_interval", (29.0, 61.0))
+    lo, hi = _parse_cfg_range("req_page_interval", (61.0, 121.0))
     lo = max(10.0, lo)
     return lo, max(lo, hi)
 

@@ -156,7 +156,7 @@ def fetch_stock_fund_flow_rank(
 ):
     """个股资金流排名（分页）→ DataFrame(code, main_net_inflow)。
 
-    页间默认随机（yml ``req_page_interval``，默认 ``29,61``）。
+    页间默认随机（yml ``req_page_interval``，默认 ``61,121``）。
     编排（分页→逐票补缺）见 ``quant.data.fund_flow_5d.fetch_main_net_inflow_5d``。
     """
     from quant.config import load_quant_config
@@ -169,16 +169,16 @@ def fetch_stock_fund_flow_rank(
         page_size = int(data.get("fund_flow_rank_page_size", 100))
     if page_interval is not None:
         page_interval_min, page_interval_max = parse_interval_range(
-            page_interval, default=(29.0, 61.0)
+            page_interval, default=(61.0, 121.0)
         )
     elif page_interval_min is None and page_interval_max is None:
         page_interval_min, page_interval_max = parse_interval_range(
             data.get("req_page_interval"),
-            default=(29.0, 61.0),
+            default=(61.0, 121.0),
         )
     else:
         if page_interval_min is None:
-            page_interval_min = 29.0
+            page_interval_min = 61.0
         if page_interval_max is None:
             page_interval_max = float(page_interval_min)
     burst_lo, burst_hi = parse_interval_range(

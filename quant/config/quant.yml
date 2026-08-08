@@ -84,7 +84,7 @@ data:                          # 数据源并发限流
   # 键名与 CLI 一致（下划线 / 连字符）：req_page_interval ↔ --req-page-interval
   # 区间一律 MIN,MAX（或单值 N）
   fund_flow_rank_page_size: 100
-  req_page_interval: "29,61"      # 页间；CLI --req-page-interval
+  req_page_interval: "61,121"     # 页间；CLI --req-page-interval
   req_symbol_interval: "10,20"    # 逐票；CLI --req-symbol-interval
   req_batch_pause: "120,240"      # 批间/失败跳页暂停；CLI --req-batch-pause
   req_burst_pages: "1,3"          # 每成功 N 页批停；CLI --req-burst-pages

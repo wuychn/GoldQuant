@@ -224,7 +224,7 @@ def main() -> None:
     ap.add_argument(
         "--req-page-interval",
         default=None,
-        help="分页页间间隔秒，格式 MIN,MAX 或 N（默认 yml req_page_interval=29,61；下限 10）",
+        help="分页页间间隔秒，格式 MIN,MAX 或 N（默认 yml req_page_interval=61,121；下限 10）",
     )
     ap.add_argument(
         "--req-symbol-interval",
@@ -246,7 +246,7 @@ def main() -> None:
     if args.req_page_interval:
         from common.utils.source_headers import parse_interval_range, set_eastmoney_interval
 
-        lo, hi = parse_interval_range(args.req_page_interval, default=(29.0, 61.0))
+        lo, hi = parse_interval_range(args.req_page_interval, default=(61.0, 121.0))
         lo_i, hi_i = max(10, int(lo)), max(10, int(hi))
         if hi_i < lo_i:
             lo_i, hi_i = hi_i, lo_i

@@ -363,7 +363,7 @@ def capture_fund_flow_rank(
 
     page_lo = page_hi = None
     if page_interval is not None:
-        page_lo, page_hi = parse_interval_range(page_interval, default=(29.0, 61.0))
+        page_lo, page_hi = parse_interval_range(page_interval, default=(61.0, 121.0))
         page_lo = max(10.0, page_lo)
         page_hi = max(page_lo, page_hi)
     sym_lo = sym_hi = None
