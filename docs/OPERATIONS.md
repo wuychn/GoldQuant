@@ -329,7 +329,7 @@ poetry run python -m scripts.data.backfill_daily_meta --home D:\ProgramData\.qua
 **必须性**：§3.4 之后必须；以后大改数据也建议再跑。  
 **前置**：指向要检查的正式 `--home`。  
 **后续**：退出码 0 可进日常/回测；有 FAIL 先按提示处理（价格问题见 §3.6）。  
-**你会得到**：终端分段报告；`0`=通过（可以有 WARN），`1`=存在 FAIL。
+**你会得到**：终端分段报告（含 **实际数据起止**、跨度内市场级缺日完整列表、末日之后未入库交易日；个股覆盖已排除停牌等 `no_bar`）；`0`=通过（可以有 WARN），`1`=存在 FAIL。
 
 ```powershell
 poetry run python -m scripts.data.validate_library --home D:\ProgramData\.quant

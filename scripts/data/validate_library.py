@@ -11,9 +11,10 @@
 属合法缺日）。
 
 检查项：
-[1] 基础      calendar 天数 / daily_raw 行·码·日期区间 / name 非空率
+[1] 基础      calendar 天数 / daily_raw 行·码·**实际起止** / name 非空率
 [2] 完整性    adj_factor 覆盖率(<90% FAIL) / index_daily 000300·000905·000852(缺 FAIL) /
-              per-code 日历覆盖(低 WARN)
+              市场级缺日（跨度内有数据交易日空洞，已排除非交易日）/ per-code 日历覆盖(低 WARN，
+              已排除停牌等 no_bar 豁免日)
 [3] 正确性    重复 (code,date)(>0 FAIL) / 价格 sanity(close>0、high>=low、high/low 夹住
               open·close、volume·amount>=0)(违规 FAIL) / 复权跳空：仅查日历相邻交易日，
               且「后复权跳 >28% 而原料价未跳」才 FAIL（停牌复牌/次新大波动豁免）
@@ -68,6 +69,48 @@ def _check_index() -> None:
 def _calendar_next_map(cal: list[str]) -> dict[str, str]:
     days = sorted({str(d) for d in cal})
     return {days[i]: days[i + 1] for i in range(len(days) - 1)}
+
+
+def _fmt_dates(dates: list[str], *, per_line: int = 10) -> str:
+    """缺日列表排版：每行最多 ``per_line`` 个，便于扫读。"""
+    if not dates:
+        return "（无）"
+    if len(dates) <= per_line:
+        return ", ".join(dates)
+    lines = []
+    for i in range(0, len(dates), per_line):
+        lines.append(", ".join(dates[i : i + per_line]))
+    return "\n           ".join(lines)
+
+
+def data_span_and_market_gaps(
+    daily: pd.DataFrame,
+    cal: list[str],
+    start: str,
+    end: str,
+) -> tuple[str | None, str | None, list[str], list[str], list[str]]:
+    """窗口内实际数据起止、市场级缺日、末日之后未入库交易日。
+
+    返回 ``(lo, hi, span_days, market_missing, after_end)``：
+    - ``span_days``：``[lo, hi]`` 内日历交易日（已排除非交易日）
+    - ``market_missing``：跨度内全市场都无 K 线的交易日（「中间缺」）
+    - ``after_end``：数据末日之后、仍在检查窗口内的交易日（「尚未更新到」）
+    """
+    if daily is None or daily.empty or not cal:
+        return None, None, [], [], []
+    d = daily.copy()
+    d["date"] = d["date"].astype(str)
+    in_win = d[(d["date"] >= start) & (d["date"] <= end)]
+    if in_win.empty:
+        return None, None, [], [], []
+    lo = str(in_win["date"].min())
+    hi = str(in_win["date"].max())
+    days = sorted({str(x) for x in cal if start <= str(x) <= end})
+    span = [x for x in days if lo <= x <= hi]
+    have = set(in_win["date"].unique())
+    market_missing = [x for x in span if x not in have]
+    after_end = [x for x in days if x > hi]
+    return lo, hi, span, market_missing, after_end
 
 
 def adj_jump_suspects(
@@ -178,39 +221,75 @@ def _check_calendar_coverage(daily: pd.DataFrame, cal: list[str], start: str, en
     if not days:
         _note("FAIL", f"日历在 [{start},{end}] 内无交易日")
         return
-    # 市场级缺日只查库的实际日期跨度内（库外 [min,max] 之前/之后无数据属正常）
-    lo_lib, hi_lib = daily["date"].min(), daily["date"].max()
-    span = {d for d in days if lo_lib <= d <= hi_lib}
-    have = {str(d) for d in daily["date"].astype(str).unique()}
-    market_missing = sorted(span - have)
+
+    lo_lib, hi_lib, span, market_missing, after_end = data_span_and_market_gaps(
+        daily, cal, start, end
+    )
+    if lo_lib is None or hi_lib is None:
+        _note("FAIL", f"窗口 [{start},{end}] 内 daily_raw 无数据")
+        return
+
+    n_have = len(span) - len(market_missing)
+    print(f"  [INF]  实际数据起止: {lo_lib} ~ {hi_lib}")
+    print(
+        f"  [INF]  跨度内交易日 {len(span)} · 有数据日 {n_have} · 市场级缺日 {len(market_missing)}"
+        f"（已排除非交易日；缺日=全市场当日无任何 K 线）"
+    )
     if market_missing:
-        _note("WARN", f"市场级缺日 {len(market_missing)} 个: {market_missing[:5]}...（全市场无数据，多为漏拉/停市）")
-    # per-code 覆盖：期望 = 该码在库内首末日期夹的日历日 − 无行情豁免
+        _note(
+            "WARN",
+            f"市场级缺日 {len(market_missing)} 个（中间空洞，多为漏拉）:\n"
+            f"           {_fmt_dates(market_missing)}",
+        )
+    else:
+        print("  [OK]   市场级缺日: 0（跨度内每个交易日至少有一只票有 K 线）")
+    if after_end:
+        print(
+            f"  [INF]  数据末日之后、窗口内仍有 {len(after_end)} 个交易日未入库"
+            f"（尚未更新到；非中间缺日）:\n"
+            f"           {_fmt_dates(after_end)}"
+        )
+    else:
+        cal_hi = max(days)
+        if hi_lib >= cal_hi:
+            print(f"  [OK]   数据已覆盖到窗口/日历末日 {cal_hi}")
+
+    # per-code 覆盖：期望 = 该码在库内首末日期夹的日历日 − 无行情豁免（停牌等）
     from scripts.data.build_daily import load_no_bar_map
 
     try:
         no_bar = load_no_bar_map()
     except Exception:  # noqa: BLE001
         no_bar = {}
-    per_code: list[tuple[str, float]] = []
+    per_code: list[tuple[str, float, list[str]]] = []
     for code, g in daily.groupby(daily["code"].astype(str).str.strip()):
         ds = {str(x) for x in g["date"].astype(str)}
         lo, hi = min(ds), max(ds)
         exp = {d for d in days if lo <= d <= hi} - no_bar.get(code, set())
         if not exp:
             continue
-        cov = len(ds & exp) / len(exp)
-        per_code.append((code, cov))
+        miss = sorted(exp - ds)
+        cov = (len(exp) - len(miss)) / len(exp)
+        per_code.append((code, cov, miss))
     if not per_code:
         return
-    covs = np.array([c for _, c in per_code])
-    low = [f"{c}({x:.0%})" for c, x in sorted(per_code, key=lambda t: t[1])[:5]]
+    covs = np.array([c for _, c, _ in per_code])
+    worst = sorted(per_code, key=lambda t: t[1])[:5]
+    low = [f"{c}({x:.0%})" for c, x, _ in worst]
     print(
         f"  [OK]   per-code 日历覆盖: 均值 {covs.mean():.1%} · 最低 {covs.min():.0%} "
-        f"({len([c for c in covs if c < CAL_COVER_MIN])} 码 <{CAL_COVER_MIN:.0%})"
+        f"({len([c for c in covs if c < CAL_COVER_MIN])} 码 <{CAL_COVER_MIN:.0%}；"
+        f"已排除停牌等 no_bar 豁免日)"
     )
-    if len([c for c in covs if c < CAL_COVER_MIN]) > 0:
-        _note("WARN", f"覆盖最低 5 码: {low}（次新/停牌为合法缺日，可查）")
+    if any(c < CAL_COVER_MIN for c in covs):
+        samples = []
+        for c, x, miss in worst:
+            if not miss:
+                continue
+            show = ", ".join(miss[:8]) + ("…" if len(miss) > 8 else "")
+            samples.append(f"{c} 缺{len(miss)}日[{show}]")
+        detail = "；".join(samples) if samples else "（覆盖低但无未豁免缺日）"
+        _note("WARN", f"覆盖最低 5 码: {low}；未豁免缺日样例: {detail}")
 
 
 def main() -> None:
@@ -239,8 +318,19 @@ def main() -> None:
                     name_fill = daily["name"].fillna("").astype(str).str.strip().ne("").mean()
                 else:
                     name_fill = 0.0  # build_daily 的 stock_zh_a_hist 行无 name 列
-                print(f"  [OK]   daily_raw: {len(daily):,} 行 / {n_code} 码 / "
-                      f"{daily['date'].min()} ~ {daily['date'].max()}")
+                lo_all = str(daily["date"].min())
+                hi_all = str(daily["date"].max())
+                lo_w, hi_w, _, _, _ = data_span_and_market_gaps(
+                    daily, cal or [], args.start, args.end
+                )
+                print(
+                    f"  [OK]   daily_raw: {len(daily):,} 行 / {n_code} 码 / "
+                    f"全库起止 {lo_all} ~ {hi_all}"
+                )
+                if lo_w and hi_w and (lo_w != lo_all or hi_w != hi_all):
+                    print(f"  [INF]  检查窗口内实际起止: {lo_w} ~ {hi_w}")
+                elif lo_w and hi_w:
+                    print(f"  [INF]  实际数据起止: {lo_w} ~ {hi_w}（窗口内）")
                 print(f"  [INF]  name 非空率 {name_fill:.1%}（ST 过滤健康度；低则依赖 name_snapshot）")
             print(f"  [INF]  calendar {len(cal)} 天 · adj_factor {0 if adj is None or adj.empty else len(adj)} 行")
 
