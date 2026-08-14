@@ -27,7 +27,7 @@ from quant.decision.paper_execute import (
     write_sell_watch,
 )
 from quant.exit.atr import atr
-from quant.exit.rules import DEFAULT_ATR_MULT, DEFAULT_ATR_MULT_STOP, DEFAULT_HARD_PCT, evaluate_exits
+from quant.exit.rules import evaluate_exits
 from quant.exit.state import ExitTracker
 from quant.factors.compose import alpha_attribution, compose_alpha
 from quant.narrative.factor_phrases import attribution_summary
@@ -110,12 +110,19 @@ def build_today_card(
         daily=daily,
         sectors=sectors,
     )
-
     if use_paper_holdings:
         with paper_home_context():
             holdings = get_holdings()
     else:
         holdings = get_holdings()
+
+    buy_dates: dict[str, str] = {}
+    for h in holdings:
+        code = str(h.get("股票代码") or "").strip()
+        bd = str(h.get("买入时间") or "")[:10]
+        if code and bd:
+            buy_dates[code] = bd
+    policy.holding_buy_dates = buy_dates
 
     prices: dict[str, float] = {}
     names: dict[str, str] = {}
@@ -143,6 +150,11 @@ def build_today_card(
     def _cal(a: str, b: str) -> int:
         from datetime import date as _d
         return trading_days_between(_d.fromisoformat(a), _d.fromisoformat(b))
+
+    from quant.backtest.engine import ExitConfig
+
+    exit_cfg = ExitConfig.from_quant_yml()
+    exit_cfg.calendar_fn = _cal
 
     exit_signals: list[dict] = []
     tracker = ExitTracker()
@@ -175,12 +187,20 @@ def build_today_card(
             highest_close=st.highest_close if st else highest,
             buy_date=buy_date,
             as_of=as_of,
-            calendar_fn=_cal,  # 交易日计数（与回测 ExitConfig 一致），消除 live 自然日偏差（P0）
+            atr_mult=exit_cfg.atr_mult,
+            atr_mult_stop=exit_cfg.atr_mult_stop,
+            hard_pct=exit_cfg.hard_pct,
+            max_hold_days=exit_cfg.max_hold_days,
+            calendar_fn=exit_cfg.calendar_fn,
+            atr_trailing=exit_cfg.atr_trailing,
+            use_trend_force=exit_cfg.use_trend_force,
+            trend_fail_days=exit_cfg.trend_fail_days,
+            ma_period=exit_cfg.ma_period,
         )
-        if len(hist) >= 15:
+        if exit_cfg.atr_trailing and len(hist) >= 15:
             a = atr(hist, 14).iloc[-1]
             if a == a and a > 0:
-                stop = max(entry, highest) - 3.0 * float(a)
+                stop = max(entry, highest) - float(exit_cfg.atr_mult) * float(a)
                 dist = (prices[code] - stop) / prices[code]
                 if dist < 0.03 and sig is None:
                     exit_signals.append(
@@ -212,11 +232,12 @@ def build_today_card(
 def _build_sell_watch(card, daily, names, as_of, holdings) -> list[dict]:
     """对持仓算 stop 价 + force_sell，落盘供 T+1 盘中卖出监控（不撮合）。
 
-    - atr_stop = max(entry,highest) − 3×ATR14；hard_stop = max(entry×0.92, entry−2×ATR14)
-    - force_sell = T 晚 evaluate_exits 触发的趋势/时间止损（次日开盘卖）
+    SwapGate 模式下硬止损可关；force_sell 以 evaluate_exits（含 trend_force）为准。
     """
+    from quant.backtest.engine import ExitConfig
     from quant.exit.atr import atr
 
+    exit_cfg = ExitConfig.from_quant_yml()
     exit_by_code = {str(s.get("code")): s for s in (card.exit_signals or [])}
     rows: list[dict] = []
     for h in holdings:
@@ -238,8 +259,14 @@ def _build_sell_watch(card, daily, names, as_of, holdings) -> list[dict]:
         entry = float(buy_row["close"].iloc[0]) if not buy_row.empty else entry_raw
         highest = float(h.get("持仓最高价") or entry)
         a = float(atr(hist, 14).iloc[-1]) if len(hist) >= 15 else 0.0
-        hard_stop = max(entry * (1 - DEFAULT_HARD_PCT), entry - DEFAULT_ATR_MULT_STOP * a) if a > 0 else entry * (1 - DEFAULT_HARD_PCT)
-        atr_stop = (max(entry, highest) - DEFAULT_ATR_MULT * a) if a > 0 else None
+        hard_stop = None
+        if exit_cfg.hard_pct is not None:
+            hard_stop = entry * (1 - float(exit_cfg.hard_pct))
+            if exit_cfg.atr_mult_stop is not None and a > 0:
+                hard_stop = max(hard_stop, entry - float(exit_cfg.atr_mult_stop) * a)
+        atr_stop = None
+        if exit_cfg.atr_trailing and a > 0:
+            atr_stop = max(entry, highest) - float(exit_cfg.atr_mult) * a
         ma20 = float(hist["close"].rolling(20).mean().iloc[-1]) if len(hist) >= 20 else None
         es = exit_by_code.get(code)
         rows.append(
@@ -250,7 +277,7 @@ def _build_sell_watch(card, daily, names, as_of, holdings) -> list[dict]:
                 "entry": round(entry, 4),
                 "highest": round(highest, 4),
                 "atr": round(a, 4) if a > 0 else None,
-                "hard_stop": round(hard_stop, 4),
+                "hard_stop": round(hard_stop, 4) if hard_stop is not None else None,
                 "atr_stop": round(atr_stop, 4) if atr_stop else None,
                 "ma20": round(ma20, 4) if ma20 else None,
                 "force_sell": es is not None,
@@ -265,9 +292,9 @@ def main() -> None:
     add_home_argument(ap)
     ap.add_argument("--date", default=None, help="决策日 YYYY-MM-DD，默认今天（非交易日回退最近交易日）")
     ap.add_argument("--out", default=None, help="决策报告输出目录；默认 $QUANT_HOME/reports/decision")
-    ap.add_argument("--n-enter", type=int, default=8, help="目标组合纳入阈值排名（默认 8）")
-    ap.add_argument("--n-exit", type=int, default=15, help="目标组合剔除阈值排名（默认 15）")
-    ap.add_argument("--max-positions", type=int, default=10, help="最大持仓只数（默认 10）")
+    ap.add_argument("--n-enter", type=int, default=None, help="目标组合纳入阈值排名（默认读 swap_gate/8）")
+    ap.add_argument("--n-exit", type=int, default=None, help="目标组合剔除阈值排名（默认读 swap_gate/15）")
+    ap.add_argument("--max-positions", type=int, default=None, help="最大持仓只数（默认读 swap_gate/10）")
     ap.add_argument("--battle-pool-size", type=int, default=30, help="作战池规模（alpha top N，供 T+1 盘中择时，默认 30）")
     ap.add_argument("--no-paper", action="store_true", help="仅输出决策卡，不读写纸面账户/作战池")
     ap.add_argument("--dry-run", action="store_true", help="完整跑决策但不推飞书")
@@ -276,14 +303,25 @@ def main() -> None:
 
     do_paper = not args.no_paper
     with home_context(args.home):
+        from quant.config import load_quant_config
+        from quant.portfolio.swap_gate import SwapGateConfig
+
+        sg = SwapGateConfig.from_mapping((load_quant_config().get("portfolio") or {}).get("swap_gate"))
+        n_enter = args.n_enter if args.n_enter is not None else (sg.n_enter if sg.enabled else 8)
+        n_exit = args.n_exit if args.n_exit is not None else (sg.n_exit if sg.enabled else 15)
+        max_positions = (
+            args.max_positions
+            if args.max_positions is not None
+            else (sg.max_stocks if sg.enabled else 10)
+        )
         as_of = _resolve_as_of(args.date)
         log_progress_start(_SCOPE, "开始", detail=f"as_of={as_of}")
         try:
             card, daily, prices, names, uni, _alpha, _attribution = build_today_card(
                 as_of,
-                n_enter=args.n_enter,
-                n_exit=args.n_exit,
-                max_positions=args.max_positions,
+                n_enter=n_enter,
+                n_exit=n_exit,
+                max_positions=max_positions,
                 use_paper_holdings=do_paper,
             )
 
@@ -299,23 +337,30 @@ def main() -> None:
             fsum = funnel.summary()
             print("\n漏斗:", fsum)
 
-            # 作战池：alpha top N → 落盘供 T+1 盘中择时买入（T 晚不撮合买入）
-            alpha_ranked = sorted(_alpha.items(), key=lambda kv: -kv[1])
+            # 作战池：优先 SwapGate/目标权重通过的标的（tw=0 的盘中不会买）
             _tgt = card.target_weights or {}
             _uncalibrated = card.weights_source not in ("walk_forward", "static")
             _alpha_note = " [默认权重，未校准]" if _uncalibrated else ""
-            battle_pool = [
-                {
-                    "code": c,
-                    "name": names.get(c) or c,
-                    "alpha": round(float(a), 4),
-                    "alpha_note": _alpha_note.strip() or None,
-                    "rank": i + 1,
-                    "target_weight": round(float(_tgt.get(c, 0.0)), 4),
-                    "why": attribution_summary(_attribution.get(c, [])),
-                }
-                for i, (c, a) in enumerate(alpha_ranked[: args.battle_pool_size])
-            ]
+            if _tgt:
+                ordered = sorted(_tgt.items(), key=lambda kv: -kv[1])
+            else:
+                ordered = [
+                    (c, 0.0)
+                    for c, _a in sorted(_alpha.items(), key=lambda kv: -kv[1])[: args.battle_pool_size]
+                ]
+            battle_pool = []
+            for i, (c, tw) in enumerate(ordered[: args.battle_pool_size]):
+                battle_pool.append(
+                    {
+                        "code": c,
+                        "name": names.get(c) or c,
+                        "alpha": round(float(_alpha.get(c, 0.0)), 4),
+                        "alpha_note": _alpha_note.strip() or None,
+                        "rank": i + 1,
+                        "target_weight": round(float(tw), 4),
+                        "why": attribution_summary(_attribution.get(c, [])),
+                    }
+                )
             nxt = next_trading_day(date.fromisoformat(as_of))
             target_date = nxt.isoformat() if nxt else as_of
             if do_paper:

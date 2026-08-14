@@ -777,6 +777,25 @@ poetry run python -m scripts.research.walk_forward `
 
 ---
 
+### 8.4b 出场/入场对照 `exit_entry_ablation`
+
+**用途**：灾区短样本上对比 baseline / 关 hard_stop / 动量入场过滤 / 过滤+放宽止损。  
+**必须性**：可选；调 `entry_filter` 或止损参数前建议先跑。  
+**你会得到**：`$QUANT_HOME/reports/bt_ablation/summary.md` + 各变体报告；alpha 缓存 `alpha_by_date.pkl` 可复用。
+
+```powershell
+poetry run python -m scripts.research.exit_entry_ablation `
+  --home D:\ProgramData\.quant --start 2021-07-01 --end 2022-06-30 --workers 4
+```
+
+| 参数 | 默认 | 含义 |
+|---|---|---|
+| `--start` / `--end` | `2021-07-01` / `2022-06-30` | 对照区间 |
+| `--workers` | `4` | 因子面板并行 |
+| `--rebuild-alpha` | off | 忽略 alpha 缓存重算 |
+
+---
+
 ### 8.5 退市偏差审计 `delist_bias_audit`
 
 **用途**：检查选股结果是否严重偏向「活到今天的股票」、忽略退市股带来的偏差（幸存者偏差审计）。  

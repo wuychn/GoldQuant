@@ -213,21 +213,35 @@
 
 | 项 | 默认 | 作用 |
 |----|------|------|
-| `optimizer` | `mvo` | 优化器：均值-方差 |
+| `optimizer` | `rank_vol` | SwapGate 主路径；`mvo` 仅研究用 |
 | `optimizer_mvo.risk_aversion` | `2.0` | MVO 风险厌恶系数 |
 | `covariance.method` | `ewma` | 协方差估计：指数加权 |
 | `risk_budget.vol_lookback` | `14` | 已实现波动率回看窗口（交易日） |
 | `constraints.max_concept_pct` | `40` | 单概念 ≤ 40% |
 | `constraints.max_industry_pct` | `40` | 单行业 ≤ 40% |
-| `style_exposure.alpha_weighted` | `true` | 按 alpha 加权风格 |
-| `style_exposure.alpha_shrink` | `0.4` | alpha 收缩系数 |
+| `style_exposure.alpha_weighted` | `true` | 按 alpha 强度配权 |
+| `style_exposure.alpha_shrink` | `0.3` | alpha 收缩（0=纯强度，1=等权） |
 | `style_exposure.max_small_cap_pct` | `50` | 小盘暴露 ≤ 50% |
 | `style_exposure.max_high_mom_pct` | `60` | 高动量暴露 ≤ 60% |
-| `risk.max_drawdown_halt_enabled` | `true` | 回撤熔断开关 |
-| `risk.max_drawdown_pct` | `15` | 回撤 ≤ -15% halt |
-| `risk.halt_days` | `5` | 停买 5 交易日 |
+| `swap_gate.enabled` | `true` | 值不值得换（非日历换仓） |
+| `swap_gate.n_enter` / `n_exit` / `max_stocks` | `3` / `8` / `3` | 开仓/可持有区/最大持仓 |
+| `swap_gate.atr_band_mult` | `3.0` | 趋势：最高收盘 − m×ATR |
+| `swap_gate.ma_period` | `20` | 趋势：收盘 ≥ MA |
+| `swap_gate.trend_fail_days` | `2` | 连续失败 → 强制卖 |
+| `swap_gate.delta_sigma` | `0.3` | 分数差 = δ_σ×σ(α) |
+| `swap_gate.cost_cover_k` | `2.0` | 预估边 ≥ k×ADV 往返成本 |
+| `swap_gate.alpha_to_ret` | `0.01` | 每 1σ alpha 差距≈预期收益 |
+| `entry_filter.max_ret_5d` | `0.15` | 新建仓近 N 日涨幅上限；`null` 关闭；可用 `0.15` 或 `15`（灾区对照优选） |
+| `entry_filter.lookback` | `5` | 入场涨幅回看交易日数（只挡新开仓） |
+| `risk.max_drawdown_halt_enabled` | `true` | 回撤熔断开关（live + 回测） |
+| `risk.max_drawdown_pct` | `10` | 回撤 ≤ -10% halt（灾区对照优选） |
+| `risk.halt_days` | `10` | 停买交易日数 |
+| `exit.hard_pct` / `atr_mult_stop` | `null` | 硬止损腿；`null`=关 |
+| `exit.atr_trailing` | `false` | ATR 跟踪强制卖 |
+| `exit.use_trend_force` | `true` | 与 SwapGate 同口径趋势强制卖 |
+| `exit.max_hold_days` | `60` | 时间止损（仍要求浮亏） |
 
-> 另有 `n_enter=8 / n_exit=15 / max_stocks=10 / full_invest=0.95 / target_vol=0.15 / max_weight=0.25` 等在 `TargetPortfolio.from_config` 默认，见 [ARCHITECTURE.md §6](./ARCHITECTURE.md)。
+> SwapGate 启用时 `TargetPortfolio.from_config` 会对齐 `n_enter/n_exit/max_stocks`，并放宽 `max_weight` 以免 3 票装不满。设计见 `docs/superpowers/specs/2026-08-14-swap-gate-design.md`。
 
 ### `candidate` — 候选池（展示用，非 alpha 选股）
 

@@ -24,6 +24,8 @@ flowchart LR
 
 T 晚**只定计划、不撮合买入**；真正买卖在 T+1 盘中完成。
 
+组合层默认启用 **SwapGate**（`portfolio.swap_gate`）：每天评估是否换仓，但只有分数差与 ADV 成本双门槛通过才换；`keep` 持仓不因「新第一名」被踢。硬止损默认关，连续 2 日趋势失败才强制卖。详见 `docs/superpowers/specs/2026-08-14-swap-gate-design.md` 与 [CONFIG.md](./CONFIG.md) `swap_gate` / `exit`。
+
 ---
 
 ## 2. 选股：晚间日决策

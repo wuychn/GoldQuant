@@ -41,7 +41,7 @@ research:                       # 离线研究参数治理
   factors:
     strict_oos_weights: true        # true 时 live 不用静态全样本权重，仅 walk-forward OOS
 portfolio:                      # 目标组合（quant/portfolio/target.py）
-  optimizer: mvo                 # 优化器：mvo 均值-方差
+  optimizer: rank_vol            # SwapGate 主路径：rank_vol；mvo 仅研究用
   optimizer_mvo:
     risk_aversion: 2.0           # MVO 风险厌恶系数
   covariance:
@@ -52,14 +52,36 @@ portfolio:                      # 目标组合（quant/portfolio/target.py）
     max_concept_pct: 40          # 单概念 ≤ 40%
     max_industry_pct: 40         # 单行业 ≤ 40%
   style_exposure:                # 风格暴露控制
-    alpha_weighted: true         # 按 alpha 权重加权风格
-    alpha_shrink: 0.4            # alpha 收缩系数
+    alpha_weighted: true         # 按 alpha 强度配权
+    alpha_shrink: 0.3            # alpha 收缩（0=纯强度，1=等权）
     max_small_cap_pct: 50        # 小盘暴露 ≤ 50%
     max_high_mom_pct: 60         # 高动量暴露 ≤ 60%
-  risk:                         # 组合回撤熔断
+  swap_gate:                     # 值不值得换（非日历换仓）
+    enabled: true
+    n_enter: 3                   # 新开仓排名上限
+    n_exit: 8                    # 可持有区排名上限
+    max_stocks: 3                # 最大持仓
+    atr_band_mult: 3.0           # 趋势：最高收盘 − m×ATR
+    ma_period: 20                # 趋势：收盘 ≥ MA
+    trend_fail_days: 2           # 连续失败日 → 强制卖
+    delta_sigma: 0.3             # 分数差门槛 = δ_σ×σ(α)
+    cost_cover_k: 2.0            # 预估边 ≥ k×ADV 往返成本
+    alpha_to_ret: 0.01           # 每 1σ alpha 差距≈预期收益
+  entry_filter:                  # 新建仓过滤（不影响已持仓）
+    # 灾区对照 2021-07~2022-06：mom15 终值 11.0万 vs baseline 4.4万（仍深亏，但优于关止损）
+    max_ret_5d: 0.15             # 近 lookback 日涨幅上限；null=关闭；可用 0.15 或 15
+    lookback: 5                  # 收益回看交易日数
+  risk:                         # 组合回撤熔断（live + 回测 engine 共用）
     max_drawdown_halt_enabled: true
-    max_drawdown_pct: 15         # 回撤 ≤ -15% halt
-    halt_days: 5                 # 停买 5 个交易日
+    # 灾区对照：halt10（阈值10%/停10日）终值94.8万、MDD-13%；默认15/5 仍可用
+    max_drawdown_pct: 10         # 回撤 ≤ -10% halt
+    halt_days: 10                # 停买 10 个交易日
+  exit:                          # 与 SwapGate 对齐：日常靠趋势强制卖，硬止损默认关
+    hard_pct: null               # null=关闭 %-硬止损
+    atr_mult_stop: null          # null=关闭 ATR 硬止损腿
+    atr_trailing: false          # false=关闭 ATR 跟踪强制卖（软标签改由 SwapGate）
+    use_trend_force: true        # 连续 trend_fail_days 趋势失败 → 强制卖
+    max_hold_days: 60            # 放宽时间止损；仍要求浮亏才触发
 candidate:                      # 候选池（展示用，非 alpha 选股；quant/pool/）
   popularity_limit: 20           # 东财人气榜取前 20
   zt_min_boards: 3               # 涨停池最少连板数

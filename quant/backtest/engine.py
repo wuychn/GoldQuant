@@ -40,13 +40,17 @@ AlphaFn = Callable[[str, dict[str, dict]], dict[str, float]]
 
 @dataclass
 class ExitConfig:
-    """出场参数；为 None 时禁用对应规则。"""
+    """出场参数；``hard_pct`` / ``atr_mult_stop`` 为 None 时关闭对应硬止损腿。"""
 
     atr_mult: float = DEFAULT_ATR_MULT
-    atr_mult_stop: float = DEFAULT_ATR_MULT_STOP
-    hard_pct: float = DEFAULT_HARD_PCT
+    atr_mult_stop: float | None = DEFAULT_ATR_MULT_STOP
+    hard_pct: float | None = DEFAULT_HARD_PCT
     max_hold_days: int = DEFAULT_MAX_HOLD_DAYS
     calendar_fn: Callable[[str, str], int] | None = None
+    atr_trailing: bool = True
+    use_trend_force: bool = False
+    trend_fail_days: int = 2
+    ma_period: int = 20
 
     def __post_init__(self) -> None:
         if self.calendar_fn is None:
@@ -62,6 +66,56 @@ class ExitConfig:
 
             self.calendar_fn = _cal
 
+    @classmethod
+    def from_quant_yml(cls) -> "ExitConfig":
+        """读 ``portfolio.exit``；缺省保持历史默认（硬止损开）。"""
+        try:
+            from quant.config import load_quant_config
+
+            raw = (load_quant_config().get("portfolio") or {}).get("exit") or {}
+        except Exception:
+            return cls()
+        def _opt_float(key, default):
+            if key not in raw:
+                return default
+            v = raw.get(key)
+            return None if v is None else float(v)
+
+        return cls(
+            atr_mult=float(raw.get("atr_mult", DEFAULT_ATR_MULT)),
+            atr_mult_stop=_opt_float("atr_mult_stop", DEFAULT_ATR_MULT_STOP),
+            hard_pct=_opt_float("hard_pct", DEFAULT_HARD_PCT),
+            max_hold_days=int(raw.get("max_hold_days", DEFAULT_MAX_HOLD_DAYS)),
+            atr_trailing=bool(raw.get("atr_trailing", True)),
+            use_trend_force=bool(raw.get("use_trend_force", False)),
+            trend_fail_days=int(raw.get("trend_fail_days", 2)),
+            ma_period=int(raw.get("ma_period", 20)),
+        )
+
+
+@dataclass
+class DrawdownHaltConfig:
+    """组合回撤熔断（与 live ``portfolio.risk`` 对齐）：触发后 ``halt_days`` 内禁开仓/加仓。"""
+
+    enabled: bool = True
+    max_drawdown_pct: float = 15.0  # 绝对值阈值，如 15 表示回撤 ≥15%
+    halt_days: int = 5
+
+    @classmethod
+    def from_quant_yml(cls) -> "DrawdownHaltConfig | None":
+        try:
+            from quant.config import load_quant_config
+
+            risk = (load_quant_config().get("portfolio") or {}).get("risk") or {}
+        except Exception:
+            return None
+        if not bool(risk.get("max_drawdown_halt_enabled", False)):
+            return None
+        return cls(
+            enabled=True,
+            max_drawdown_pct=float(risk.get("max_drawdown_pct", 15)),
+            halt_days=int(risk.get("halt_days", 5)),
+        )
 
 def _normalize_daily(daily: pd.DataFrame) -> pd.DataFrame:
     """确保 daily['date'] 为 ISO 字符串。"""
@@ -147,10 +201,12 @@ def run_backtest(
     max_positions: int = 10,
     exit_config: ExitConfig | None = None,
     strict_signals: bool = True,
+    drawdown_halt: DrawdownHaltConfig | None = None,
 ) -> SimBroker:
     """日频回测。
 
     默认 ``strict_signals=True``：T-1 信号 / T 开盘成交。传 False 可得收盘理想上界。
+    ``drawdown_halt``：组合回撤熔断；传 ``None`` 时不启用（研究对照可显式传入配置）。
     """
     daily = _normalize_daily(daily)
     iso_dates = [to_iso(d) for d in dates]
@@ -161,6 +217,8 @@ def run_backtest(
 
     broker = SimBroker(cash=initial_cash)
     tracker = ExitTracker() if exit_config is not None else None
+    peak_eq = float(initial_cash)
+    halt_until_i = -1
 
     for i, d in enumerate(iso_dates):
         day_rows = daily[daily["date"] == d]
@@ -203,6 +261,10 @@ def run_backtest(
                     hard_pct=exit_config.hard_pct,
                     max_hold_days=exit_config.max_hold_days,
                     calendar_fn=exit_config.calendar_fn,
+                    atr_trailing=exit_config.atr_trailing,
+                    use_trend_force=exit_config.use_trend_force,
+                    trend_fail_days=exit_config.trend_fail_days,
+                    ma_period=exit_config.ma_period,
                 )
                 if sig is not None:
                     adv, vol = _adv_vol_for(daily_by_code, code, d)
@@ -247,12 +309,34 @@ def run_backtest(
             p = price_basis.get(code) or prev_closes.get(code) or 0.0
             current[code] = p * h.shares / eq
 
+        # 组合回撤熔断：与 live 一致，禁开仓/加仓，仍允许减仓与止损卖出
+        if drawdown_halt is not None and drawdown_halt.enabled and peak_eq > 0:
+            peak_eq = max(peak_eq, float(eq))
+            dd_pct = (float(eq) / peak_eq - 1.0) * 100.0
+            if i > halt_until_i and abs(dd_pct) >= float(drawdown_halt.max_drawdown_pct):
+                halt_until_i = i + max(0, int(drawdown_halt.halt_days))
+        halt_active = drawdown_halt is not None and drawdown_halt.enabled and i <= halt_until_i
+
         # date 用 signal_date（strict=T-1）：voltarget 的 realized_vol/协方差取 ≤date，
         # 传 d 会含 T 日收盘 → 前视（暴跌日才缩仓，实盘 T 开盘做不到）
+        if tracker is not None and hasattr(policy, "holding_buy_dates"):
+            policy.holding_buy_dates = {
+                code: st.buy_date
+                for code, st in tracker.all().items()
+                if code in broker.holdings
+            }
         target = policy.target_weights(alpha, price_basis, current, signal_date)
         # 强制清仓的票不计入目标
         for c in forced:
             target.pop(c, None)
+        if halt_active:
+            # 禁加仓：目标权重不得超过当前；未持仓代码直接剔除
+            for code in list(target.keys()):
+                cur_w = float(current.get(code, 0.0) or 0.0)
+                if cur_w <= 1e-12:
+                    target.pop(code, None)
+                else:
+                    target[code] = min(float(target[code]), cur_w)
         # 限制持仓数（与 policy.n 协调；二者应一致以避免二次截断破坏 buffer）
         if max_positions and len(target) > max_positions:
             target = dict(sorted(target.items(), key=lambda kv: -kv[1])[:max_positions])

@@ -50,12 +50,19 @@ class TargetPortfolio:
     alpha_shrink: float = 0.5  # 1=纯等权，0=纯 alpha 配权
     max_size_exposure: float = 0.0  # 小市值桶暴露上限（0=不约束）
     max_momentum_exposure: float = 0.0  # 高动量桶暴露上限（0=不约束）
+    # 新建仓过滤：近 lookback 日收益 ≥ max_entry_ret_Nd 则不新开（None=关闭）
+    max_entry_ret_5d: float | None = None
+    entry_ret_lookback: int = 5
     optimizer: str = "rank_vol"  # rank_vol | mvo
     cov_method: str = "shrink"  # shrink | ewma
     mvo_risk_aversion: float = 2.0
     daily: pd.DataFrame = field(default_factory=pd.DataFrame)
     sectors: dict[str, str] = field(default_factory=dict)
     concepts: dict[str, list[str]] = field(default_factory=dict)
+    # SwapGate（值不值得换）；holding_buy_dates 由引擎/决策注入
+    swap_gate: object | None = None  # SwapGateConfig | None
+    holding_buy_dates: dict[str, str] = field(default_factory=dict)
+    last_swap_decision: object | None = field(default=None, repr=False)
 
     @property
     def n(self) -> int:
@@ -69,25 +76,59 @@ class TargetPortfolio:
         其余参数（target_vol/max_weight/full_invest 等）用 dataclass 默认；可经 kwargs 覆盖。
         """
         from quant.config import load_quant_config
+        from quant.portfolio.swap_gate import SwapGateConfig
 
         cfg = (load_quant_config().get("portfolio") or {})
         constraints = cfg.get("constraints") or {}
         risk_budget = cfg.get("risk_budget") or {}
         style = cfg.get("style_exposure") or {}
+        entry_filter = cfg.get("entry_filter") or {}
+        sg_raw = cfg.get("swap_gate") or {}
+        swap_cfg = kwargs.pop("swap_gate", None)
+        if swap_cfg is None:
+            swap_cfg = SwapGateConfig.from_mapping(sg_raw) if sg_raw or "swap_gate" in cfg else None
+        max_ret_5d = entry_filter.get("max_ret_5d", None)
+        if max_ret_5d is not None:
+            max_ret_5d = float(max_ret_5d)
+            if max_ret_5d > 1.0:
+                max_ret_5d /= 100.0
+        lookback = int(entry_filter.get("lookback", 5))
+        max_ret_5d = kwargs.pop("max_entry_ret_5d", max_ret_5d)
+        lookback = int(kwargs.pop("entry_ret_lookback", lookback))
+        # swap_gate 启用时：对齐持仓上限，并放宽单票上限以免 3 票装不满
+        init_n = {}
+        if swap_cfg is not None and getattr(swap_cfg, "enabled", False):
+            if "n_enter" not in kwargs:
+                init_n["n_enter"] = int(swap_cfg.n_enter)
+            if "n_exit" not in kwargs:
+                init_n["n_exit"] = int(swap_cfg.n_exit)
+            if "max_stocks" not in kwargs:
+                init_n["max_stocks"] = int(swap_cfg.max_stocks)
+            if "max_weight" not in kwargs:
+                init_n["max_weight"] = max(0.40, float(swap_cfg.full_invest) / max(int(swap_cfg.max_stocks), 1))
+            if "equal_weight" not in kwargs:
+                init_n["equal_weight"] = False
+            # style.alpha_weighted 已读；若 yml 未写则默认开
+            if "alpha_weighted" not in kwargs and not style:
+                init_n["alpha_weighted"] = True
         return cls(
             sector_cap=float(constraints.get("max_industry_pct", 40)) / 100,
             concept_cap=float(constraints.get("max_concept_pct", 40)) / 100,
             vol_lookback=int(risk_budget.get("vol_lookback", 60)),
-            alpha_weighted=bool(style.get("alpha_weighted", False)),
+            alpha_weighted=bool(style.get("alpha_weighted", init_n.pop("alpha_weighted", False))),
             alpha_shrink=float(style.get("alpha_shrink", 0.5)),
             max_size_exposure=float(style.get("max_small_cap_pct", 0)) / 100,
             max_momentum_exposure=float(style.get("max_high_mom_pct", 0)) / 100,
+            max_entry_ret_5d=max_ret_5d,
+            entry_ret_lookback=lookback,
             optimizer=str(cfg.get("optimizer", "rank_vol")),
             cov_method=str((cfg.get("covariance") or {}).get("method", "shrink")),
             mvo_risk_aversion=float((cfg.get("optimizer_mvo") or {}).get("risk_aversion", 2.0)),
             daily=daily if daily is not None else pd.DataFrame(),
             sectors=sectors or {},
             concepts=concepts or {},
+            swap_gate=swap_cfg,
+            **init_n,
             **kwargs,
         )
 
@@ -154,17 +195,67 @@ class TargetPortfolio:
         return size_b, mom_b
 
     def target_weights(self, alpha, prices, current, date):
-        # 1. 排名 buffer
-        codes = apply_rank_buffer(
-            alpha, current, n_enter=self.n_enter, n_exit=self.n_exit
-        )
-        codes = [c for c in codes if c in prices]
+        # 0. 新建仓动量过热过滤（已持仓不因过滤被踢出）
+        if self.max_entry_ret_5d is not None and self.max_entry_ret_5d > 0 and not self.daily.empty:
+            from quant.portfolio.entry_filters import filter_new_entries, overheat_codes
+
+            held = {str(c) for c, w in (current or {}).items() if w and w > 0}
+            # 只检查头部候选，避免对全 alpha 宇宙逐日扫盘
+            top_n = max(self.n_enter * 5, self.max_stocks * 5, 40)
+            ranked = sorted(alpha.keys(), key=lambda c: -alpha.get(c, -1e18))[:top_n]
+            check = set(ranked) | held
+            hot = overheat_codes(
+                self.daily,
+                date,
+                check,
+                lookback=self.entry_ret_lookback,
+                max_ret=self.max_entry_ret_5d,
+            )
+            alpha = filter_new_entries(alpha, current or {}, hot)
+
+        # 1. 选股：SwapGate（值不值得换）或排名 buffer
+        self.last_swap_decision = None
+        sg = self.swap_gate
+        if sg is not None and getattr(sg, "enabled", False):
+            from quant.portfolio.swap_gate import select_target_codes
+
+            # 同步 gate 规模参数与组合一致
+            sg.n_enter = self.n_enter
+            sg.n_exit = self.n_exit
+            sg.max_stocks = self.max_stocks
+            sg.full_invest = self.full_invest
+            adv_by_code: dict[str, float] = {}
+            if not self.daily.empty:
+                d = self.daily
+                if not pd.api.types.is_string_dtype(d["date"]):
+                    d = d.copy()
+                    d["date"] = pd.to_datetime(d["date"]).dt.strftime("%Y-%m-%d")
+                # 粗 ADV：近 20 日 amount 均值
+                for code in set(list(alpha.keys())[:80]) | set((current or {}).keys()):
+                    sub = d[(d["code"].astype(str) == str(code)) & (d["date"] <= date)].tail(20)
+                    if not sub.empty and "amount" in sub.columns:
+                        adv_by_code[str(code)] = float(pd.to_numeric(sub["amount"], errors="coerce").mean() or 0)
+            dec = select_target_codes(
+                alpha,
+                current or {},
+                daily=self.daily,
+                as_of=str(date),
+                prices=prices or {},
+                cfg=sg,
+                buy_dates=self.holding_buy_dates or None,
+                adv_by_code=adv_by_code,
+            )
+            self.last_swap_decision = dec
+            codes = [c for c in dec.codes if c in prices]
+        else:
+            codes = apply_rank_buffer(
+                alpha, current, n_enter=self.n_enter, n_exit=self.n_exit
+            )
+            codes = [c for c in codes if c in prices]
+            if codes and len(codes) > self.max_stocks:
+                codes = sorted(codes, key=lambda c: -alpha.get(c, -1e18))[: self.max_stocks]
         if not codes:
             return {}
-        # 限制最大持仓数
-        if len(codes) > self.max_stocks:
-            # 按 alpha 保留最强
-            codes = sorted(codes, key=lambda c: -alpha.get(c, -1e18))[: self.max_stocks]
 
         # 2/3. 权重 + 波动率目标：用真实协方差矩阵估组合波动（替代单一 ρ=0.3）
         sigmas, covdict = self._cov(codes, date)

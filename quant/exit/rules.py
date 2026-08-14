@@ -9,8 +9,8 @@ import pandas as pd
 
 from quant.exit.atr import atr
 
-# 出场默认参数（单一来源：rules / engine.ExitConfig / daily._build_sell_watch 共用，
-# 避免三处魔法数 atr_mult=3 / atr_mult_stop=2 / hard_pct=0.08 / max_hold=20 漂移）
+# 出场默认参数（单一来源：rules / engine.ExitConfig / daily._build_sell_watch 共用）
+# SwapGate 模式下 hard / atr 硬腿默认关，强制卖走趋势连续失败。
 DEFAULT_ATR_MULT = 3.0
 DEFAULT_ATR_MULT_STOP = 2.0
 DEFAULT_HARD_PCT = 0.08
@@ -21,6 +21,29 @@ DEFAULT_MAX_HOLD_DAYS = 20
 class ExitSignal:
     reason: str
     price: float
+
+
+def trend_force_exit(
+    df: pd.DataFrame,
+    *,
+    buy_date: str,
+    atr_mult: float = 3.0,
+    ma_period: int = 20,
+    trend_fail_days: int = 2,
+) -> ExitSignal | None:
+    """与 SwapGate 同口径：ATR 带 + MA20 连续失败 → 强制卖。"""
+    from quant.portfolio.trend_state import trend_fail_streak
+
+    streak = trend_fail_streak(
+        df,
+        buy_date=buy_date,
+        atr_mult=atr_mult,
+        ma_period=ma_period,
+    )
+    if streak < trend_fail_days:
+        return None
+    last = float(pd.to_numeric(df["close"], errors="coerce").iloc[-1]) if len(df) else 0.0
+    return ExitSignal("trend_force", last)
 
 
 def atr_trailing_stop(
@@ -128,26 +151,49 @@ def evaluate_exits(
     buy_date: str,
     as_of: str,
     atr_mult: float = DEFAULT_ATR_MULT,
-    atr_mult_stop: float = DEFAULT_ATR_MULT_STOP,
-    hard_pct: float = DEFAULT_HARD_PCT,
+    atr_mult_stop: float | None = DEFAULT_ATR_MULT_STOP,
+    hard_pct: float | None = DEFAULT_HARD_PCT,
     max_hold_days: int = DEFAULT_MAX_HOLD_DAYS,
     calendar_fn=None,
+    atr_trailing: bool = True,
+    use_trend_force: bool = False,
+    trend_fail_days: int = 2,
+    ma_period: int = 20,
 ) -> ExitSignal | None:
     last = float(pd.to_numeric(df["close"], errors="coerce").iloc[-1]) if len(df) else 0.0
-    candidates = [
-        hard_stop(
+    hard_sig = None
+    if hard_pct is not None or atr_mult_stop is not None:
+        # %-腿关闭时用 0.99 占位，使 max(stops) 几乎只听 ATR 腿
+        stop_pct = 0.99 if hard_pct is None else hard_pct
+        hard_sig = hard_stop(
             df,
             entry_price=entry_price,
-            stop_pct=hard_pct,
+            stop_pct=stop_pct,
             atr_mult_stop=atr_mult_stop,
-        ),
-        atr_trailing_stop(
-            df,
-            entry_price=entry_price,
-            highest_close=highest_close,
-            atr_mult=atr_mult,
-        ),
-        trend_stop(df, ma_period=20, consecutive=2),
+        )
+    candidates = [hard_sig]
+    if atr_trailing:
+        candidates.append(
+            atr_trailing_stop(
+                df,
+                entry_price=entry_price,
+                highest_close=highest_close,
+                atr_mult=atr_mult,
+            )
+        )
+    if use_trend_force:
+        candidates.append(
+            trend_force_exit(
+                df,
+                buy_date=buy_date,
+                atr_mult=atr_mult,
+                ma_period=ma_period,
+                trend_fail_days=trend_fail_days,
+            )
+        )
+    else:
+        candidates.append(trend_stop(df, ma_period=ma_period, consecutive=2))
+    candidates.append(
         time_stop(
             buy_date,
             as_of,
@@ -156,9 +202,15 @@ def evaluate_exits(
             entry_price=entry_price,
             last_price=last,
             require_unprofitable=True,
-        ),
-    ]
-    priority = {"hard_stop": 0, "atr_trailing": 1, "trend_stop_ma20": 2, "time_stop": 3}
+        )
+    )
+    priority = {
+        "hard_stop": 0,
+        "atr_trailing": 1,
+        "trend_force": 2,
+        "trend_stop_ma20": 2,
+        "time_stop": 3,
+    }
     triggered = [c for c in candidates if c is not None]
     if not triggered:
         return None

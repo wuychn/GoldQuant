@@ -15,7 +15,7 @@ from datetime import date
 
 from common.progress_log import log_progress, log_progress_done, log_progress_error, log_progress_start
 from scripts.cli_home import add_home_argument, home_context
-from quant.backtest.engine import ExitConfig, run_backtest
+from quant.backtest.engine import DrawdownHaltConfig, ExitConfig, run_backtest
 from quant.backtest.metrics import compute_metrics
 from quant.backtest.report import export_report
 from quant.backtest.sensitivity_report import run_backtest_sensitivity
@@ -109,7 +109,8 @@ def main() -> None:
                 daily=daily,
                 sectors=read_industry_snapshot(dates[-1]) if dates else {},
             )
-            exit_cfg = None if args.no_exit else ExitConfig()
+            exit_cfg = None if args.no_exit else ExitConfig.from_quant_yml()
+            halt_cfg = None if args.no_exit else DrawdownHaltConfig.from_quant_yml()
             log_progress(_SCOPE, "跑回测 …", detail=f"{len(dates)} 日（串行）")
             t_bt0 = time.perf_counter()
             broker = run_backtest(
@@ -120,6 +121,7 @@ def main() -> None:
                 max_positions=args.max_positions,
                 exit_config=exit_cfg,
                 strict_signals=strict,
+                drawdown_halt=halt_cfg,
             )
             t_bt = time.perf_counter() - t_bt0
             print(f"回测耗时 {t_bt:.1f}s", flush=True)

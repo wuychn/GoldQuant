@@ -71,6 +71,51 @@ def test_evaluate_exits_priority():
     assert sig.reason in ("hard_stop", "atr_trailing", "trend_stop_ma20", "time_stop")
 
 
+def test_evaluate_exits_hard_stop_can_disable():
+    df = _synth(n=30, drift=-0.03, seed=4)
+    sig = evaluate_exits(
+        df,
+        entry_price=10.0,
+        highest_close=10.5,
+        buy_date="20241001",
+        as_of="20241101",
+        hard_pct=None,
+        atr_mult_stop=None,
+        max_hold_days=5,
+        calendar_fn=lambda a, b: 10,
+    )
+    assert sig is None or sig.reason != "hard_stop"
+
+
+def test_evaluate_exits_trend_force():
+    from quant.exit.rules import trend_force_exit
+
+    up = [10 + i * 0.1 for i in range(22)]
+    down = [up[-1] - i * 1.0 for i in range(1, 5)]
+    dates = pd.bdate_range(end="2024-12-31", periods=len(up) + len(down)).strftime("%Y-%m-%d")
+    rows = []
+    for d, c in zip(dates, up + down):
+        rows.append({"date": d, "open": c, "high": c * 1.01, "low": c * 0.99, "close": c, "volume": 1e6})
+    df = pd.DataFrame(rows)
+    buy = str(df["date"].iloc[0])
+    assert trend_force_exit(df, buy_date=buy, trend_fail_days=2) is not None
+    sig = evaluate_exits(
+        df,
+        entry_price=float(df["close"].iloc[0]),
+        highest_close=float(df["close"].max()),
+        buy_date=buy,
+        as_of=str(df["date"].iloc[-1]),
+        hard_pct=None,
+        atr_mult_stop=None,
+        atr_trailing=False,
+        use_trend_force=True,
+        trend_fail_days=2,
+        max_hold_days=999,
+        calendar_fn=lambda a, b: 1,
+    )
+    assert sig is not None and sig.reason == "trend_force"
+
+
 def test_exit_tracker():
     t = ExitTracker()
     t.open("000001", 10.0, "20240101")
