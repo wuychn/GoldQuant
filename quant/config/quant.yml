@@ -82,6 +82,25 @@ portfolio:                      # 目标组合（quant/portfolio/target.py）
     atr_trailing: false          # false=关闭 ATR 跟踪强制卖（软标签改由 SwapGate）
     use_trend_force: true        # 连续 trend_fail_days 趋势失败 → 强制卖
     max_hold_days: 60            # 放宽时间止损；仍要求浮亏才触发
+swing_band:                      # 波段状态机 v3：趋势内有限回撤；默认关纸面
+  enabled: false
+  n_lookback: 20
+  atr_period: 14
+  pullback_atr_mult: 0.8
+  pullback_atr_max: 2.5
+  bounce_days: 3
+  bounce_atr_mult: 0.3
+  max_run_atr_mult: 2.0
+  require_ma_rising: true
+  dist_high_pctile: 50
+  require_above_ma20: true
+  ma_period: 20
+  trail_atr_mult: 3.5
+  stall_enabled: false
+  time_stop_days: 45
+  max_stocks: 5
+  full_invest: 0.95
+  max_weight: 0.22
 candidate:                      # 候选池（展示用，非 alpha 选股；quant/pool/）
   popularity_limit: 20           # 东财人气榜取前 20
   zt_min_boards: 3               # 涨停池最少连板数

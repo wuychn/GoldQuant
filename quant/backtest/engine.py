@@ -325,6 +325,15 @@ def run_backtest(
                 for code, st in tracker.all().items()
                 if code in broker.holdings
             }
+        if hasattr(policy, "holding_snapshots"):
+            policy.holding_snapshots = {
+                code: {
+                    "buy_date": h.buy_date,
+                    "cost": h.cost_price,
+                    "shares": h.shares,
+                }
+                for code, h in broker.holdings.items()
+            }
         target = policy.target_weights(alpha, price_basis, current, signal_date)
         # 强制清仓的票不计入目标
         for c in forced:
