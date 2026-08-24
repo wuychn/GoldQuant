@@ -82,7 +82,7 @@ portfolio:                      # 目标组合（quant/portfolio/target.py）
     atr_trailing: false          # false=关闭 ATR 跟踪强制卖（软标签改由 SwapGate）
     use_trend_force: true        # 连续 trend_fail_days 趋势失败 → 强制卖
     max_hold_days: 60            # 放宽时间止损；仍要求浮亏才触发
-swing_band:                      # 波段状态机 v3：趋势内有限回撤；默认关纸面
+swing_band:                      # 波段研究：价量状态机默认关；主验收改走反转 IC 日历冻结算
   enabled: false
   n_lookback: 20
   atr_period: 14
@@ -101,6 +101,25 @@ swing_band:                      # 波段状态机 v3：趋势内有限回撤；
   max_stocks: 5
   full_invest: 0.95
   max_weight: 0.22
+  # 同窗探索结论（2023-08~2025-12）：
+  # - 日历整仓 inv_t3_e20 收益最高但死板、偏反转赌博感
+  # - 纯顺势+灵活调仓（flex_trend）同窗深亏
+  # - 折中：反转 alpha + 灵活门槛换仓（排除 ST、趋势坏强制卖）→ invflex_t5_k20 ≈ +56%/MDD-38%
+  alpha_calendar:
+    invert: true
+    topn: 3
+    rebalance_every: 20
+    full_invest: 0.95
+    exit_config: null
+  invert_flex:                   # 推荐过程：每日评估，非整仓日历
+    enabled: true
+    max_stocks: 5
+    n_enter: 8
+    n_keep: 20                   # 排名仍在前 20 且趋势 OK → 不因外部更强被踢
+    delta_sigma: 0.4             # 换仓分数差门槛
+    min_hold_days: 5
+    trend_fail_days: 2
+    exclude_st: true
 candidate:                      # 候选池（展示用，非 alpha 选股；quant/pool/）
   popularity_limit: 20           # 东财人气榜取前 20
   zt_min_boards: 3               # 涨停池最少连板数

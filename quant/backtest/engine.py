@@ -367,10 +367,14 @@ def run_backtest(
                     sell_shares = shares_for_amount(ref, excess)
                     if sell_shares > 0:
                         adv, vol = _adv_vol_for(daily_by_code, code, d)
+                        sell_reason = ""
+                        if hasattr(policy, "last_sell_reasons"):
+                            sell_reason = str((policy.last_sell_reasons or {}).get(code) or "")
                         broker.sell(
                             code, rows_by_code[code], prev_closes.get(code),
                             target_shares=sell_shares,
                             ref_price=ref if strict_signals else None,
+                            reason=sell_reason or "rebalance",
                             adv_amount=adv,
                             volatility_pct=vol,
                         )

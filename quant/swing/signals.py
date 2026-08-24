@@ -15,6 +15,8 @@ from quant.exit.atr import atr
 
 @dataclass(frozen=True)
 class SwingBandParams:
+    # buy_mode: pullback=v3 回撤再起；momentum=设计稿 ATR 动量启动
+    buy_mode: str = "pullback"
     n_lookback: int = 20
     atr_period: int = 14
     pullback_atr_mult: float = 0.8  # 至少回撤这么多
@@ -33,7 +35,7 @@ class SwingBandParams:
     stall_atr_mult: float = 0.5
     time_stop_days: int = 45
     dist_high_lookback: int = 252
-    momentum_atr_mult: float = 1.5  # 兼容旧字段
+    momentum_atr_mult: float = 1.5  # momentum 模式：近 N 日涨幅 ≥ a×(ATR/价)
 
 
 def _ensure_date_str(df: pd.DataFrame) -> pd.DataFrame:
@@ -96,6 +98,73 @@ def ma_rising(df: pd.DataFrame, period: int = 20, lookback: int = 10) -> bool:
 
 
 def buy_strength(df: pd.DataFrame, params: SwingBandParams) -> float | None:
+    """买入强度；``buy_mode=pullback|momentum|rank_mom|rank_rev``。"""
+    mode = (params.buy_mode or "pullback").lower()
+    if mode == "momentum":
+        return _buy_strength_momentum(df, params)
+    if mode == "rank_mom":
+        return _buy_strength_rank_mom(df, params)
+    if mode == "rank_rev":
+        s = _buy_strength_rank_mom(df, params)
+        return None if s is None else float(-s)
+    return _buy_strength_pullback(df, params)
+
+
+def _buy_strength_rank_mom(df: pd.DataFrame, params: SwingBandParams) -> float | None:
+    """截面排名用：不设动量门槛，只算近 N 日涨幅/ATR 强度（可叠均线过滤）。"""
+    df = _ensure_date_str(df)
+    if df is None or df.empty:
+        return None
+    need = max(params.n_lookback, params.ma_period, params.atr_period + 1) + 2
+    if len(df) < need:
+        return None
+    a = last_atr(df, params.atr_period)
+    if a is None:
+        return None
+    close = pd.to_numeric(df["close"], errors="coerce")
+    last = float(close.iloc[-1])
+    if last <= 0 or not np.isfinite(last):
+        return None
+    if params.require_above_ma20 and not above_ma(df, params.ma_period):
+        return None
+    if params.require_ma_rising and not ma_rising(df, params.ma_period, params.ma_slope_lookback):
+        return None
+    run = ret_n(df, params.n_lookback)
+    if run is None:
+        return None
+    return float(run / max(a / last, 1e-9))
+
+
+def _buy_strength_momentum(df: pd.DataFrame, params: SwingBandParams) -> float | None:
+    """设计稿：近 N 日涨幅 ≥ a×ATR（相对价），且位置/均线过滤。"""
+    df = _ensure_date_str(df)
+    if df is None or df.empty:
+        return None
+    need = max(params.n_lookback, params.ma_period, params.atr_period + 1) + 2
+    if len(df) < need:
+        return None
+    a = last_atr(df, params.atr_period)
+    if a is None:
+        return None
+    close = pd.to_numeric(df["close"], errors="coerce")
+    last = float(close.iloc[-1])
+    if last <= 0 or not np.isfinite(last):
+        return None
+    if params.require_above_ma20 and not above_ma(df, params.ma_period):
+        return None
+    if params.require_ma_rising and not ma_rising(df, params.ma_period, params.ma_slope_lookback):
+        return None
+    run = ret_n(df, params.n_lookback)
+    if run is None:
+        return None
+    thr = params.momentum_atr_mult * (a / last)
+    if run < thr:
+        return None
+    # 强度 = 涨幅 / (ATR/价)
+    return float(run / max(a / last, 1e-9))
+
+
+def _buy_strength_pullback(df: pd.DataFrame, params: SwingBandParams) -> float | None:
     """趋势内有限回撤后再起；过深回撤/已高潮/均线下行 → 拒绝。"""
     df = _ensure_date_str(df)
     if df is None or df.empty:

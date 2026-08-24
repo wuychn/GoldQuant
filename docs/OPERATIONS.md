@@ -527,6 +527,29 @@ poetry run python -m scripts.backtest.run `
 
 并行只加速「建 alpha（按票算因子）」与可选的敏感性多组回测，**不**并行逐日撮合；默认 `workers=1` 与旧口径一致。
 
+> SwapGate 主路径 CLI 默认 `--n-enter 8 --max-positions 10` 会覆盖 yml 的 3/3；要对齐纸面请显式传 `--n-enter 3 --n-exit 8 --max-positions 3`。
+
+---
+
+### 5.1b 波段验收：反转 IC + 日历冻结 `swing_alpha_calendar`
+
+**用途**：同窗研究「波段收益>50%」的主验收路径（与价量 `SwingBandPolicy` / SwapGate 分开）。  
+**口径**：截面 IC alpha **取负**，每 N 日重选 TopK，持仓期冻结，无硬止损。  
+**同窗结果**（2023-08-01～2025-12-31）：`topn=10, every=20, invert` ≈ **+68.6%**（见 `reports/bt_swing_band/`）。
+
+```powershell
+poetry run python -m scripts.research.swing_alpha_calendar `
+  --home D:\ProgramData\.quant --start 2023-08-01 --end 2025-12-31 --workers 4
+```
+
+| 参数 | 默认 | 含义 |
+|---|---|---|
+| `--topn` / `--every` | yml `10` / `20` | 持仓只数 / 换仓间隔（交易日） |
+| `--invert` / `--no-invert` | invert | 是否对 alpha 取负 |
+| `--workers` | `4` | 仅建 alpha 缓存时并行 |
+
+alpha 缓存：`$QUANT_HOME/reports/bt_swing_band/alpha_<start>_<end>.pkl`（建过一次可复用）。
+
 ---
 
 ### 5.2 随机基准与泄漏检验 `backtest.validate`（可选）
