@@ -113,7 +113,7 @@ PIT 注入：`panel_builder` 经 `metrics_as_of(as_of)` 写入 `bars.extras`。�
 
 **合成**：作战池内截面 z-score 加权，**不做**行业/市值中性化。
 
-**触发**：α_z ≥ **θ = 1.0**（`intraday.py:run_intraday_session`）。
+**触发**：IC 回退路径 α_z ≥ **θ = 1.0**。`momentum_swing.enabled` 时盘中**不走**该阈值，按作战池排名开盘买。
 
 **日频代理回测**（`spot_row_from_daily`）：用日 K 构造 SpotRow；`speed` 用 \((close-open)/open×100\) 近似。
 

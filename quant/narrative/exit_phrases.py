@@ -18,6 +18,9 @@ _EXIT_LABELS: dict[str, str] = {
     "within_buffer": "缓冲带内",
     "new_position": "新建仓位",
     "exit_signal": "出场信号",
+    "hold_expiry": "持有到期",
+    "orphan": "非动量持仓",
+    "open_limit_up": "开盘涨停",
 }
 
 

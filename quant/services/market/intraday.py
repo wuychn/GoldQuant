@@ -39,8 +39,10 @@ def _intraday_buy_block_with_stats(*, theta: float = 1.0) -> tuple[str, dict[str
     from quant.data.fetch import fetch_spot_em
     from quant.decision.paper_execute import (
         execute_intraday_buys,
+        execute_momentum_buys,
         paper_home_context,
         read_battle_pool,
+        read_battle_pool_doc,
     )
     from quant.factors.compose import compose_intraday_alpha
     from quant.factors.library.intraday import spot_row_from_dict
@@ -52,7 +54,8 @@ def _intraday_buy_block_with_stats(*, theta: float = 1.0) -> tuple[str, dict[str
         return "", stats
     today_s = today.isoformat()
     with paper_home_context():
-        pool = read_battle_pool(today_s)
+        doc = read_battle_pool_doc(today_s)
+        pool = (doc or {}).get("pool") if doc else read_battle_pool(today_s)
         if not pool:
             return "", stats
         try:
@@ -60,6 +63,30 @@ def _intraday_buy_block_with_stats(*, theta: float = 1.0) -> tuple[str, dict[str
         except Exception as e:  # noqa: BLE001
             return icon_section(ICON_TIP, "盘中择时", [f"取价失败: {e}"]), stats
         spot_by_code = {str(r.get("code")): r for r in spot.to_dict("records")}
+        if str((doc or {}).get("strategy") or "") == "momentum":
+            result = execute_momentum_buys(
+                pool,
+                spot_by_code,
+                today=today_s,
+                fill_n=int((doc or {}).get("fill_n") or 6),
+                slot_scale=float((doc or {}).get("slot_scale") or 1.0),
+                n_slots=int((doc or {}).get("n_slots") or 2),
+                slot_id=(doc or {}).get("slot_id"),
+            )
+            stats = {
+                "n_executed": result.get("n_executed", 0),
+                "rejected": result.get("rejected") or {},
+            }
+            if result.get("skipped") == "already_done":
+                return "", stats
+            lines = [f"动量开盘买 候选{len(pool)} → 买入{result.get('n_executed', 0)}笔"]
+            if result.get("skipped"):
+                lines.append(str(result.get("skipped")))
+            for e in result.get("executed", [])[:8]:
+                lines.append(f"🛒 {e['code']} x{e['qty']} @{e['fill']} {e.get('reason', '')}")
+            for c, why in (result.get("rejected") or {}).items():
+                lines.append(f"拒 {c}: {why}")
+            return icon_section(ICON_ORDER, "动量开盘买入", lines), stats
         rows = []
         name_map: dict[str, str] = {}
         for p in pool:

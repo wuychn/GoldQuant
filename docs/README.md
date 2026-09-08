@@ -18,8 +18,8 @@
 
 GoldQuant 是 A 股日频波段量化辅助系统，由 **FastAPI 数据聚合服务**（`app/`）与 **量化决策内核**（`quant/`）组成：
 
-- **T 晚**：日频因子选股 → 生成作战池与卖出监控 → 飞书推送
-- **T+1 盘中**：盘中因子择时买入 + 止损监控卖出 → 纸面撮合
+- **T 晚**：动量选股（昨日强势 + 沪深300 门控）→ 作战池与卖出监控 → 飞书推送
+- **T+1 盘中**：开盘买入 + 到期尾盘卖出 → 纸面撮合（`momentum_swing.enabled: false` 时回退 IC + 盘中 θ）
 - **离线**：Parquet 日线库支撑因子、回测与决策；IC/walk-forward 驱动因子权重
 
 ## 运行时目录
@@ -48,15 +48,15 @@ GoldQuant 是 A 股日频波段量化辅助系统，由 **FastAPI 数据聚合�
 # 启动数据 API（调度器 / HTTP / Swagger 需要；单次 quant CLI 不必先启）
 poetry run python -m app
 
-# 日决策（T 晚选股）
+# 日决策（T 晚选股，写纸面计划）
 poetry run python -m quant daily_decision
 
-# 盘中择时买卖
+# 盘中纸面买卖
 poetry run python -m quant during_market
 
-# 离线库维护 / 回测（读写库脚本均可加 --home）
+# 离线库维护 / 动量回测（读写库脚本均可加 --home）
 poetry run python -m scripts.data.maintain --home D:\ProgramData\.quant
-poetry run python -m scripts.backtest.run --home D:\ProgramData\.quant --start 2024-01-01 --end 2024-06-30
+poetry run python -m scripts.backtest.run_momentum --home D:\ProgramData\.quant
 ```
 
 - 从零建库与参数表：[OPERATIONS.md](./OPERATIONS.md)  

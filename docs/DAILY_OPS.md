@@ -24,7 +24,15 @@ flowchart LR
 
 T 晚**只定计划、不撮合买入**；真正买卖在 T+1 盘中完成。
 
-组合层默认启用 **SwapGate**（`portfolio.swap_gate`）：每天评估是否换仓，但只有分数差与 ADV 成本双门槛通过才换；`keep` 持仓不因「新第一名」被踢。硬止损默认关，连续 2 日趋势失败才强制卖。详见 `docs/superpowers/specs/2026-08-14-swap-gate-design.md` 与 [CONFIG.md](./CONFIG.md) `swap_gate` / `exit`。
+当前默认策略是 **动量双槽**（`quant.yml` → `momentum_swing.enabled`）：
+
+- T 晚：昨日收盘涨幅 Top6（流动池）写入次日作战池；持有到期的仓位写入 `sell_watch`（尾盘卖）
+- 门控：沪深300 收盘 > MA55 才开新槽；连续空仓满 10 个交易日则半槽强制开一次
+- T+1：开盘附近买入（跳过开盘涨停，不等盘中 θ）；到期日 14:30 后卖出
+
+`momentum_swing.enabled: false` 时回退到 IC 因子 + SwapGate（目标组合差额 + 盘中 θ 择时）。
+
+组合层 SwapGate 仅在动量关闭时生效。详见 [CONFIG.md](./CONFIG.md) `momentum_swing` / `swap_gate` / `exit`。
 
 ---
 
@@ -103,8 +111,8 @@ poetry run python -m quant during_market
 
 逻辑概要（先卖后买）：
 
-1. 读当日 `sell_watch` → 触发硬止损 / ATR 跟踪等则纸面卖出  
-2. 读当日 `battle_pool` → 盘中因子 `intraday_alpha` 超过阈值 θ 则纸面买入  
+1. 读当日 `sell_watch` → 动量到期（`when=close`）在 14:30 后卖；其它止损仍盘中触发  
+2. 读当日 `battle_pool` → **动量**：按排名开盘买（跳过开盘涨停）；**IC 回退**：盘中因子超过 θ 才买  
 3. 风控闸门（日初权益、仓位上限等）约束下单  
 4. 推送「智能盯盘」（指数 / 持仓 / 异动 + 成交摘要）
 

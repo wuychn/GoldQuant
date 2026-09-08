@@ -82,6 +82,16 @@ portfolio:                      # 目标组合（quant/portfolio/target.py）
     atr_trailing: false          # false=关闭 ATR 跟踪强制卖（软标签改由 SwapGate）
     use_trend_force: true        # 连续 trend_fail_days 趋势失败 → 强制卖
     max_hold_days: 60            # 放宽时间止损；仍要求浮亏才触发
+momentum_swing:                  # 当前主策略：昨日强势 + 沪深300均线门控 + 双槽
+  enabled: true                  # true=日决策/盘中走动量；false=回退 IC+SwapGate
+  topn: 6                        # 信号日收盘涨幅截面 TopN
+  ma: 55                         # 沪深300 收盘 > MA（滞后一日决定 T+1 开仓）
+  min_adv: 80000000              # 20 日成交额下限（元）
+  hold_days: 2                   # 买入后再持有的收盘次数（2 → T+3 收盘卖）
+  n_slots: 2                     # 双槽各 50%
+  max_idle: 10                   # 连续空仓达到该交易日数则半槽强制开仓
+  listed_days: 60                # 上市满 N 个交易日
+  index_code: "000300"           # 门控指数
 swing_band:                      # 波段研究：价量状态机默认关；主验收改走反转 IC 日历冻结算
   enabled: false
   n_lookback: 20

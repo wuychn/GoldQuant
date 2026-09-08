@@ -77,6 +77,7 @@ class QuantConfigSchema(BaseModel):
     gates: dict[str, Any] = Field(default_factory=dict)
     research: ResearchCfg = Field(default_factory=ResearchCfg)
     portfolio: dict[str, Any] = Field(default_factory=dict)
+    momentum_swing: dict[str, Any] = Field(default_factory=dict)
     swing_band: dict[str, Any] = Field(default_factory=dict)
     candidate: dict[str, Any] = Field(default_factory=dict)
     data: DataCfg = Field(default_factory=DataCfg)

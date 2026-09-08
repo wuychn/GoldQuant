@@ -221,6 +221,56 @@ def build_decision_push_body(payload: dict[str, Any]) -> str:
     sell_watch = payload.get("sell_watch") or []
     from quant.narrative.exit_phrases import exit_reason_label
 
+    if payload.get("strategy") == "momentum":
+        mom = payload.get("momentum") or {}
+        gate = "开" if mom.get("gate_on") else "关"
+        force = "是" if mom.get("force") else "否"
+        skip = mom.get("skip_reason") or "-"
+        pool_lines = [
+            (
+                f"{p.get('name')}({p.get('code')}) 昨涨{p.get('alpha')} "
+                f"#{p.get('rank')} {p.get('why') or ''}"
+            ).rstrip()
+            for p in pool[:8]
+        ]
+        sell_lines = []
+        for s in sell_watch[:10]:
+            flag = "⚡" if s.get("force_sell") else "·"
+            sell_lines.append(
+                f"{flag} {s.get('name')}({s.get('code')}) {exit_reason_label(s.get('reason'))}"
+            )
+        parts = [
+            icon_section(
+                ICON_TIP,
+                "动量策略",
+                [
+                    f"沪深300门控 {gate} | 强制半仓 {force} | 空仓{mom.get('idle')}日",
+                    f"明日开盘买槽位{mom.get('slot_id')} 仓位×{mom.get('slot_scale')} | {skip}",
+                ],
+            ),
+            icon_section(
+                ICON_ACCOUNT,
+                "账户",
+                [
+                    f"总资产 {money(acc.get('总资产'))}",
+                    f"现金 {money(acc.get('可用资金'))} | 市值 {money(acc.get('持仓市值'))}",
+                ],
+            ),
+            icon_section(
+                ICON_WATCH, f"明日作战池({payload.get('battle_pool_date', '')})", pool_lines
+            ),
+            icon_section(ICON_ORDER, "卖出监控", sell_lines),
+            icon_section(
+                ICON_HOLD,
+                "持仓",
+                [
+                    f"{h.get('code')} {h.get('name')} {h.get('shares')}股 @{h.get('cost')}"
+                    for h in (paper.get("holdings") or [])[:8]
+                ],
+            ),
+        ]
+        return "\n\n".join(p for p in parts if p)
+
     pool_lines = [
         (
             f"{p.get('name')}({p.get('code')}) α={p.get('alpha')}"

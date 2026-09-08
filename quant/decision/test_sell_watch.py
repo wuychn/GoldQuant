@@ -75,6 +75,49 @@ def test_execute_intraday_sells_force_sell(paper_home):
     assert result["n_signals"] == 1
 
 
+def test_execute_intraday_sells_hold_expiry_waits_for_close(paper_home, monkeypatch):
+    """动量到期卖：未到尾盘不触发。"""
+    from quant.decision import paper_execute as pe
+
+    monkeypatch.setattr("quant.trading_hours.is_late_session_for_trend_sell", lambda: False)
+    sells = [
+        {
+            "code": "600000",
+            "name": "浦发",
+            "qty": 200,
+            "force_sell": True,
+            "reason": "hold_expiry",
+            "when": "close",
+        }
+    ]
+    spot = {"600000": {"close": 10.0, "pre_close": 10.0}}
+    result = pe.execute_intraday_sells(sells, spot, today="2026-07-28", dry_run=True)
+    assert result["n_signals"] == 0
+    monkeypatch.setattr("quant.trading_hours.is_late_session_for_trend_sell", lambda: True)
+    result = pe.execute_intraday_sells(sells, spot, today="2026-07-28", dry_run=True)
+    assert result["n_signals"] == 1
+
+
+def test_execute_momentum_buys_skips_open_limit_up(paper_home):
+    from quant.decision.paper_execute import execute_momentum_buys
+
+    pool = [
+        {"code": "600000", "name": "A", "rank": 1},
+        {"code": "600001", "name": "B", "rank": 2},
+        {"code": "600002", "name": "C", "rank": 3},
+    ]
+    spot = {
+        "600000": {"close": 11.0, "open": 11.0, "pre_close": 10.0},  # 开盘涨停
+        "600001": {"close": 10.2, "open": 10.1, "pre_close": 10.0},
+        "600002": {"close": 10.3, "open": 10.2, "pre_close": 10.0},
+    }
+    result = execute_momentum_buys(
+        pool, spot, today="2026-07-28", fill_n=2, slot_scale=1.0, n_slots=2, slot_id=0, dry_run=True
+    )
+    assert result["rejected"].get("600000") == "open_limit_up"
+    assert result["n_signals"] == 2
+
+
 def test_execute_intraday_sells_skip_no_price(paper_home):
     """spot 无该票现价 → 跳过。"""
     write_sell_watch(

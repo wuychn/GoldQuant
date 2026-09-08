@@ -531,6 +531,20 @@ poetry run python -m scripts.backtest.run `
 
 ---
 
+### 5.1a 动量策略回测 `backtest.run_momentum`（当前纸面主策略）
+
+**用途**：与纸面同一套规则（昨日强势 Top6 + 沪深300 MA55 门控 + 双槽 + 空仓满 10 日半仓强制）。  
+**必须性**：改 `momentum_swing` 参数或验收纸面逻辑时建议跑。  
+**你会得到**：`$QUANT_HOME/reports/bt_momentum/` 下 `report.json` / `curve.csv` / `monthly.txt`。
+
+```powershell
+poetry run python -m scripts.backtest.run_momentum --home D:\ProgramData\.quant
+```
+
+参数默认读 `quant.yml → momentum_swing`（`--ma` / `--topn` / `--hold` / `--max-idle` 可覆盖）。
+
+---
+
 ### 5.1b 波段验收：反转 IC + 日历冻结 `swing_alpha_calendar`
 
 **用途**：同窗研究「波段收益>50%」的主验收路径（与价量 `SwingBandPolicy` / SwapGate 分开）。  
@@ -688,7 +702,7 @@ poetry run uvicorn app.main:app --host 0.0.0.0 --port 8085
 | 11:50 | `post_market_lunch` | `quant post_market_lunch` | 可选 | 午间复盘推送 |
 | 收盘后（配置） | `post_market_evening` | `quant post_market_evening` | 可选 | 收盘复盘推送 |
 | **18:00** | `update_daily` | `scripts.data.update_daily` | **数据必须** | 把当天行情写入正式库 |
-| **20:10** | `daily_decision` | `quant daily_decision` | **选股必须** | 算因子选股，写作战池与卖出监控 |
+| **20:10** | `daily_decision` | `quant daily_decision` | **选股必须** | 动量选股（或 IC 回退）写作战池与卖出监控 |
 | **周五 22:00** | `maintain` | `scripts.data.maintain` | **库自愈强烈建议** | 查缺补漏 + 当日增量 + 重试失败 |
 
 不用调度、用系统「任务计划程序」时，可直接调同一解释器，例如：

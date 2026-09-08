@@ -268,13 +268,27 @@ def append_paper_equity(as_of: str, account: dict[str, Any], *, n_trades: int = 
 # ---------- 作战池（T 晚选 → T+1 盘中择时） ----------
 
 
-def write_battle_pool(target_date: str, pool: list[dict]) -> Path:
+def write_battle_pool(target_date: str, pool: list[dict], extra: dict | None = None) -> Path:
     """落盘作战池：``paper_account/battle_pool/{target_date}.json``。"""
     path = battle_pool_file(target_date)
     path.parent.mkdir(parents=True, exist_ok=True)
     data = {"date": target_date, "generated_at": cn_datetime_str(), "pool": pool}
+    if extra:
+        data.update(extra)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     return path
+
+
+def read_battle_pool_doc(target_date: str) -> dict | None:
+    """读作战池整份文档；不存在返回 None。"""
+    path = battle_pool_file(target_date)
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def read_battle_pool(target_date: str) -> list[dict] | None:
@@ -287,6 +301,11 @@ def read_battle_pool(target_date: str) -> list[dict] | None:
     except (OSError, json.JSONDecodeError):
         return None
     return data.get("pool") or []
+
+
+def is_momentum_pool(target_date: str) -> bool:
+    doc = read_battle_pool_doc(target_date)
+    return bool(doc) and str(doc.get("strategy") or "") == "momentum"
 
 
 def clear_battle_pool(target_date: str) -> None:
@@ -456,6 +475,177 @@ def execute_intraday_buys(
         }
 
 
+def _mom_buy_done_path(date: str) -> Path:
+    return quant_home() / "state" / f"mom_buy_done_{date}.txt"
+
+
+def momentum_buy_done(date: str) -> bool:
+    return _mom_buy_done_path(date).is_file()
+
+
+def _mark_momentum_buy_done(date: str) -> None:
+    p = _mom_buy_done_path(date)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("1", encoding="utf-8")
+
+
+def execute_momentum_buys(
+    pool: list[dict],
+    spot_by_code: dict[str, dict],
+    *,
+    today: str,
+    fill_n: int,
+    slot_scale: float,
+    n_slots: int,
+    slot_id: int | None,
+    dry_run: bool = False,
+) -> dict:
+    """动量开盘买：按 rank 跳过开盘涨停，凑满 fill_n 只，槽位等权。"""
+    from quant.swing.momentum import (
+        load_slot_state,
+        occupy_slot,
+        open_limit_up,
+        save_slot_state,
+    )
+
+    with paper_home_context():
+        if momentum_buy_done(today):
+            return {
+                "dry_run": dry_run,
+                "n_signals": 0,
+                "n_executed": 0,
+                "executed": [],
+                "rejected": {},
+                "bought": [],
+                "skipped": "already_done",
+            }
+        holdings = get_holdings()
+        held = {str(h.get("股票代码", "")).strip() for h in holdings}
+        bought = read_bought_today(today)
+        total_assets = get_total_assets()
+        if total_assets <= 0:
+            total_assets = float(get_account().get("可用资金") or 0) or 100_000.0
+        assets = max(total_assets, 1.0)
+        slot_w = (1.0 / max(n_slots, 1)) * float(slot_scale or 1.0)
+
+        ranked = sorted(pool, key=lambda p: int(p.get("rank") or 9999))
+        picked: list[tuple[dict, dict, float, float]] = []
+        pre_rejected: dict[str, str] = {}
+        missing_spot = False
+        for p in ranked:
+            if len(picked) >= max(fill_n, 1):
+                break
+            code = str(p.get("code") or "")
+            if not code or code in held or code in bought:
+                continue
+            sr = spot_by_code.get(code) or {}
+            try:
+                last = float(sr.get("close") or 0)
+                open_px = float(sr.get("open") or last)
+                pre = float(sr.get("pre_close") or last)
+            except (TypeError, ValueError):
+                last = open_px = pre = 0.0
+            if last <= 0:
+                missing_spot = True
+                continue
+            if open_limit_up(code, open_px, pre):
+                pre_rejected[code] = "open_limit_up"
+                continue
+            picked.append((p, sr, last, pre))
+
+        if len(picked) < max(1, (fill_n + 1) // 2):
+            if not missing_spot:
+                _mark_momentum_buy_done(today)
+            return {
+                "dry_run": dry_run,
+                "n_signals": 0,
+                "n_executed": 0,
+                "executed": [],
+                "rejected": pre_rejected,
+                "bought": [],
+                "skipped": "basket_too_small",
+            }
+
+        per_w = slot_w / max(len(picked), 1)
+        signals: list[TradeSignal] = []
+        quote_rows: list[dict] = []
+        for p, sr, last, pre in picked:
+            code = str(p.get("code"))
+            qty = shares_for_amount(last, per_w * assets)
+            if qty <= 0:
+                pre_rejected[code] = "lot_too_small"
+                continue
+            name = p.get("name") or code
+            chg = (last / pre - 1.0) * 100 if pre > 0 else 0.0
+            signals.append(
+                TradeSignal(
+                    action="买入",
+                    code=code,
+                    name=name,
+                    price=last,
+                    quantity=qty,
+                    strategy="momentum",
+                    reason=f"mom open rank={p.get('rank')} tw={per_w:.1%}",
+                    signal_kind="momentum_open",
+                )
+            )
+            quote_rows.append(
+                {
+                    "股票代码": code,
+                    "股票名称": name,
+                    "盘口": {
+                        "最新": last,
+                        "最新价": last,
+                        "今开": float(sr.get("open") or last),
+                        "昨收": pre,
+                        "涨跌幅": chg,
+                    },
+                }
+            )
+        if dry_run or not signals:
+            return {
+                "dry_run": dry_run,
+                "n_signals": len(signals),
+                "n_executed": 0,
+                "executed": [],
+                "rejected": dict(pre_rejected),
+                "bought": [],
+            }
+        payload = {"自选股": quote_rows, "持仓股": []}
+        executed, rejected = execute_signals(
+            signals,
+            payload=payload,
+            enforce_hours=False,
+            allow_add=True,
+            trade_date=today,
+        )
+        bought_codes = [e.signal.code for e in executed if e.signal.action == "买入"]
+        if bought_codes:
+            _append_bought_today(today, bought_codes)
+            if slot_id is not None:
+                st = load_slot_state(n_slots)
+                save_slot_state(occupy_slot(st, int(slot_id), bought_codes, today, float(slot_scale or 1.0)))
+        if bought_codes or not missing_spot:
+            _mark_momentum_buy_done(today)
+        refresh_account_market_value()
+        return {
+            "dry_run": False,
+            "n_signals": len(signals),
+            "n_executed": len(executed),
+            "executed": [
+                {
+                    "code": e.signal.code,
+                    "qty": e.signal.quantity,
+                    "fill": e.fill_price,
+                    "reason": e.signal.reason,
+                }
+                for e in executed
+            ],
+            "rejected": {**pre_rejected, **rejected},
+            "bought": bought_codes,
+        }
+
+
 def _sold_today_path(date: str) -> Path:
     return quant_home() / "state" / f"sold_today_{date}.txt"
 
@@ -507,6 +697,11 @@ def execute_intraday_sells(
             force = bool(s.get("force_sell"))
             reason = None
             if force:
+                if str(s.get("when") or "") == "close":
+                    from quant.trading_hours import is_late_session_for_trend_sell
+
+                    if not is_late_session_for_trend_sell():
+                        continue
                 reason = str(s.get("reason") or "force_sell")
             elif hard is not None and last <= float(hard):
                 reason = f"hard_stop@{hard}"
@@ -561,6 +756,13 @@ def execute_intraday_sells(
         sold_codes = [e.signal.code for e in executed if e.signal.action == "卖出"]
         if sold_codes:
             _append_sold_today(today, sold_codes)
+            try:
+                from quant.swing.momentum import load_slot_state, release_sold_codes, save_slot_state
+
+                st = load_slot_state()
+                save_slot_state(release_sold_codes(st, sold_codes))
+            except Exception:
+                pass
         refresh_account_market_value()
         return {
             "dry_run": False,

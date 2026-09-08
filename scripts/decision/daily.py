@@ -1,5 +1,8 @@
 """日频决策：选股 → 决策卡 → 纸面模拟买卖 → 飞书推送。
 
+默认走 ``momentum_swing``（昨日强势 + 沪深300 门控 + 双槽）。
+``quant.yml`` 里 ``momentum_swing.enabled: false`` 时回退 IC + SwapGate。
+
 用法：
     python -m scripts.decision.daily
     python -m scripts.decision.daily --dry-run
@@ -287,6 +290,101 @@ def _build_sell_watch(card, daily, names, as_of, holdings) -> list[dict]:
     return rows
 
 
+def _run_momentum_daily(as_of: str, *, do_paper: bool, no_push: bool, dry_run: bool, out_arg: str | None) -> None:
+    from quant.swing.momentum import MomentumConfig, build_momentum_plan, save_slot_state
+
+    cfg = MomentumConfig.from_config()
+    daily = load_adjusted_daily(end=as_of)
+    names: dict[str, str] = {}
+    day = daily[daily["date"].astype(str).str.slice(0, 10) == as_of]
+    for _, r in day.iterrows():
+        code = str(r["code"])
+        names[code] = str(r.get("name") or code)
+
+    holdings: list[dict] = []
+    if do_paper:
+        with paper_home_context():
+            holdings = get_holdings()
+    plan = build_momentum_plan(as_of, daily, holdings, names, cfg=cfg)
+    if do_paper:
+        with paper_home_context():
+            save_slot_state(plan.slot_state)
+            _pool_path = write_battle_pool(plan.target_date, plan.battle_pool, extra=plan.extra)
+            _sw_path = write_sell_watch(plan.target_date, plan.sell_watch)
+        print(f"动量作战池({plan.target_date}): {len(plan.battle_pool)} 只 → {_pool_path}")
+        print(f"卖出监控({plan.target_date}): {len(plan.sell_watch)} 只 → {_sw_path}")
+        if plan.skip_reason:
+            print(f"开仓跳过: {plan.skip_reason}")
+
+    text_lines = [
+        f"动量策略 {as_of} → {plan.target_date}",
+        f"HS300 {plan.hs300} MA{cfg.ma}={plan.hs300_ma} gate={'ON' if plan.gate_on else 'OFF'} "
+        f"force={plan.force} idle={plan.idle}",
+        f"slot={plan.slot_id} scale={plan.slot_scale} skip={plan.skip_reason or '-'}",
+        "候选: " + ", ".join(f"{p['name']}({p['code']}) {p['alpha']:.2%}" for p in plan.battle_pool[:8]),
+    ]
+    text = "\n".join(text_lines)
+    print(text)
+
+    out_dir = Path(out_arg) if out_arg else reports_dir("decision")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / f"decision_{as_of}.txt").write_text(text, encoding="utf-8")
+
+    payload: dict = {
+        "date": as_of,
+        "strategy": "momentum",
+        "weights_source": "momentum_ret1",
+        "target": {p["code"]: p["target_weight"] for p in plan.battle_pool if p.get("target_weight")},
+        "actions": [],
+        "exit_signals": [s for s in plan.sell_watch if s.get("force_sell")],
+        "funnel": {},
+        "alpha_top": [(p["code"], p["alpha"]) for p in plan.battle_pool[:10]],
+        "battle_pool": plan.battle_pool,
+        "battle_pool_date": plan.target_date,
+        "momentum": {
+            "gate_on": plan.gate_on,
+            "force": plan.force,
+            "idle": plan.idle,
+            "hs300": plan.hs300,
+            "hs300_ma": plan.hs300_ma,
+            "skip_reason": plan.skip_reason,
+            "slot_id": plan.slot_id,
+            "slot_scale": plan.slot_scale,
+            "hold_days": cfg.hold_days,
+            "max_idle": cfg.max_idle,
+        },
+        "sell_watch": plan.sell_watch,
+    }
+    if do_paper:
+        with paper_home_context():
+            _acc = get_account()
+            from quant.execution.risk_gate import set_day_start_equity
+
+            set_day_start_equity(float(_acc.get("总资产") or 0), target_date=plan.target_date)
+        payload["paper"] = {
+            "account": _acc,
+            "holdings": [
+                {
+                    "code": str(h.get("股票代码")),
+                    "name": h.get("股票名称"),
+                    "shares": h.get("持仓股数"),
+                    "cost": h.get("买入价"),
+                }
+                for h in holdings
+            ],
+        }
+        (out_dir / f"paper_{as_of}.json").write_text(
+            json.dumps(payload["paper"], ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        if not no_push and not dry_run:
+            body = build_decision_push_body(payload)
+            push_text("晚间复盘", body, mode="daily_decision", push=True)
+    (out_dir / f"decision_{as_of}.json").write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
+    )
+    print(f"已写入 {out_dir}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="日频决策：选股、决策卡、纸面模拟与飞书推送")
     add_home_argument(ap)
@@ -317,6 +415,18 @@ def main() -> None:
         as_of = _resolve_as_of(args.date)
         log_progress_start(_SCOPE, "开始", detail=f"as_of={as_of}")
         try:
+            from quant.swing.momentum import momentum_enabled
+
+            if momentum_enabled():
+                _run_momentum_daily(
+                    as_of,
+                    do_paper=do_paper,
+                    no_push=args.no_push,
+                    dry_run=args.dry_run,
+                    out_arg=args.out,
+                )
+                log_progress_done(_SCOPE, "成功", detail=f"{as_of} momentum")
+                return
             card, daily, prices, names, uni, _alpha, _attribution = build_today_card(
                 as_of,
                 n_enter=n_enter,

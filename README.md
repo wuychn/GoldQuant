@@ -1,6 +1,8 @@
 # GoldQuant
 
-A 股日频波段量化辅助系统：**FastAPI 数据聚合服务** + **IC 因子/目标组合决策** + **纸面撮合** + **LLM 复盘叙述** + **飞书推送**。
+A 股日频量化辅助系统：**FastAPI 数据聚合服务** + **动量双槽纸面交易** + **飞书推送**。
+
+当前主策略（`quant.yml` → `momentum_swing`）：昨日收盘涨幅 Top6 + 沪深300 MA55 门控 + 双槽 T+1 开盘买 / 到期尾盘卖。`enabled: false` 时回退 IC 因子 + SwapGate + 盘中 θ 择时。
 
 > 本仓库仅做数据聚合与纸面模拟交易辅助，**不构成投资建议**。行情来自 AKShare / 东财 / 同花顺等第三方，存在延迟、字段变更或访问失败的可能。
 
@@ -37,10 +39,11 @@ A 股日频波段量化辅助系统：**FastAPI 数据聚合服务** + **IC 因�
 
 | 组件 | 做什么 | 不做什么 |
 |------|--------|----------|
-| 因子 + 目标组合 + 撮合 | 决定买卖、仓位（差额交易 + 时序出场） | — |
+| 动量策略 + 纸面撮合 | 决定买卖、仓位（双槽、开盘买、到期卖） | — |
+| IC 因子 + 目标组合 | `momentum_swing.enabled: false` 时的回退路径 | — |
 | LLM | 解读数据、写新闻文案 | 不参与下单决策 |
 
-设计原则：**可回溯优先**（主链路只用 ≤T 信息重建）、**相对优于绝对**（横截面排名而非绝对分数）、**目标组合优于逐笔信号**（每日目标权重，交易差额）、**横截面入场 + 时序出场**（排名处理相对变弱，ATR/破位处理个股崩塌）。
+设计原则：**可回溯优先**（主链路只用 ≤T 信息重建）、**相对优于绝对**（横截面排名而非绝对分数）。动量路径是截面 continuation + 大盘均线门控；IC 回退路径才是「目标组合差额 + 盘中择时」。
 
 ---
 
@@ -61,6 +64,7 @@ GoldQuant/
 │   ├── portfolio/             # L2 目标组合（buffer/约束/vol target）
 │   ├── execution/              # L3 成本规则、滑点、撮合器
 │   ├── decision/               # 日决策卡 + 纸面撮合入口
+│   ├── swing/                  # 动量策略（momentum.py / momentum_bt.py）+ 波段研究
 │   ├── backtest/              # L3 回测引擎（broker/metrics/report）
 │   ├── exit/                   # L4 时序出场（ATR/硬止损/趋势/时间）
 │   ├── ops/                    # 日运维：新闻/盘前/盯盘/复盘 + 推送
@@ -129,6 +133,7 @@ copy .env.example .env
 
 | 变量 | 说明 |
 |------|------|
+| `GOLDQUANT_QUANT_HOME_DIR` | 数据根目录（如 `D:\ProgramData\.quant`）；也可用 `QUANT_HOME` |
 | `GOLDQUANT_PORT` | API 端口，默认 `8085` |
 | `LLM_API_KEY` | LLM 密钥（复盘叙述） |
 | `LLM_BASE_URL` | LLM 接口地址 |
@@ -169,29 +174,37 @@ chmod +x run.sh
 
 ## 三、业务逻辑
 
-系统采用**机构量化的"选股-择时分离"双层架构**：**T 晚选股**（日频因子 `compose_alpha` 选作战池）+ **T+1 盘中择时买入**（盘中因子 `compose_intraday_alpha` 触发）；**卖出仍日频**（ATR/趋势/时间出场）。原则：**选股与择时都用多因子 z-score 加权**（非技术分析）；LLM 只负责新闻解读与复盘叙述，推送正文由模板生成。
+默认 **动量双槽**（`scripts/decision/daily.py` + `quant/swing/momentum.py`）：T 晚定计划，T+1 开盘买、到期尾盘卖。LLM 只负责新闻解读，推送正文由模板生成。
 
-### 3.1 选股 + 盘中择时双层（`scripts/decision/daily.py` + `quant/ops/modes.py`）
+### 3.1 动量策略（当前主路径）
 
 ```text
-T 晚 daily_decision（选股层，不撮买入）
-  加载 PIT 数据 → 因子面板 ≤T → compose_alpha → 选 alpha top N(默认 30) 作战池
-  → write_battle_pool(T+1)（候选池，不定仓位）
-  → 持仓 evaluate_exits（L4 时序出场）→ 只撮卖出
-  → 推送「明日作战池 + 卖出成交」
+T 晚 daily_decision
+  流动池（非 ST / 非北交 / ADV20≥8000 万 / 上市≥60 日 / 未收盘涨停）
+  → 昨日收盘涨幅 Top6
+  → 沪深300 收盘 > MA55 才开新槽；连续空仓满 10 日则半槽强制
+  → write_battle_pool(T+1) + sell_watch（到期尾盘卖）
+  → 飞书「晚间复盘」
 
-T+1 盘中 during_market（择时层，每 7 分钟）
-  read_battle_pool(T+1) → fetch_spot_em 全市场实时快照
-  → compose_intraday_alpha（5 盘中因子截面 z-score，见 §3.3b）
-  → α_z ≥ 1.0 触发 → execute_intraday_buys（最新价 + 分档仓位 5–10%）
-  → 标记 bought_today（当日不重复）→ 推送「盘中择时买入」
+T+1 盘中 during_market（约每 7 分钟，先卖后买）
+  14:30 后：到期持仓 force_sell（近似收盘）
+  开盘附近：按作战池排名买入，跳过开盘涨停（不等盘中 θ）
+  双槽各 50%；一天最多填一个空槽
 ```
 
-- **双层分工**：日频因子 `compose_alpha` 解决"**买什么**"（选作战池）；盘中因子 `compose_intraday_alpha` 解决"**何时买**"（择时触发）。两层都是多因子 z-score 加权，非技术分析画线。
-- **卖出仍日频**：T 晚 `evaluate_exits`（ATR 跟踪 / 硬止损 / 趋势破 MA20 / 时间止损）撮合；盘中不卖（P2 加盘中止损）。
-- **作战池**：`paper_account/battle_pool/{T+1}.json`，T 晚选 T+1 盘中择时；错过则次日重生。
-- **回测口径**：`backtest` 仍用日频 strict 口径（独立），盘中择时是实盘纸面增强，不影响回测一致性。
-- **决策卡**：T 晚产出"明日作战池 + 卖出指令"，人可参考；纸面账户自动撮合卖出，次日盘中自动择时买入。
+- 配置：`quant.yml` → `momentum_swing`（`enabled` / `topn` / `ma` / `hold_days` / `max_idle`）。
+- 槽位状态：`paper_account/state/mom_slots.json`。
+- `enabled: false` 时回退下面的 IC + 盘中 θ 路径。
+- 官方回测与纸面同规则：`poetry run python -m scripts.backtest.run_momentum`。
+
+### 3.1b IC 回退路径（`momentum_swing.enabled: false`）
+
+```text
+T 晚：compose_alpha → 作战池 + evaluate_exits → sell_watch
+T+1 盘中：compose_intraday_alpha，α_z ≥ 1.0 才买
+```
+
+日频 20 因子 + 5 个盘中因子见 [FACTORS.md](docs/FACTORS.md)。目标组合 / SwapGate / L4 出场仅在此回退路径使用。
 
 ### 3.2 五时段运维推送（`quant/ops/`）
 
@@ -199,15 +212,15 @@ T+1 盘中 during_market（择时层，每 7 分钟）
 |------|------|-----------|----------|
 | 新闻 | `news` | 8–22 每个整点 | LLM |
 | 盘前 | `pre_market` | 09:25 | 模板（指数+纸面账户+关注） |
-| 盘中 | `during_market` | 09:37 起每 7 分钟（至 15:00） | 模板（指数+纸面持仓+异动）+ **盘中择时买入** |
+| 盘中 | `during_market` | 09:37 起每 7 分钟（至 15:00） | 模板（指数+纸面持仓+异动）+ **动量开盘买 / 到期卖** |
 | 午间复盘 | `post_market_lunch` | 11:50 | 模板（午前指数+纸面账户） |
 | 收盘复盘 | `post_market_evening` | 20:10 | 模板（收盘指数+纸面绩效+持仓） |
 
 - `news` 走 LLM（`prompt_news`）去噪要点 + 综合解读，摘要落 `~/.quant/memory/` 供盘前引用。
-- 其余四时段由 `ops/modes.py` 模板生成（指数 + 纸面账户/持仓 + 涨幅榜），**不改自选**；其中 `during_market` 会执行盘中择时买入（见 §3.1）。
-- `daily_decision` 推送「明日作战池 + 卖出成交」（T 晚选股不撮买入；买入在 T+1 盘中 `during_market`）。
+- 其余四时段由 `ops/modes.py` 模板生成（指数 + 纸面账户/持仓 + 涨幅榜），**不改自选**；其中 `during_market` 会执行纸面买卖（见 §3.1）。
+- `daily_decision` 推送「明日作战池 + 卖出监控」（T 晚只定计划；买卖在 T+1 `during_market`）。
 
-### 3.3 因子层（L1）
+### 3.3 因子层（L1，IC 回退用）
 
 因子在**后复权**序列上计算，仅用 `≤ as_of` 数据。流水线：
 
@@ -229,11 +242,11 @@ raw × direction → winsorize(1%,99%) → 行业+log市值中性 → z-score �
 | `day_change` | 涨跌幅 | 0.6 |
 | `turnover` | 换手率 | 0.5 |
 
-触发：作战池内 `α_z ≥ 1.0`（强于池内均值 1 个标准差）。参数为经验初值，待 IC/ML 校准（P2）。
+触发：IC 回退路径作战池内 `α_z ≥ 1.0`。动量主路径不使用该阈值。
 
 ### 3.4 目标组合（L2，`quant/portfolio/target.py`）
 
-> **注意**：实盘买入已改「作战池 + 盘中择时」（§3.1）；本节目标组合框架（差额交易）保留供**回测 strict 口径**与持仓排名 buffer 参考，不再用于实盘买入撮合。
+> **注意**：动量主路径不走本节。仅当 `momentum_swing.enabled: false` 时，目标组合用于 IC 回测 strict 口径与回退纸面。
 
 `TargetPortfolio.target_weights` 五步：排名 buffer → 等权/逆波动 → vol target 缩放 → 约束 → 权重缓冲。
 
@@ -274,7 +287,7 @@ raw × direction → winsorize(1%,99%) → 行业+log市值中性 → z-score �
 - 佣金万一（最低 5 元）、卖出印花税、沪市过户费、滑点；
 - 整手股数：`⌊amount/price/100⌋×100`；单日成交额 ≤ 当日 `amount×5%`（ADV）。
 
-纸面账户隔离：`paper_home_context` 把 state 根切到 `{quant_home}/paper_account/`，与人工主账户互不污染。回测（`backtest`）与实盘纸面共享同一撮合内核与 `TargetPortfolio`/`evaluate_exits`。
+纸面账户隔离：`paper_home_context` 把 state 根切到 `{quant_home}/paper_account/`，与人工主账户互不污染。动量路径买卖走 `execute_momentum_buys` / `sell_watch`；IC 回退仍与回测共享 `TargetPortfolio` / `evaluate_exits`。
 
 ### 3.7 决策与叙述分工
 
@@ -299,10 +312,11 @@ poetry run python -m quant during_market
 poetry run python -m quant post_market_lunch
 poetry run python -m quant post_market_evening
 
-# 日决策（决策卡 + 纸面撮合 + 推送）
+# 日决策（作战池 + 卖出监控 + 飞书）
 poetry run python -m quant daily_decision
-poetry run python -m scripts.decision.daily --no-push    # 仅落盘
-poetry run python -m scripts.decision.daily --dry-run     # 不撮合，仅打印信号
+poetry run python -m scripts.decision.daily --no-push    # 仍写纸面文件，不推飞书
+poetry run python -m scripts.decision.daily --dry-run     # 同上（不推飞书）
+poetry run python -m scripts.decision.daily --no-paper    # 只出报告，不写纸面账户
 
 # 预取概念/粘合度（05:00，可选）
 poetry run python -m quant prefetch_concepts
@@ -339,7 +353,7 @@ poetry run python -m quant prefetch_concepts
 |------|------|------|
 | 新闻聚焦 | `news` | LLM 去噪要点 + 综合解读 |
 | 开盘啦 | `pre_market` | 指数 / 纸面账户 / 关注 |
-| 智能盯盘 | `during_market` | 指数 / 纸面持仓 / 异动 |
+| 智能盯盘 | `during_market` | 指数 / 纸面持仓 / 异动 / 盘中成交 |
 | 午间复盘 | `post_market_lunch` | 午前指数 + 纸面账户 |
 | 收盘复盘 | `post_market_evening` | 收盘指数 + 纸面绩效 / 持仓 |
 | 晚间复盘 | `daily_decision` | 作战池 / 卖出监控 / 账户 / 持仓 |
@@ -348,12 +362,21 @@ poetry run python -m quant prefetch_concepts
 
 ### 4.4 历史回测
 
+当前主策略（与纸面同规则）：
+
+```powershell
+poetry run python -m scripts.backtest.run_momentum --home D:\ProgramData\.quant
+```
+
+报告在 `$QUANT_HOME/reports/bt_momentum/`（`report.json` / `curve.csv` / `monthly.txt`）。
+
+IC / SwapGate 回测（`momentum_swing.enabled: false` 时的组合路径）：
+
 ```powershell
 poetry run python -m scripts.backtest.run --start 2026-06-17 --end 2026-06-26 --max-positions 10
 ```
 
-- **与实盘对齐**：默认 strict 口径，走同一 `TargetPortfolio` + `evaluate_exits` + `execute_signals`。
-- **输出**：交易笔数、胜率、盈亏比、最大回撤、总回报、年化收益/波动、Sharpe/Sortino/Calmar、年化换手、出场归因（按 `Trade.reason` 分组）。
+- IC 回测默认 strict 口径：`TargetPortfolio` + `evaluate_exits` + `execute_signals`。
 - 报告写 `$QUANT_HOME/reports/bt/`。
 
 > 离线库由每周五 22:00 `maintain` 自动自愈（无库建库 / 查漏补漏 / retry-failed），日常 18:00 只跑 `update_daily` 当日增量（分钟级）；回测显著度取决于快照积累量，ML 校准要求 ≥100 样本，建议至少覆盖一轮趋势 + 一轮震荡再下结论。
@@ -362,9 +385,9 @@ poetry run python -m scripts.backtest.run --start 2026-06-17 --end 2026-06-26 --
 
 ## 五、配置
 
-### 5.1 组合参数
+### 5.1 策略与组合参数
 
-默认：`quant/config/quant.yml`（包内）；用户覆盖：`~/.quant/config/quant.yml`（deep merge）。环境/敏感项在 `.env`。**所有配置项及说明见 [docs/CONFIG.md](docs/CONFIG.md)。**
+默认：`quant/config/quant.yml`（包内）；用户覆盖：`~/.quant/config/quant.yml`（deep merge）。主策略段为 `momentum_swing`。环境/敏感项在 `.env`。**所有配置项及说明见 [docs/CONFIG.md](docs/CONFIG.md)。**
 
 ### 5.2 硬门禁与撮合规则
 

@@ -243,6 +243,24 @@
 
 > SwapGate 启用时 `TargetPortfolio.from_config` 会对齐 `n_enter/n_exit/max_stocks`，并放宽 `max_weight` 以免 3 票装不满。设计见 `docs/superpowers/specs/2026-08-14-swap-gate-design.md`。
 
+### `momentum_swing` — 当前主策略（纸面 + 官方回测）
+
+`enabled: true` 时，`daily_decision` / `during_market` 走动量双槽，不再用 IC + SwapGate。`false` 则回退原组合路径。
+
+| 项 | 默认 | 作用 |
+|----|------|------|
+| `enabled` | `true` | 生产纸面是否启用动量策略 |
+| `topn` | `6` | 信号日 T 收盘涨幅截面 TopN |
+| `ma` | `55` | 沪深300 收盘 > MA（T 日判定，T+1 开仓） |
+| `min_adv` | `80000000` | 20 日成交额下限（元） |
+| `hold_days` | `2` | 买入后再持有的收盘次数（2 → 约 T+3 收盘卖） |
+| `n_slots` | `2` | 双槽，每槽 50% 净值 |
+| `max_idle` | `10` | 连续空仓达到该交易日数则半槽强制开仓 |
+| `listed_days` | `60` | 上市满 N 个交易日 |
+| `index_code` | `000300` | 门控指数 |
+
+官方回测：`poetry run python -m scripts.backtest.run_momentum --home D:\ProgramData\.quant`。
+
 ### `candidate` — 候选池（展示用，非 alpha 选股）
 
 | 项 | 默认 | 作用 |
