@@ -16,11 +16,17 @@
 
 ## 一句话概览
 
-GoldQuant 是 A 股日频波段量化辅助系统，由 **FastAPI 数据聚合服务**（`app/`）与 **量化决策内核**（`quant/`）组成：
+GoldQuant 是 A 股日频量化辅助系统：**动量双槽纸面交易** + FastAPI 调度/推送。
 
-- **T 晚**：动量选股（昨日强势 + 沪深300 门控）→ 作战池与卖出监控 → 飞书推送
-- **T+1 盘中**：开盘买入 + 到期尾盘卖出 → 纸面撮合（`momentum_swing.enabled: false` 时回退 IC + 盘中 θ）
-- **离线**：Parquet 日线库支撑因子、回测与决策；IC/walk-forward 驱动因子权重
+**怎么用**（细节与命令见根目录 [README.md「怎么用」](../README.md#怎么用)）：
+
+1. `poetry install`，`.env` 写 `GOLDQUANT_QUANT_HOME_DIR`
+2. **收集数据**：首次 `build_daily` + `backfill_daily_meta` + `validate_library`；每天盘后 `update_daily`；每周 `maintain`
+3. **回测**：`python -m scripts.backtest.run_momentum`（与纸面同一套规则）
+4. **纸面**：T 晚 `daily_decision` 写作战池 → T+1 盘中 `during_market` 开盘买、到期尾盘卖
+5. **无人值守**：`python -m app`（18:00 增量 / 20:10 选股 / 盘中买卖）
+
+当前策略：昨日收盘涨幅 Top6 + 沪深300>MA55 + 双槽；`momentum_swing.enabled: false` 才走 IC + 盘中 θ。
 
 ## 运行时目录
 
@@ -28,7 +34,7 @@ GoldQuant 是 A 股日频波段量化辅助系统，由 **FastAPI 数据聚合�
 
 ```text
 ~/.quant/
-├── data/              # 离线 Parquet 库（daily_raw、adj、universe 等）
+├── store/             # 离线 Parquet 库（daily_raw、adj、universe 等）
 ├── state/             # 人工持仓 account.json / holding.jsonl
 ├── paper_account/     # 纸面账户（与人工仓隔离）
 │   ├── battle_pool/   # 作战池
@@ -45,18 +51,20 @@ GoldQuant 是 A 股日频波段量化辅助系统，由 **FastAPI 数据聚合�
 依赖用 Poetry 安装：`poetry install`（详见 [OPERATIONS.md](./OPERATIONS.md)）。命令前缀统一为 `poetry run`。
 
 ```powershell
-# 启动数据 API（调度器 / HTTP / Swagger 需要；单次 quant CLI 不必先启）
+# 启动数据 API + 调度（库已建好、要无人值守时）
 poetry run python -m app
 
-# 日决策（T 晚选股，写纸面计划）
-poetry run python -m quant daily_decision
+# 收集数据
+poetry run python -m scripts.data.build_daily --home D:\ProgramData\.quant --start 2021-01-01
+poetry run python -m scripts.data.update_daily --home D:\ProgramData\.quant
+poetry run python -m scripts.data.validate_library --home D:\ProgramData\.quant
 
-# 盘中纸面买卖
-poetry run python -m quant during_market
-
-# 离线库维护 / 动量回测（读写库脚本均可加 --home）
-poetry run python -m scripts.data.maintain --home D:\ProgramData\.quant
+# 动量回测（与纸面同规则）
 poetry run python -m scripts.backtest.run_momentum --home D:\ProgramData\.quant
+
+# T 晚选股 / T+1 盘中纸面
+poetry run python -m quant daily_decision
+poetry run python -m quant during_market
 ```
 
 - 从零建库与参数表：[OPERATIONS.md](./OPERATIONS.md)  

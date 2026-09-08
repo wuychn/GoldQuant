@@ -10,6 +10,148 @@ A 股日频量化辅助系统：**FastAPI 数据聚合服务** + **动量双槽�
 
 ---
 
+## 怎么用
+
+推荐顺序：**装环境 → 建历史库 → 回测看策略 → 盘后增量 + 晚间选股 → 次日盘中纸面**。  
+不要一上来就 `python -m app`：没库的话调度跑了也选不出票。
+
+下文示例数据根是 `D:\ProgramData\.quant`，请改成你 `.env` 里的 `GOLDQUANT_QUANT_HOME_DIR`。命令一律在项目根执行。
+
+### 当前策略（默认已开）
+
+配置：`quant/config/quant.yml` → `momentum_swing`（`enabled: true`）。
+
+| 项 | 规则 |
+|---|---|
+| 股票池 | 非 ST、非北交所（代码非 4/8/9 开头）；20 日成交额 ≥ 8000 万；上市 ≥ 60 个交易日；**信号日未收盘涨停** |
+| 选股 | 信号日 **T 收盘涨幅**截面 **Top6**（买昨天最强的） |
+| 开仓门控 | T 日沪深300 收盘 **高于 MA55** 才允许 T+1 新开一槽；连续空仓满 **10 个交易日**则半槽强制开一次（避免长期空仓） |
+| 买入 | **T+1 开盘**（再剔除开盘涨停）；纸面用盘中第一轮实时价近似开盘 |
+| 卖出 | 买入后再过 **2 个收盘**（`hold_days=2`，约 T+3 收盘）；纸面在到期日 **14:30 之后**卖 |
+| 仓位 | **双槽**，每槽 50% 净值；一天最多新开一个空槽；强制开仓时该槽 ×0.5（约 25% 净值） |
+| 成本 | 佣金万一（最低 5 元、不免五）、卖出印花税 5bp、沪市过户 0.1bp |
+
+关掉动量、回到旧 IC 因子 + SwapGate + 盘中 θ：把 `momentum_swing.enabled` 设为 `false`。
+
+### 1. 安装
+
+```powershell
+cd D:\workspace\GoldQuant
+poetry install
+copy .env.example .env
+```
+
+`.env` **至少**填数据目录（飞书/LLM 可后配，只建库和回测不需要）：
+
+```env
+GOLDQUANT_QUANT_HOME_DIR=D:\ProgramData\.quant
+```
+
+飞书推送再填 `FEISHU_APP_ID` / `FEISHU_APP_SECRET` / `FEISHU_USER_ID`。
+
+### 2. 收集数据（离线日线库）
+
+**第一次（必须）**：拉历史 K 线。全市场可能要很多小时，可中断后用同一命令续跑。
+
+```powershell
+# 单目录建库（简单；建库期间不要同时跑别的写库任务）
+poetry run python -m scripts.data.build_daily --home D:\ProgramData\.quant --start 2021-01-01 --workers 1 --req-interval 5,10
+
+# 补流通市值 / 昨收（选股过滤要用）
+poetry run python -m scripts.data.backfill_daily_meta --home D:\ProgramData\.quant
+
+# 校验，退出码 0 即可（允许 WARN）
+poetry run python -m scripts.data.validate_library --home D:\ProgramData\.quant
+```
+
+库里至少要有：`daily_raw`（不复权 K）、`adj_factor`（复权）、`index_daily`（含沪深300）、`calendar`、`universe`。动量策略读后复权价 + 沪深300。
+
+**每天盘后（必须）**：把「今天」写入正式库，否则当晚选股缺当日收盘。
+
+```powershell
+poetry run python -m scripts.data.update_daily --home D:\ProgramData\.quant
+```
+
+**每周（强烈建议）**：查缺补漏，避免静默少几天。
+
+```powershell
+poetry run python -m scripts.data.maintain --home D:\ProgramData\.quant
+```
+
+分流建库（历史目录 + 每日目录再 merge）见 [docs/OPERATIONS.md §3](docs/OPERATIONS.md#3-从零搭建离线库首次必须)。
+
+### 3. 回测（与纸面同一套动量规则）
+
+```powershell
+poetry run python -m scripts.backtest.run_momentum --home D:\ProgramData\.quant --start 2021-01-01 --end 2026-08-14
+```
+
+| 你会看到 | 位置 |
+|---|---|
+| 年化 / 回撤 / 分年 | 终端 |
+| 权益曲线 | `$QUANT_HOME/reports/bt_momentum/curve.csv` |
+| 月度表 | `.../monthly.txt` |
+| 完整报告 | `.../report.json` |
+
+参数默认读 `momentum_swing`；可用 `--topn` / `--ma` / `--hold` / `--max-idle` 覆盖。
+
+旧 IC 组合回测（仅 `enabled: false` 时有意义）：`poetry run python -m scripts.backtest.run --home ... --start ... --end ...`。口径与当前纸面不同，见 [OPERATIONS.md §5](docs/OPERATIONS.md#5-回测库就绪后研究时建议跑)。
+
+### 4. 日内纸面模拟
+
+纸面账户在 `$QUANT_HOME/paper_account/`，与人工 `state/` 隔离。流程是 **T 晚只写计划，T+1 盘中才成交**。
+
+**当天晚上（选股，写入明日作战池）**
+
+```powershell
+poetry run python -m scripts.decision.daily --home D:\ProgramData\.quant
+# 不推飞书：加 --no-push
+# 不写纸面、只看选了谁：加 --no-paper --no-push
+```
+
+产出：
+
+- `paper_account/battle_pool/{T+1}.json` — 次日要买的篮子  
+- `paper_account/sell_watch/{T+1}.json` — 次日要监控卖出的持仓  
+- `paper_account/state/mom_slots.json` — 双槽状态  
+- `reports/decision/decision_{T}.txt` — 门控开/关、空仓天数、候选名单  
+- 飞书「晚间复盘」（配了密钥才会发）
+
+**次日盘中（真正买卖）**
+
+```powershell
+poetry run python -m quant during_market
+```
+
+- 先卖：到期持仓在 **14:30 后**卖；未到期不卖  
+- 再买：读当天作战池，跳过开盘涨停，按槽位等权买（**不等**盘中 θ）  
+- 飞书「智能盯盘」带成交摘要  
+
+盘中需要实时行情，必须在交易时段跑。只跑一次也能成交（09:37 左右买、14:31 以后卖）；要贴近调度就按 `quant.yml` 的 `during_market_times` 多跑几次。
+
+**第一次纸面**：先有库 → 交易日晚上跑 `daily` → **第二天交易时段**再跑 `during_market`。当天白天没有昨晚的作战池，买不进去。
+
+### 5. 无人值守（调度）
+
+数据和飞书都配好之后：
+
+```powershell
+poetry run python -m app
+```
+
+默认会自动跑：18:00 增量、20:10 选股、次日 09:37–14:59 盘中买卖。不必先开 API 才能手动 `quant during_market`。
+
+| 时间 | 做什么 |
+|---|---|
+| 18:00 | `update_daily` 当日 K 线入库 |
+| 20:10 | `daily_decision` 选股、写池、飞书 |
+| 09:37 起约每 7 分钟 | `during_market` 纸面买卖、飞书 |
+| 周五 22:00 | `maintain` 补缺 |
+
+细项：[docs/DAILY_OPS.md](docs/DAILY_OPS.md)、[docs/OPERATIONS.md §7](docs/OPERATIONS.md#7-启动定时任务要无人值守则必须)。
+
+---
+
 ## 架构概览
 
 ```text
@@ -93,12 +235,17 @@ GoldQuant/
 
 ```text
 ~/.quant/
-├── state/          # holding.jsonl、account.json（程序读写）
+├── store/          # Parquet 日线库（daily_raw / adj / index_daily / universe …）
+├── state/          # 人工 holding.jsonl、account.json
 ├── views/          # holding.md（自动生成，勿手改）
 ├── daily/{date}/   # raw/ derived/ trades/ review/
-├── config/         # quant.yml（含 gates）、factor_weights.yml（IC 驱动权重）
-├── paper_account/  # 纸面账户 state/ + equity.jsonl（与人工仓隔离）
-└── memory/         # 新闻摘要、经验教训
+├── config/         # 用户覆盖 quant.yml
+├── paper_account/  # 纸面账户（与人工仓隔离）
+│   ├── battle_pool/
+│   ├── sell_watch/
+│   └── state/      # holding.jsonl + mom_slots.json
+├── reports/        # 决策 / 回测
+└── memory/         # 新闻摘要
 ```
 
 ---
@@ -146,9 +293,9 @@ copy .env.example .env
 
 ---
 
-## 二、启动数据 API
+## 二、启动数据 API（调度 / Swagger）
 
-**必须在项目根目录执行。**
+库已建好、要**无人值守纸面**时再开。单次选股或盘中模拟用上一节命令即可，**不必**先启动 API。
 
 ```powershell
 # 推荐
@@ -445,6 +592,9 @@ r3 决策链改用 IC 驱动权重（`~/.quant/config/factor_weights.yml`，由 
 ---
 
 ## 八、常见问题
+
+**Q：盘中 `during_market` 没有买入？**  
+A：先看昨晚有没有写出 `paper_account/battle_pool/{今天}.json`。门控关且空仓未满 10 日时作战池为空，这是策略行为。非交易时段也买不成。
 
 **Q：quant 运行报错 / 缺 pandas？**
 A：请用 `poetry run python -m ...`，不要直接用系统 `python`。CLI 直调 service（不经 HTTP），无需先启动 API。缺依赖执行 `poetry install`（ML 加 `--extras ml`）。离线验证可设 `QUANT_USE_LOCAL_FIXTURE=true` 读 `data/*.json`。

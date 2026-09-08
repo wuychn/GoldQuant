@@ -19,7 +19,7 @@ flowchart LR
 |---|---|---|---|
 | T 日 18:00 | 拉取当日行情与快照 | `scripts.data.update_daily` | **必须**（否则决策缺当日数据） |
 | T 日 20:10 | 选股、写作战池与卖出监控 | `quant daily_decision` / `scripts.decision.daily` | **必须**（选股） |
-| T+1 盘中每 ~7 分钟 | 先按监控卖出，再按作战池择时买入 | `quant during_market` | **必须**（模拟成交） |
+| T+1 盘中每 ~7 分钟 | 先卖后买（动量开盘买 / 到期尾盘卖） | `quant during_market` | **必须**（模拟成交） |
 | 周五 22:00 | 库自愈 | `scripts.data.maintain` | 强烈建议 |
 
 T 晚**只定计划、不撮合买入**；真正买卖在 T+1 盘中完成。
@@ -64,10 +64,7 @@ poetry run python -m scripts.decision.daily --home D:\ProgramData\.quant --no-pa
 | `--home` | 当前 QUANT_HOME | quant-home 根；纸面账户在该 home 下的 `paper_account/` |
 | `--date` | 今天（非交易日回退） | 决策日 |
 | `--out` | `$QUANT_HOME/reports/decision` | 决策报告目录 |
-| `--n-enter` | `8` | 目标组合纳入阈值排名 |
-| `--n-exit` | `15` | 目标组合剔除阈值排名 |
-| `--max-positions` | `10` | 最大持仓只数 |
-| `--battle-pool-size` | `30` | 作战池规模（alpha top N，供次日盘中择时） |
+| `--n-enter` / `--n-exit` / `--max-positions` / `--battle-pool-size` | IC 回退路径才用；动量主路径忽略 |
 | `--no-paper` | off | 只出决策卡，不写作战池 / sell_watch / 纸面快照 |
 | `--dry-run` | off | 完整跑决策但不推飞书 |
 | `--no-push` | off | 不推飞书（仍写报告与纸面文件） |
@@ -76,13 +73,12 @@ poetry run python -m scripts.decision.daily --home D:\ProgramData\.quant --no-pa
 
 | 产出 | 路径 | 说明 |
 |---|---|---|
-| 决策卡文本/JSON | `$QUANT_HOME/reports/decision/decision_{date}.*` | 目标权重、动作、alpha top、漏斗 |
-| 作战池 | `$QUANT_HOME/paper_account/battle_pool/{T+1}.json` | 次日可买候选 |
-| 卖出监控 | `$QUANT_HOME/paper_account/sell_watch/{T+1}.json` | 持仓止损/出场阈值 |
+| 决策文本/JSON | `$QUANT_HOME/reports/decision/decision_{date}.*` | 门控开/关、空仓天数、明日候选、槽位 |
+| 作战池 | `$QUANT_HOME/paper_account/battle_pool/{T+1}.json` | 次日开盘可买名单（`strategy=momentum`） |
+| 卖出监控 | `$QUANT_HOME/paper_account/sell_watch/{T+1}.json` | 到期 `force_sell` + `when=close` |
+| 双槽状态 | `$QUANT_HOME/paper_account/state/mom_slots.json` | 哪一槽持有哪些票 |
 | 纸面快照 | `reports/decision/paper_{date}.json` | 账户与持仓只读快照 |
 | 飞书「晚间复盘」 | 推送 | 除非 `--dry-run` / `--no-push` |
-
-权重来源：`walk_forward` / 静态校准 / registry 默认（未校准时决策卡会标注）。
 
 ---
 
@@ -99,7 +95,9 @@ $QUANT_HOME/paper_account/
 └── state/           # 纸面持仓与权益
 ```
 
-人工持仓仍在 `$QUANT_HOME/state/`（account.json / holding.jsonl），互不覆盖。
+人工持仓仍在 `$QUANT_HOME/state/`（account.json / holding.jsonl），互不覆盖。双槽状态在 `state/mom_slots.json`。
+
+**第一次做纸面**：必须先在某个交易日晚上跑过 `daily_decision`，第二天交易时段再跑 `during_market`。当天没有 `{今天}.json` 作战池就买不进。
 
 ### 3.2 盘中 `during_market`
 
@@ -116,7 +114,7 @@ poetry run python -m quant during_market
 3. 风控闸门（日初权益、仓位上限等）约束下单  
 4. 推送「智能盯盘」（指数 / 持仓 / 异动 + 成交摘要）
 
-**与回测差异**：回测是日频 strict 差额 rebalance；纸面是 T+1 盘中择时触发。回测 Sharpe 不能直接当实盘预期。详见 [ARCHITECTURE.md §4.5](./ARCHITECTURE.md#45-回测-vs-实盘纸面)。
+**与回测差异**：动量回测用日 K **开盘买、收盘卖**；纸面用盘中实时价（约 09:37 买、14:30 后卖），规则相同但成交价会有滑点。旧 IC 回测（`scripts.backtest.run`）是日频差额调仓，**不是**当前纸面。
 
 ### 3.3 其它时段推送（建议开，非撮合核心）
 
@@ -208,8 +206,8 @@ poetry run python -m scripts.data.validate_library --home D:\ProgramData\.quant
 poetry run python -m scripts.data.maintain --home D:\ProgramData\.quant
 ```
 
-**改策略参数（持仓数、作战池）**  
-优先改 `$QUANT_HOME/config/` 覆盖或 CLI 参数；长期权重用研究脚本（OPERATIONS §8）校准后再跑决策。
+**改策略参数**  
+动量：改 `quant.yml` 的 `momentum_swing`（`topn` / `ma` / `hold_days` / `max_idle`），或 `$QUANT_HOME/config/quant.yml` 覆盖。改完建议重跑 `run_momentum` 再上纸面。
 
 ---
 

@@ -29,9 +29,9 @@
 3. [ ] `backfill_daily_meta` 补市值 / 昨收
 4. [ ] `validate_library` 退出码 0（允许 WARN）
 5. [ ] 若价格 sanity FAIL → `scrub_invalid_bars --dry-run` → `--apply` → 再 validate
-6. [ ] （可选）跑一段 `backtest.run` 确认能出报告
-7. [ ] 日常：`update_daily`；生产：`poetry run python -m app` 开调度
-8. [ ] 选股与模拟交易 → [DAILY_OPS.md](./DAILY_OPS.md)
+6. [ ] 跑 `scripts.backtest.run_momentum` 确认能出 `$QUANT_HOME/reports/bt_momentum/` 报告
+7. [ ] 日常：`update_daily`；交易日晚 `daily_decision`；次日盘中 `during_market`
+8. [ ] 生产无人值守：`poetry run python -m app`；选股与模拟细节 → [DAILY_OPS.md](./DAILY_OPS.md)
 
 ### 0.2 名词速查
 
@@ -490,13 +490,17 @@ poetry run python -m scripts.data.audit_data_health --home D:\ProgramData\.quant
 
 ## 5. 回测（库就绪后：研究时建议跑）
 
-**这一节在干什么**：用历史数据模拟「按当前选股规则持仓」的绩效，检查因子/组合是否离谱。  
-**前置**：正式库覆盖回测区间（至少 `daily_raw` + `adj`）；建议 `validate_library` 已通过。  
-**注意**：默认是 **strict** 口径（T-1 收盘算因子 → T 开盘成交），与实盘「作战池 + T+1 盘中择时」不完全相同；Sharpe 等指标作参考，不是实盘预期。详见 [ARCHITECTURE.md §4.5](./ARCHITECTURE.md#45-回测-vs-实盘纸面)。
+**这一节在干什么**：用历史数据按策略规则模拟持仓，看年化、回撤、分年是否离谱。  
+**前置**：正式库覆盖回测区间（至少 `daily_raw` + `adj` + 沪深300 `index_daily`）；建议 `validate_library` 已通过。
+
+**当前纸面主策略请跑 §5.1a `run_momentum`**（T 收盘选昨日强势 → T+1 开盘买 → hold 日后收盘卖）。  
+§5.1 `backtest.run` 是旧 IC + SwapGate 路径，与当前纸面不一致。
+
+纸面成交价是盘中实时价（约 09:37 买、14:30 后卖），回测用日 K 开盘/收盘，二者会有滑点差，但规则相同。
 
 ---
 
-### 5.1 主回测 `backtest.run`（研究时建议）
+### 5.1 主回测 `backtest.run`（IC 回退路径，非当前纸面）
 
 **用途**：按官方日频选股/组合/出场规则，在指定区间跑完整回测，并导出绩效指标与报告。  
 **必须性**：改策略或想确认系统可用性时建议跑；不是每日运维必须。  
