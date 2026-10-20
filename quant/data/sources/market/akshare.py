@@ -123,6 +123,7 @@ class AkshareMarketSource:
         as_of: str | None = None,
         force: bool = False,
         return_meta: bool = False,
+        max_pages: int | None = None,
     ) -> Any:
         """东财 clist 资金流排名（与 eastmoney 同源实现）→ DataFrame(code, main_net_inflow)。"""
         from quant.data.sources.eastmoney.fund_flow_rank import fetch_stock_fund_flow_rank
@@ -143,5 +144,26 @@ class AkshareMarketSource:
                 as_of=as_of,
                 force=force,
                 return_meta=return_meta,
+                max_pages=max_pages,
             ),
         )
+
+
+    def fetch_zt_pool_hist(self, *, date: str) -> Any:
+        raise NotImplementedError("akshare 未实现 fetch_zt_pool_hist（可用 eastmoney/default）")
+
+    def fetch_zt_zb_pool(self, *, date: str) -> Any:
+        raise NotImplementedError("akshare 未实现 fetch_zt_zb_pool（可用 eastmoney/default）")
+
+    def fetch_zt_dt_pool(self, *, date: str) -> Any:
+        raise NotImplementedError("akshare 未实现 fetch_zt_dt_pool（可用 eastmoney/default）")
+
+    def fetch_zt_prev_pool(self, *, date: str) -> Any:
+        raise NotImplementedError("akshare 未实现 fetch_zt_prev_pool（可用 eastmoney/default）")
+
+
+    def fetch_severe_anomaly(self) -> Any:
+        raise NotImplementedError("akshare 未实现 fetch_severe_anomaly（可用 eastmoney/default）")
+
+    def fetch_lhb_day(self, *, date: str) -> Any:
+        raise NotImplementedError("akshare 未实现 fetch_lhb_day（可用 eastmoney/default）")

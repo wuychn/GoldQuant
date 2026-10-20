@@ -251,28 +251,3 @@ def fetch_stock_industry(
             return stale_ind
         return None
 
-
-def prefetch_optional_holding_jbxx() -> int:
-    """预取自选股 + 持仓股基本信息，返回本次新调用接口的只数。"""
-    from quant.services.concept_cache import _collect_optional_holding_symbols
-
-    symbols = _collect_optional_holding_symbols()
-    if not symbols:
-        logger.info("[jbxx-cache] 预取跳过：自选/持仓为空")
-        return 0
-
-    store = get_stock_jbxx_cache()
-    fetched = 0
-    for code, _name in symbols:
-        hit, _ = store.lookup(code)
-        if hit:
-            continue
-        fetch_jbxx_cached(code, file_cache=store)
-        fetched += 1
-    logger.info(
-        "[jbxx-cache] 预取完成 total=%d fetched=%d path=%s",
-        len(symbols),
-        fetched,
-        store.path,
-    )
-    return fetched

@@ -27,11 +27,16 @@ class AkshareEnrichSource:
         import akshare as ak
 
         def _call() -> list[dict[str, Any]] | None:
+            from quant.data.sources.rate_limit import with_limit
+
             try:
-                df = ak.stock_zh_a_hist_pre_min_em(
-                    symbol=str(symbol).strip(),
-                    start_time="09:15:00",
-                    end_time="15:00:00",
+                df = with_limit(
+                    "eastmoney",
+                    lambda: ak.stock_zh_a_hist_pre_min_em(
+                        symbol=str(symbol).strip(),
+                        start_time="09:15:00",
+                        end_time="15:00:00",
+                    ),
                 )
                 if df is None or df.empty:
                     return []
@@ -80,3 +85,4 @@ class AkshareEnrichSource:
 
     async def fetch_stock_concepts(self, symbol: str, *, name: str | None = None) -> list[str]:
         raise NotImplementedError("akshare 未实现 fetch_stock_concepts（可用 wencai/default）")
+

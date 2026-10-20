@@ -213,6 +213,22 @@ def prev_trading_day(d: date) -> date | None:
     return past[0] if past else None
 
 
+def closed_session_as_of(now=None, *, close_hour: int = 16) -> date | None:
+    """最近已收盘交易日：当日且已过 ``close_hour`` 用今天，否则用上一交易日。
+
+    日更默认 16:00；龙虎榜用 19:00。盘中不把 live spot 写成收盘日线。
+    """
+    from datetime import datetime as _dt
+
+    n = now or cn_now()
+    if not isinstance(n, _dt):
+        raise TypeError("closed_session_as_of 需要 datetime")
+    d = n.date()
+    if is_trading_day(d) and n.hour >= int(close_hour):
+        return d
+    return prev_trading_day(d)
+
+
 def refresh_calendar() -> int:
     """强制重新拉取交易日历并刷新缓存；返回交易日条数。"""
     _load_calendar.cache_clear()

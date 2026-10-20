@@ -10,6 +10,7 @@ import pandas as pd
 
 from quant.data.schema import HIST_FIELD_MAP, INDEX_DAILY_COLUMNS, SPOT_EM_FIELD_MAP
 from quant.data.sources.daily._shared import _retry
+from quant.data.units import align_volume_to_shares
 
 
 def _normalize_hist(df: pd.DataFrame, code: str) -> pd.DataFrame:
@@ -28,7 +29,7 @@ def _normalize_hist(df: pd.DataFrame, code: str) -> pd.DataFrame:
     for c in ("open", "high", "low", "close", "volume", "amount", "turnover_rate"):
         if c in out.columns:
             out[c] = pd.to_numeric(out[c], errors="coerce")
-    return out
+    return align_volume_to_shares(out)
 
 
 def _normalize_index(df: pd.DataFrame, code: str) -> pd.DataFrame:
@@ -60,7 +61,7 @@ def _normalize_spot(df: pd.DataFrame) -> pd.DataFrame:
         if c in out.columns:
             out[c] = pd.to_numeric(out[c], errors="coerce")
     out["code"] = out["code"].astype(str).str.strip()
-    return out
+    return align_volume_to_shares(out)
 
 
 class AkshareDailySource:

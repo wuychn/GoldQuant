@@ -31,36 +31,9 @@ app/main.py
 
 ---
 
-## 2. 量化核心接口
+## 2. 5 板推送
 
-路由模块：`app/api/v1/endpoints/quant_endpoint.py`  
-业务逻辑：`quant/services/market/payload.py`、`quant/services/market/intraday.py`
-
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| GET | `/api/v1/quant/market/news` | 新闻 payload |
-| GET | `/api/v1/quant/market/pre_market` | 盘前 |
-| GET | `/api/v1/quant/market/during_market` | 盘中（**先跑 intraday session 再构建 payload**） |
-| GET | `/api/v1/quant/market/post_market_lunch` | 午间复盘 |
-| GET | `/api/v1/quant/market/post_market_evening` | 晚间复盘 |
-
-### 响应格式
-
-```json
-{
-  "code": 0,
-  "message": "success",
-  "data": {
-    "指数": [],
-    "赚钱效应": {},
-    "自选股": [],
-    "持仓股": []
-  }
-}
-```
-
-- 持仓从 `~/.quant/state/holding.jsonl` 读取并 enrich
-- `during_market` 会在返回前执行 `run_intraday_session()`（纸面盘中买卖）
+不走 HTTP。盘后 `scripts.tactic.close`，盘中 `scripts.tactic.intraday`，经飞书发出。
 
 ---
 
@@ -78,15 +51,9 @@ app/main.py
 
 ---
 
-## 4. 与 quant CLI 的关系
+## 4. 与调度的关系
 
-| 组件 | 关系 |
-|---|---|
-| `poetry run python -m quant <mode>` | 直调 `quant/services/market/payload` 等构建 payload（**不经 HTTP**） |
-| `GOLDQUANT_QUANT_USE_LOCAL_FIXTURE=true` | 不调 service，读 `data/fixtures/*.json` |
-| `scheduler.in_process_modes` | news/pre_market 等轻量模式在 API 进程内直接跑 |
-
-**何时需要启 API**：内置调度器自动跑五时段、或访问本页 HTTP 接口时，先 `poetry run python -m app`。单次 CLI 不必先启。
+`poetry run python -m app` 启动 HTTP 和调度：16:00 日更、20:10 复盘、周五维护。盘中指令由 Windows 任务 `GoldQuantTacticIntraday` 推送。单次复盘用 `python -m quant daily_decision`，不必先启 API。
 
 ---
 

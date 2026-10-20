@@ -6,10 +6,29 @@
 这样 spot_em 的不复权增量可直接追加，除权日不会静默断裂序列；
 撮合/涨跌停判定也用真实成交价。
 
+量纲（全库统一，源差异在入库时对齐）：
+- ``volume``：股（东财 hist/spot 原始为手，×100；新浪 hist 已是股；新浪 spot 已 ×100）
+- ``amount`` / ``float_mv`` / ``total_mv``：元
+- ``turnover_rate``：百分比
+- ``name``：不灌当前名到历史行（ST 前视）；靠 ``name_snapshot`` PIT
+- ``pre_close``：缺则用同码上一日 ``close``
+
 ``daily_raw``  : code, date, name, open, high, low, close, pre_close,
                  volume, amount, turnover_rate, float_mv, total_mv
 ``adj_factor`` : code, date, hfq_factor
 ``index_daily``: code, date, open, high, low, close, volume, amount
+``lhb``        : code, date, name, reason, net_amt, buy_amt, sell_amt, …（无上榜后收益）
+``zt_pool``    : code, date, name, pct, close, boards, first_seal, break_n, …（东财涨停池截面）
+``zt_zb`` / ``zt_dt`` / ``zt_prev`` : 炸板 / 跌停 / 昨日涨停今日表现（窗口短，按日覆盖）
+``auction``    : date, code, name, kind, time, info（竞价异动，仅当日快照）
+``hot_rank``   : code, rank, hot_rank_z（仅当日采集，公开源无历史日期）
+``industry_day``: 当日行业强度（由 spot+行业映射汇总，不打网）
+``concept_board``: 当日概念板块涨跌幅（theme_mom 顺带落）
+``lhb_jg`` / ``lhb_yyb`` / ``lhb_seat`` : 机构买卖、活跃营业部、个股席位明细
+``lhb_seat_event``: 席位事件 + 自算前向收益（T+1 缺口 / T+k 收盘，无源站前瞻列）
+``lhb_seat_stats``: 按席位+方向的 PIT 胜率/均值（只用不晚于 as_of 的标签）
+``minute_5m``  : 事件票 5 分钟 K（约一个月可补）
+``minute_1m``  : 事件票当日 1 分钟（通常不能补历史）
 ``universe``   : date, code, name, included（逐日 PIT 快照）
 ``calendar``   : trade_date（YYYY-MM-DD）
 """

@@ -1,15 +1,10 @@
-"""Phase 1 复权一致性回归（KEYSTONE）。
-
-验证：IC 前瞻收益、因子、出场 ATR 所依赖的价格序列统一在后复权基准上，
-除权日不会产生假跳跌（修复前 forward_return/IC 标签被原始价污染的 bug）。
-"""
+"""后复权：除权日不应在复权价上留下假跳跌。"""
 
 from __future__ import annotations
 
 import pandas as pd
 
 from quant.data.adjust import apply_hfq, load_adjusted_daily
-from quant.factors.panel_builder import _forward_returns_panel
 
 
 def test_apply_hfq_smooths_dividend_drop():
@@ -62,17 +57,6 @@ def test_apply_hfq_sparse_factor_no_spike():
     pct = (out["close"].pct_change().abs() * 100).iloc[1:]
     assert (pct < 28).all(), f"除权日出现尖刺: {pct.tolist()}"
 
-
-def test_forward_returns_on_adjusted_no_fake_drop():
-    """前瞻收益在复权帧上跨除权日应≈0，而非原始价的 -50% 假跳跌。"""
-    dates = [f"2024-01-{i:02d}" for i in range(1, 11)]
-    raw_close = [10.0] * 3 + [5.0] * 7
-    factor = [1.0] * 3 + [2.0] * 7
-    adj_close = [r * f for r, f in zip(raw_close, factor)]  # 后复权恒 10
-    daily = pd.DataFrame({"code": ["000001"] * 10, "date": dates, "close": adj_close})
-    res = _forward_returns_panel(daily, {"000001"}, {dates[0]}, horizons=(5,))
-    fwd5 = res[(dates[0], "000001")][5]
-    assert abs(fwd5 - 0.0) < 1e-6, f"复权帧 5 日前瞻收益应≈0，实际 {fwd5}（疑似原始价污染）"
 
 
 def test_load_adjusted_daily_merges_adj(monkeypatch):

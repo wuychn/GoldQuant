@@ -44,6 +44,24 @@ def test_normalize_ohlc_sina_columns():
     assert list(out["date"]) == ["2024-01-02", "2024-01-03"]
     assert out["close"].iloc[1] == 10.5
     assert out["code"].iloc[0] == "000001"
+    # 股：amount/(vol×close)=1，不乘 100
+    assert float(out["volume"].iloc[0]) == 1e6
+
+
+def test_normalize_ohlc_lots_to_shares():
+    df = pd.DataFrame(
+        {
+            "日期": ["2021-01-04"],
+            "开盘": [10.0],
+            "最高": [10.5],
+            "最低": [9.5],
+            "收盘": [10.0],
+            "成交量": [10_000.0],
+            "成交额": [10_000_000.0],
+        }
+    )
+    out = _normalize_ohlc(df, "000001")
+    assert float(out["volume"].iloc[0]) == 1_000_000.0
 
 
 def test_normalize_ohlc_empty():

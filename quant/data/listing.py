@@ -56,28 +56,12 @@ def merge_jbxx_listing(mapping: dict[str, str]) -> dict[str, str]:
     return out
 
 
-def merge_akshare_listing(mapping: dict[str, str]) -> dict[str, str]:
-    """AKShare IPO 表补充/覆盖上市日。"""
-    out = dict(mapping)
-    try:
-        from quant.data.fundamental_pit import fetch_listing_map_akshare
-
-        for c, d in fetch_listing_map_akshare().items():
-            if d:
-                out[str(c).strip()] = to_iso(d)
-    except Exception:
-        pass
-    return out
-
-
 def build_listing_map(daily: pd.DataFrame | None = None) -> dict[str, str]:
-    """daily 首条 → AKShare IPO → jbxx（优先级递增）。"""
+    """daily 首条，再用 jbxx 覆盖。"""
     mp: dict[str, str] = {}
     if daily is not None and not daily.empty:
         mp = build_listing_map_from_daily(daily)
-    mp = merge_akshare_listing(mp)
-    mp = merge_jbxx_listing(mp)
-    return mp
+    return merge_jbxx_listing(mp)
 
 
 def write_listing_table(mapping: dict[str, str]) -> None:

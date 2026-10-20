@@ -135,6 +135,17 @@ class UniverseTests(_QuantHomeTestCase):
         codes = snap.loc[snap["included"], "code"].tolist()
         self.assertIn("000001", codes)
 
+    def test_datetime_date_column_matches_iso_as_of(self):
+        """daily.date 为 datetime64 时仍应按 ISO as_of 命中当日，不能回退到空。"""
+        from quant.data.universe import build_universe_snapshot
+
+        d = self.daily.copy()
+        d["date"] = self._pd.to_datetime(d["date"])
+        snap = build_universe_snapshot(self.as_of, daily=d)
+        self.assertFalse(snap.empty)
+        self.assertIn("000001", snap["code"].tolist())
+        self.assertEqual(str(snap["date"].iloc[0])[:10], self.as_of)
+
 
 class AdjustTests(_QuantHomeTestCase):
     def test_detect_ex_dividend(self):

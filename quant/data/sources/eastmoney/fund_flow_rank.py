@@ -246,6 +246,7 @@ def fetch_stock_fund_flow_rank(
     as_of: str | None = None,
     force: bool = False,
     return_meta: bool = False,
+    max_pages: int | None = None,
 ):
     """分页拉取 → DataFrame(code, main_net_inflow)。
 
@@ -314,6 +315,10 @@ def fetch_stock_fund_flow_rank(
                 f"→ 从第 {start_page} 页继续",
                 flush=True,
             )
+
+    page_cap = max(1, int(max_pages)) if max_pages else None
+    if page_cap is not None and total_pages is not None:
+        total_pages = min(total_pages, page_cap)
 
     print(
         f"{_LOG} 【分页开始】源=eastmoney.clist_rank indicator={indicator} "
@@ -411,8 +416,11 @@ def fetch_stock_fund_flow_rank(
         consecutive_fails = 0
         if total_pages is None:
             total_pages = max(1, math.ceil(total / page_size)) if total else 1
+            if page_cap is not None:
+                total_pages = min(total_pages, page_cap)
             print(
-                f"{_LOG} 【总量】全市场约 {total} 条 → 共 {total_pages} 页",
+                f"{_LOG} 【总量】全市场约 {total} 条 → 共 {total_pages} 页"
+                f"{f'（max_pages={page_cap}）' if page_cap else ''}",
                 flush=True,
             )
 

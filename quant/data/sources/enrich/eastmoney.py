@@ -11,7 +11,7 @@ import logging
 from typing import Any
 
 from common.utils.error_log import log_caught_error
-from quant.data.sources.eastmoney import pk, zj
+from quant.data.sources.eastmoney import pk
 
 logger = logging.getLogger(__name__)
 
@@ -32,12 +32,14 @@ class EastmoneyEnrichSource:
         return await asyncio.to_thread(_call)
 
     async def fetch_stock_fund_flow_daily(self, symbol: str, *, days: int = 10) -> list[dict] | None:
-        """个股资金流日线（东财 ``zj``）；返回 list[dict]，每条含 main_net_inflow(元)。
+        """个股资金流日线（东财 fflow/daykline）；返回 list[dict]，每条含 main_net_inflow(元)。
 
         facade 统一返回 list[dict]，业务层读 main_net_inflow，不解析源列名。
         """
         try:
-            rows = await asyncio.to_thread(zj, symbol)
+            from quant.data.sources.eastmoney.fund_flow_daily import fetch_fund_flow_daily
+
+            rows = await asyncio.to_thread(fetch_fund_flow_daily, symbol, limit=max(int(days), 1) + 30)
             if not isinstance(rows, list) or not rows:
                 return None
             # 归一：各源行 dict 含不同键名 → 统一 main_net_inflow(元)
@@ -65,6 +67,7 @@ class EastmoneyEnrichSource:
 
     async def fetch_stock_concepts(self, symbol: str, *, name: str | None = None) -> list[str]:
         raise NotImplementedError("eastmoney 未实现 fetch_stock_concepts（可用 wencai/default）")
+
 
     async def fetch_stock_minute(self, symbol: str, *, context: str = "") -> list[dict[str, Any]] | None:
         raise NotImplementedError("eastmoney 未实现 fetch_stock_minute（可用 akshare/default）")

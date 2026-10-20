@@ -1,8 +1,4 @@
-"""数据源注册表：按 ``quant.yml`` 的 ``data.sources.{daily,market,enrich,info}`` 选实现。
-
-旧 spot/index/news 三类已并入 Daily/Market/Info（语义：fetch_spot/fetch_index_spot/
-fetch_news），故不再单列协议/注册表。
-"""
+"""数据源注册表：按 ``quant.yml`` 的 ``data.sources`` 选实现。"""
 
 from __future__ import annotations
 

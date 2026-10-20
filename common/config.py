@@ -48,7 +48,7 @@ def _parse_bool_env(value: str | bool | None) -> bool | None:
 
 
 def _env_plain_or_prefixed(plain: str, prefixed: str, *, env_file: Path) -> str | None:
-    """优先进程环境变量，其次 ``.env``；支持无前缀（``LLM_*``）与 ``GOLDQUANT_LLM_*``。"""
+    """优先进程环境变量，其次 ``.env``；无前缀名和 ``GOLDQUANT_`` 前缀都认。"""
     import os
 
     for name in (plain, prefixed):
@@ -165,25 +165,9 @@ class Settings(BaseSettings):
     FEISHU_APP_SECRET: str | None = None
     FEISHU_USER_ID: str | None = None
 
-    #: 全局 LLM：字段名为 ``LLM_*``；``.env`` 可直接写 ``LLM_API_KEY`` / ``LLM_BASE_URL`` / ``LLM_MODEL``（无前缀），亦可写 ``GOLDQUANT_LLM_*``（与旧习惯兼容）。``python main.py`` 与 FastAPI 共用。
-    LLM_API_KEY: str | None = None
-    LLM_BASE_URL: str = "https://api.minimaxi.com/anthropic"
-    LLM_MODEL: str = "MiniMax-M2.7"
-    #: ``openai`` → ``/chat/completions``；``anthropic`` → ``/v1/messages``。
-    LLM_API_FORMAT: str = "openai"
-    #: HTTPS 是否校验证书；内网/自签证书网关可设 ``false``。
-    LLM_VERIFY_SSL: bool = False
-    #: 是否读取系统 ``HTTP_PROXY`` 等环境变量（企业代理干扰时设 ``false``）。
-    LLM_TRUST_ENV_PROXY: bool = False
-    LLM_TIMEOUT_SEC: float = Field(default=600.0, ge=30.0, le=3600.0)
-    LLM_USE_APP_PROXY: bool = False
-
     @field_validator(
         "QUANT_TEST_PHASE",
         "QUANT_USE_LOCAL_FIXTURE",
-        "LLM_VERIFY_SSL",
-        "LLM_TRUST_ENV_PROXY",
-        "LLM_USE_APP_PROXY",
         mode="before",
     )
     @classmethod
@@ -196,23 +180,8 @@ class Settings(BaseSettings):
         raise ValueError(f"布尔配置无法解析: {v!r}")
 
     @model_validator(mode="after")
-    def merge_llm_plain_env_names(self) -> Settings:
-        """兼容 ``.env`` 中无前缀的 ``LLM_*`` / ``FEISHU_*`` / 量化布尔开关。"""
-        ak = self.LLM_API_KEY
-        if not ak:
-            ak = _env_plain_or_prefixed("LLM_API_KEY", "GOLDQUANT_LLM_API_KEY", env_file=_ENV_FILE)
-        bu_o = _env_plain_or_prefixed("LLM_BASE_URL", "GOLDQUANT_LLM_BASE_URL", env_file=_ENV_FILE)
-        bu = bu_o if bu_o else self.LLM_BASE_URL
-        md_o = _env_plain_or_prefixed("LLM_MODEL", "GOLDQUANT_LLM_MODEL", env_file=_ENV_FILE)
-        md = md_o if md_o else self.LLM_MODEL
-        fmt_o = _env_plain_or_prefixed("LLM_API_FORMAT", "GOLDQUANT_LLM_API_FORMAT", env_file=_ENV_FILE)
-        fmt = fmt_o if fmt_o else self.LLM_API_FORMAT
-        object.__setattr__(self, "LLM_API_KEY", ak)
-        object.__setattr__(self, "LLM_BASE_URL", bu)
-        object.__setattr__(self, "LLM_MODEL", md)
-        object.__setattr__(self, "LLM_API_FORMAT", fmt)
-
-        # 飞书配置（支持无前缀 FEISHU_*）
+    def merge_plain_env_names(self) -> Settings:
+        """``.env`` 里无前缀的 ``FEISHU_*`` 和量化布尔开关。"""
         for field_name in ("FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_USER_ID"):
             val = getattr(self, field_name, None)
             if not val:
@@ -223,9 +192,6 @@ class Settings(BaseSettings):
         for plain, prefixed, attr in (
             ("QUANT_TEST_PHASE", "GOLDQUANT_QUANT_TEST_PHASE", "QUANT_TEST_PHASE"),
             ("QUANT_USE_LOCAL_FIXTURE", "GOLDQUANT_QUANT_USE_LOCAL_FIXTURE", "QUANT_USE_LOCAL_FIXTURE"),
-            ("LLM_VERIFY_SSL", "GOLDQUANT_LLM_VERIFY_SSL", "LLM_VERIFY_SSL"),
-            ("LLM_TRUST_ENV_PROXY", "GOLDQUANT_LLM_TRUST_ENV_PROXY", "LLM_TRUST_ENV_PROXY"),
-            ("LLM_USE_APP_PROXY", "GOLDQUANT_LLM_USE_APP_PROXY", "LLM_USE_APP_PROXY"),
         ):
             raw = _env_plain_or_prefixed(plain, prefixed, env_file=_ENV_FILE)
             if raw is not None:

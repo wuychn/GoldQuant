@@ -15,8 +15,9 @@ from __future__ import annotations
 import pandas as pd
 
 from quant.data.adjust import _sina_symbol
-from quant.data.sources.daily._shared import _retry
 from quant.data.schema import HIST_FIELD_MAP
+from quant.data.sources.daily._shared import _retry
+from quant.data.units import align_volume_to_shares
 
 
 def _normalize_ohlc(df: pd.DataFrame, code: str) -> pd.DataFrame:
@@ -37,7 +38,7 @@ def _normalize_ohlc(df: pd.DataFrame, code: str) -> pd.DataFrame:
     for c in ("open", "high", "low", "close", "volume", "amount", "turnover_rate"):
         if c in out.columns:
             out[c] = pd.to_numeric(out[c], errors="coerce")
-    return out
+    return align_volume_to_shares(out)
 
 
 def _normalize_stop_df(df: pd.DataFrame) -> pd.DataFrame:

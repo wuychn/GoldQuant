@@ -50,7 +50,7 @@ from quant.store.paths import override_quant_home, quant_home
 _SCOPE = "merge_library"
 
 # 这四个由专门的合并逻辑处理；其余 store 下产物（universe/industry/name_snapshot/
-# fundamental_pit/fund_flow/hot_rank/theme_mom/listing_dates...）走目录并集复制。
+# 其余快照目录走并集复制。
 _MERGED_ARTIFACTS = ("daily_raw/", "adj_factor/", "index_daily/", "calendar.parquet")
 
 

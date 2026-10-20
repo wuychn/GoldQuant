@@ -593,13 +593,25 @@ def main() -> None:
             # 交易日历
             try:
                 cal = fetch_trade_calendar()
-                write_calendar([d for d in cal if d <= end])
-                print(f"交易日历: {len(cal)} 条")
+                # 全量落库并与已有日期取并，禁止按 --end 截断（否则历史窗回填会砍掉未来交易日）
+                existing = set(read_calendar())
+                merged = sorted(existing | {str(d)[:10] for d in cal})
+                write_calendar(merged)
+                print(f"交易日历: 源 {len(cal)} 条 · 落库 {len(merged)} 条（含已有 {len(existing)}）")
             except Exception as e:  # noqa: BLE001
                 print(f"[WARN] 交易日历拉取失败: {e}", file=sys.stderr)
 
             # 基准指数
-            for idx in ("000300", "000905", "000852"):
+            for idx in (
+                "000300",
+                "000905",
+                "000852",
+                "000002",
+                "399107",
+                "399102",
+                "399006",
+                "000688",
+            ):
                 try:
                     df = fetch_index(idx, start=args.start, end=end)
                     write_index_daily(df)

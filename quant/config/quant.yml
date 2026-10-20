@@ -2,160 +2,21 @@
 # 仅环境/敏感项（端口、密钥、代理、路径）走 .env；业务阈值、调度时点、门禁在此。
 # 每项说明见 docs/CONFIG.md。校验：quant/yml_schema.py。
 
-gates:                          # 撮合与风控门禁
-  trading:                      # 交易时段与日内风控
-    time_validation_enabled: true   # true 时仅交易时段允许模拟成交（实盘保持 true；联调可 false）
-    daily_loss_limit_pct: -3.0      # 日内权益回撤 ≤ -3% 禁开仓
-    stoploss_cooldown_days: 3       # 止损后 3 个交易日不再买同代码
-    block_same_day_rebuy_after_sell: true  # 当日卖出后禁止同日回补
-    simulation:                 # 撮合成本与滑点规则（quant/execution/sim_rules.py 读取）
-      commission_rate: 0.0001       # 佣金费率（万一）
-      min_commission: 5.0           # 佣金最低 5 元
-      stamp_tax_rate: 0.0005        # 卖出印花税（万五）
-      transfer_fee_rate: 1.0e-05    # 沪市过户费
-      slippage_pct: 0.001           # 基础滑点比例
-      slippage_model: sqrt_law     # 滑点模型：sqrt_law 按成交额平方根放大
-      slippage_sqrt_k: 0.5          # sqrt_law 系数
-      slippage_max_pct: 0.008       # 滑点上限
-      partial_fill_enabled: true    # 单日成交额 ≤ 当日 amount×参与率（ADV）时分笔成交
-      participation_rate: 0.1       # 买单 ADV 参与率封顶 10%
-  symbol_pool:                  # 标的池过滤
-    prefixes:                   # 沪主 60 / 深主 00 / 创业板 30 / 科创板 688
+gates:
+  symbol_pool:
+    prefixes:
     - '60'
     - '00'
     - '30'
     - '688'
-    - '30'
-    exclude_st: true               # 剔除 ST/*ST
-  circuit_breaker:              # 大盘熔断
-    index_drop_pct: -2.0           # 指数跌 ≤ -2% 禁开仓
-  sell:                         # 卖出时段门禁
-    limit_up_exempt_margin_pct: 0.5   # 涨停板附近 0.5% 内豁免（不卖涨停封板）
-    limit_down_approach_margin_pct: 1.0  # 跌停板附近 1% 内禁止卖出（避免砸跌停）
-    late_session_after: '14:30'       # 14:30 后尾盘
-    late_session_final_only: true     # 尾盘只处理指定 kinds
-    late_session_kinds:               # 尾盘允许的卖出原因
-    - 破5日线
-    - 趋势衰竭
-research:                       # 离线研究参数治理
-  factors:
-    strict_oos_weights: true        # true 时 live 不用静态全样本权重，仅 walk-forward OOS
-portfolio:                      # 目标组合（quant/portfolio/target.py）
-  optimizer: rank_vol            # SwapGate 主路径：rank_vol；mvo 仅研究用
-  optimizer_mvo:
-    risk_aversion: 2.0           # MVO 风险厌恶系数
-  covariance:
-    method: ewma                 # 协方差估计：ewma 指数加权
-  risk_budget:
-    vol_lookback: 14             # 已实现波动率回看窗口（交易日）
-  constraints:                   # 暴露上限
-    max_concept_pct: 40          # 单概念 ≤ 40%
-    max_industry_pct: 40         # 单行业 ≤ 40%
-  style_exposure:                # 风格暴露控制
-    alpha_weighted: true         # 按 alpha 强度配权
-    alpha_shrink: 0.3            # alpha 收缩（0=纯强度，1=等权）
-    max_small_cap_pct: 50        # 小盘暴露 ≤ 50%
-    max_high_mom_pct: 60         # 高动量暴露 ≤ 60%
-  swap_gate:                     # 值不值得换（非日历换仓）
-    enabled: true
-    n_enter: 3                   # 新开仓排名上限
-    n_exit: 8                    # 可持有区排名上限
-    max_stocks: 3                # 最大持仓
-    atr_band_mult: 3.0           # 趋势：最高收盘 − m×ATR
-    ma_period: 20                # 趋势：收盘 ≥ MA
-    trend_fail_days: 2           # 连续失败日 → 强制卖
-    delta_sigma: 0.3             # 分数差门槛 = δ_σ×σ(α)
-    cost_cover_k: 2.0            # 预估边 ≥ k×ADV 往返成本
-    alpha_to_ret: 0.01           # 每 1σ alpha 差距≈预期收益
-  entry_filter:                  # 新建仓过滤（不影响已持仓）
-    # 灾区对照 2021-07~2022-06：mom15 终值 11.0万 vs baseline 4.4万（仍深亏，但优于关止损）
-    max_ret_5d: 0.15             # 近 lookback 日涨幅上限；null=关闭；可用 0.15 或 15
-    lookback: 5                  # 收益回看交易日数
-  risk:                         # 组合回撤熔断（live + 回测 engine 共用）
-    max_drawdown_halt_enabled: true
-    # 灾区对照：halt10（阈值10%/停10日）终值94.8万、MDD-13%；默认15/5 仍可用
-    max_drawdown_pct: 10         # 回撤 ≤ -10% halt
-    halt_days: 10                # 停买 10 个交易日
-  exit:                          # 与 SwapGate 对齐：日常靠趋势强制卖，硬止损默认关
-    hard_pct: null               # null=关闭 %-硬止损
-    atr_mult_stop: null          # null=关闭 ATR 硬止损腿
-    atr_trailing: false          # false=关闭 ATR 跟踪强制卖（软标签改由 SwapGate）
-    use_trend_force: true        # 连续 trend_fail_days 趋势失败 → 强制卖
-    max_hold_days: 60            # 放宽时间止损；仍要求浮亏才触发
-momentum_swing:                  # 当前主策略：昨日强势 + 沪深300均线门控 + 双槽
-  enabled: true                  # true=日决策/盘中走动量；false=回退 IC+SwapGate
-  topn: 6                        # 信号日收盘涨幅截面 TopN
-  ma: 55                         # 沪深300 收盘 > MA（滞后一日决定 T+1 开仓）
-  min_adv: 80000000              # 20 日成交额下限（元）
-  hold_days: 2                   # 买入后再持有的收盘次数（2 → T+3 收盘卖）
-  n_slots: 2                     # 双槽各 50%
-  max_idle: 10                   # 连续空仓达到该交易日数则半槽强制开仓
-  listed_days: 60                # 上市满 N 个交易日
-  index_code: "000300"           # 门控指数
-swing_band:                      # 波段研究：价量状态机默认关；主验收改走反转 IC 日历冻结算
-  enabled: false
-  n_lookback: 20
-  atr_period: 14
-  pullback_atr_mult: 0.8
-  pullback_atr_max: 2.5
-  bounce_days: 3
-  bounce_atr_mult: 0.3
-  max_run_atr_mult: 2.0
-  require_ma_rising: true
-  dist_high_pctile: 50
-  require_above_ma20: true
-  ma_period: 20
-  trail_atr_mult: 3.5
-  stall_enabled: false
-  time_stop_days: 45
-  max_stocks: 5
-  full_invest: 0.95
-  max_weight: 0.22
-  # 同窗探索结论（2023-08~2025-12）：
-  # - 日历整仓 inv_t3_e20 收益最高但死板、偏反转赌博感
-  # - 纯顺势+灵活调仓（flex_trend）同窗深亏
-  # - 折中：反转 alpha + 灵活门槛换仓（排除 ST、趋势坏强制卖）→ invflex_t5_k20 ≈ +56%/MDD-38%
-  alpha_calendar:
-    invert: true
-    topn: 3
-    rebalance_every: 20
-    full_invest: 0.95
-    exit_config: null
-  invert_flex:                   # 推荐过程：每日评估，非整仓日历
-    enabled: true
-    max_stocks: 5
-    n_enter: 8
-    n_keep: 20                   # 排名仍在前 20 且趋势 OK → 不因外部更强被踢
-    delta_sigma: 0.4             # 换仓分数差门槛
-    min_hold_days: 5
-    trend_fail_days: 2
     exclude_st: true
-candidate:                      # 候选池（展示用，非 alpha 选股；quant/pool/）
-  popularity_limit: 20           # 东财人气榜取前 20
-  zt_min_boards: 3               # 涨停池最少连板数
-  cxg_labels:                   # 创新高标签
-  - 创月新高
-  - 半年新高
-  - 一年新高
-  - 历史新高
-  include_zt_pool: false         # 是否纳入涨停池
-  include_ths_rank_pool: true    # 是否纳入同花顺榜
-  universe:                     # 可投池过滤（quant/data/universe.py）
-    min_adv_yi: 1.0             # 20 日 ADV ≥ 1 亿
-    adv_lookback: 20            # ADV 回看窗口
-    max_crowding_rank: null     # 拥挤度排名上限（null 不限）
-    participation_rate: 0.1     # 候选池参与率
 data:                          # 数据源并发限流
   default_max_concurrent: 1
   akshare_max_concurrent: 1     # AKShare 并发（过高易限流）
   ths_max_concurrent: 1         # 同花顺并发
   eastmoney_max_concurrent: 1  # 东财并发
-  # 个股资金流 5 日：分页完再逐票补缺（quant/data/fund_flow_5d.py）
-  # 键名与 CLI 一致（下划线 / 连字符）：req_page_interval ↔ --req-page-interval
-  # 区间一律 MIN,MAX（或单值 N）
-  fund_flow_use_rank: true        # false=跳过分页直接逐票；CLI --fund-flow-mode per_symbol
-  fund_flow_flush_every: 50       # 逐票每 N 只落盘；CLI --flush-every
   fund_flow_rank_page_size: 100
+  fund_flow_rank_max_pages: 5
   req_page_interval: "61,121"     # 页间；CLI --req-page-interval
   req_symbol_interval: "5,10"     # 逐票；CLI --req-symbol-interval
   req_batch_pause: "120,240"      # 批间/失败跳页暂停；CLI --req-batch-pause
@@ -168,9 +29,9 @@ data:                          # 数据源并发限流
     #     加新源 = 实现源类 + 注册 registry + yml list 加名字，业务层永不改。
     #   现有源（未实现某接口抛 NotImplementedError）：
     #     daily:  default(组合)/akshare(东财全)/sina(spot·hist·index)/tencent(仅 hist)
-    #     market: default(组合)/akshare(eastmoney系)/eastmoney(涨停池·行业·停牌)/ths(同花顺系)/sina(行业)
+    #     market: default(组合)/akshare(eastmoney系)/eastmoney(涨停池·行业·停牌·严重异动)/ths(同花顺系)/sina(行业)
     #     enrich: default(组合)/eastmoney(盘口·资金流日线)/ths(资金流·概念粘合度)/
-    #             wencai(问财概念)/akshare(分钟K)
+    #             wencai(问财概念)/akshare(当日分钟K)
     #     info:   default(组合)/akshare(新闻)/eastmoney(个股基本信息)
     daily:
       fetch_spot: [sina, akshare]
@@ -181,6 +42,12 @@ data:                          # 数据源并发限流
       fetch_concept_boards: [akshare, ths, default]
       # 仅 eastmoney：akshare/default 同源实现，多源 fallback 只会反复打同一断页
       fetch_stock_fund_flow_rank: eastmoney
+      fetch_zt_pool_hist: eastmoney        # 东财涨停池（ak.stock_zt_pool_em(date)），可按日回填
+      fetch_zt_zb_pool: eastmoney          # 炸板股池（历史窗口短）
+      fetch_zt_dt_pool: eastmoney          # 跌停股池（历史窗口短）
+      fetch_zt_prev_pool: eastmoney        # 昨日涨停今日表现
+      fetch_severe_anomaly: eastmoney      # 东财严重异动列表（仅当日；临界涨幅用源站，不本地重算）
+      fetch_lhb_day: eastmoney             # 当日龙虎榜明细。只归档观察池，策略不读
     enrich:
       fetch_stock_quote: [eastmoney, default]
       fetch_stock_fund_flow: [ths, default]
@@ -189,26 +56,12 @@ data:                          # 数据源并发限流
       fetch_stock_concepts: [wencai, default]
       fetch_stock_minute: [akshare, default]
     info:
-      fetch_news: [akshare, default]
       fetch_stock_info: [eastmoney, default]
-scheduler:                     # APScheduler 定时任务（app/scheduling/quant_scheduler.py）
-  enabled: true                # 总开关；false 时不启动调度器
+scheduler:
+  enabled: true
   timezone: Asia/Shanghai
-  news_hours: "8,9,10,11,12,13,14,15,16,17,18,19,20,21,22"  # 新闻整点小时
-  news_minute: 0               # 新闻触发分钟
-  pre_market_time: "09:25"     # 盘前
-  during_market_times: "09:37,09:44,09:51,09:58,10:05,10:12,10:19,10:26,10:33,10:40,10:47,10:54,11:01,11:08,11:15,11:22,11:29,13:00,13:07,13:14,13:21,13:28,13:35,13:42,13:49,13:56,14:03,14:10,14:17,14:24,14:31,14:38,14:45,14:52,14:59"  # 盘中每 7 分钟
-  post_market_lunch_time: "11:50"  # 午间复盘
-  update_daily_time: "18:00"    # 每日盘后增量（spot_em + 指数/行业/universe/因子快照），分钟级；18:00 留 3h 让盘后数据就绪
-  maintain_weekly_day: "fri"     # 每周离线库自愈日（mon..sun；默认周五）
-  maintain_weekly_time: "22:00"  # 每周自愈（建库/补漏/retry-failed，末尾含 update_daily）；重，周五晚跑避免日常 update_daily 被长 build_daily 阻塞
-  daily_decision_time: "20:10" # 晚间选股定计划（作战池/卖出监控）
-  prefetch_concepts_enabled: true  # 是否预取概念/基本信息
-  prefetch_concepts_time: "05:00" # 预取时点
-  misfire_grace_sec: 600       # 漏触补跑容忍窗口（秒）
-  in_process_modes:            # 这些模式在 app 进程内直接调 service（轻量）；其余走子进程
-  - news
-  - pre_market
-  - during_market
-  - post_market_lunch
-  - post_market_evening
+  update_daily_time: "16:00"
+  maintain_weekly_day: "fri"
+  maintain_weekly_time: "22:00"
+  daily_decision_time: "20:10"
+  misfire_grace_sec: 600

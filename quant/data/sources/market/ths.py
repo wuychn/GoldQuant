@@ -118,7 +118,28 @@ class ThsMarketSource:
         as_of: str | None = None,
         force: bool = False,
         return_meta: bool = False,
+        max_pages: int | None = None,
     ) -> Any:
         raise NotImplementedError(
             "ths 未实现 fetch_stock_fund_flow_rank（可用 eastmoney/akshare/default）"
         )
+
+
+    def fetch_zt_pool_hist(self, *, date: str) -> Any:
+        raise NotImplementedError("ths 未实现 fetch_zt_pool_hist（可用 eastmoney/default）")
+
+    def fetch_zt_zb_pool(self, *, date: str) -> Any:
+        raise NotImplementedError("ths 未实现 fetch_zt_zb_pool（可用 eastmoney/default）")
+
+    def fetch_zt_dt_pool(self, *, date: str) -> Any:
+        raise NotImplementedError("ths 未实现 fetch_zt_dt_pool（可用 eastmoney/default）")
+
+    def fetch_zt_prev_pool(self, *, date: str) -> Any:
+        raise NotImplementedError("ths 未实现 fetch_zt_prev_pool（可用 eastmoney/default）")
+
+
+    def fetch_severe_anomaly(self) -> Any:
+        raise NotImplementedError("ths 未实现 fetch_severe_anomaly（可用 eastmoney/default）")
+
+    def fetch_lhb_day(self, *, date: str) -> Any:
+        raise NotImplementedError("ths 未实现 fetch_lhb_day（可用 eastmoney/default）")

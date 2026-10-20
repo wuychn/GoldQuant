@@ -70,5 +70,57 @@ class FilterValidSpotBarsTests(unittest.TestCase):
         self.assertTrue(out.empty)
 
 
+class MergeTodayBarsTests(unittest.TestCase):
+    def test_appends_today_when_history_lacks_as_of(self):
+        """update_daily 先读旧 daily 再写 spot：合并后必须能看到当日 K。"""
+        from scripts.data.update_daily import merge_today_bars
+
+        hist = pd.DataFrame(
+            {
+                "code": ["000001"],
+                "date": ["2026-10-12"],
+                "close": [10.0],
+                "volume": [100.0],
+            }
+        )
+        today = pd.DataFrame(
+            {
+                "code": ["000001"],
+                "date": ["2026-10-13"],
+                "close": [11.0],
+                "volume": [0.0],
+            }
+        )
+        out = merge_today_bars(hist, today, "2026-10-13")
+        row = out[out["date"].astype(str).str[:10] == "2026-10-13"].iloc[0]
+        self.assertEqual(float(row["close"]), 11.0)
+        self.assertEqual(float(row["volume"]), 0.0)
+        self.assertEqual(len(out), 2)
+
+    def test_replaces_existing_today_rows(self):
+        from scripts.data.update_daily import merge_today_bars
+
+        hist = pd.DataFrame(
+            {
+                "code": ["000001", "000001"],
+                "date": ["2026-10-12", "2026-10-13"],
+                "close": [10.0, 10.5],
+                "volume": [100.0, 90.0],
+            }
+        )
+        today = pd.DataFrame(
+            {
+                "code": ["000001"],
+                "date": ["2026-10-13"],
+                "close": [11.0],
+                "volume": [0.0],
+            }
+        )
+        out = merge_today_bars(hist, today, "2026-10-13")
+        day = out[out["date"].astype(str).str[:10] == "2026-10-13"]
+        self.assertEqual(len(day), 1)
+        self.assertEqual(float(day.iloc[0]["volume"]), 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()

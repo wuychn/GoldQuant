@@ -9,6 +9,8 @@
 - fetch_em_industry_map：东财
 - fetch_em_hot_rank/concept_boards：akshare
 - fetch_stock_fund_flow_rank：eastmoney（分页全市场 5 日主力净额）
+- fetch_zt_pool_hist / fetch_zt_zb_pool / fetch_zt_dt_pool / fetch_zt_prev_pool：eastmoney
+- fetch_severe_anomaly：eastmoney（严重异动列表，仅当日）
 """
 
 from __future__ import annotations
@@ -91,6 +93,7 @@ class DefaultMarketSource:
         as_of: str | None = None,
         force: bool = False,
         return_meta: bool = False,
+        max_pages: int | None = None,
     ) -> Any:
         return self._em.fetch_stock_fund_flow_rank(
             indicator=indicator,
@@ -105,4 +108,23 @@ class DefaultMarketSource:
             as_of=as_of,
             force=force,
             return_meta=return_meta,
+            max_pages=max_pages,
         )
+
+    def fetch_zt_pool_hist(self, *, date: str) -> Any:
+        return self._em.fetch_zt_pool_hist(date=date)
+
+    def fetch_zt_zb_pool(self, *, date: str) -> Any:
+        return self._em.fetch_zt_zb_pool(date=date)
+
+    def fetch_zt_dt_pool(self, *, date: str) -> Any:
+        return self._em.fetch_zt_dt_pool(date=date)
+
+    def fetch_zt_prev_pool(self, *, date: str) -> Any:
+        return self._em.fetch_zt_prev_pool(date=date)
+
+    def fetch_severe_anomaly(self) -> Any:
+        return self._em.fetch_severe_anomaly()
+
+    def fetch_lhb_day(self, *, date: str) -> Any:
+        return self._em.fetch_lhb_day(date=date)

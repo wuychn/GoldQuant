@@ -16,7 +16,8 @@
               市场级缺日（跨度内有数据交易日空洞，已排除非交易日）/ per-code 日历覆盖(低 WARN，
               已排除停牌等 no_bar 豁免日)
 [3] 正确性    重复 (code,date)(>0 FAIL) / 价格 sanity(close>0、high>=low、high/low 夹住
-              open·close、volume·amount>=0)(违规 FAIL) / 复权跳空：仅查日历相邻交易日，
+              open·close、volume·amount>=0)(违规 FAIL) / 成交量单位（股；逐年
+              amount/(vol×close) 中位≈1，≈100 为手则 FAIL）/ 复权跳空：仅查日历相邻交易日，
               且「后复权跳 >28% 而原料价未跳」才 FAIL（停牌复牌/次新大波动豁免）
 """
 
@@ -30,6 +31,7 @@ import pandas as pd
 
 from common.progress_log import log_progress_done, log_progress_error, log_progress_start
 from quant.data.schema import INDEX_DAILY_COLUMNS
+from quant.data.units import lots_volume_mask, volume_amount_ratio
 from quant.data.store import (
     read_adj_factor,
     read_calendar,
@@ -224,6 +226,58 @@ def _check_price_sanity(daily: pd.DataFrame) -> None:
         )
 
 
+_SHARES_RATIO_LO = 0.5
+_SHARES_RATIO_HI = 2.0
+_LOTS_WARN_FRAC = 0.01
+
+
+def _check_volume_units(daily: pd.DataFrame) -> None:
+    """成交量必须是股：amount/(volume×close) 中位约 1；约 100 说明仍是手。"""
+    if daily.empty or not {"volume", "amount", "close"}.issubset(daily.columns):
+        _note("WARN", "无法检查成交量单位（缺 volume/amount/close）")
+        return
+    ratio = volume_amount_ratio(daily)
+    valid = ratio.dropna()
+    if valid.empty:
+        _note("WARN", "成交量单位：无有效 amount/(volume×close) 样本")
+        return
+    lots = lots_volume_mask(daily)
+    lots_n = int(lots.sum())
+    lots_frac = lots_n / max(len(valid), 1)
+    year = daily["date"].astype(str).str[:4]
+    med_by_year = valid.groupby(year.loc[valid.index]).median()
+    lots_years = [
+        f"{y}(中位{float(m):.1f})"
+        for y, m in med_by_year.items()
+        if 30.0 <= float(m) <= 300.0
+    ]
+    odd_years = [
+        f"{y}(中位{float(m):.2f})"
+        for y, m in med_by_year.items()
+        if not (_SHARES_RATIO_LO <= float(m) <= _SHARES_RATIO_HI) and not (30.0 <= float(m) <= 300.0)
+    ]
+    overall = float(valid.median())
+    if lots_years or lots_frac >= _LOTS_WARN_FRAC:
+        _note(
+            "FAIL",
+            f"成交量单位混用手（应为股）：全库中位 {overall:.2f}，手数行 {lots_n}/{len(valid)}"
+            f"（{lots_frac:.1%}）"
+            + (f"；手数年份 {', '.join(lots_years)}" if lots_years else "")
+            + "（跑 align_daily_units）",
+        )
+        return
+    if odd_years:
+        _note(
+            "WARN",
+            f"成交量单位年份中位偏离股口径 {', '.join(odd_years)}（期望 0.5–2）",
+        )
+        return
+    print(
+        f"  [OK]   成交量单位=股：全库中位 amount/(vol×close)={overall:.3f}，"
+        f"手数行 {lots_n}/{len(valid)}"
+    )
+
+
 def _check_calendar_coverage(daily: pd.DataFrame, cal: list[str], start: str, end: str) -> None:
     if not cal:
         _note("FAIL", "calendar 为空")
@@ -388,6 +442,7 @@ def main() -> None:
                 else:
                     _note("FAIL", f"重复 (code,date): {dup}")
                 _check_price_sanity(daily)
+                _check_volume_units(daily)
                 _check_adj_jumps(daily, cal)
 
         # 汇总

@@ -1,7 +1,6 @@
-"""每日增量：1 次 spot_em 追加当日 + 除权检测 + 因子补拉 + 指数增量。
+"""每日增量：spot 追加当日、除权检测、指数、涨停族。
 
-由调度器每日 18:00（``update_daily_time``，盘后 3h 让数据源就绪）触发，分钟级、只补当天。
-重活（建库/补漏/retry-failed）由每周五 22:00 ``maintain`` 单独跑。spot_em 无历史，当天没抓就补不回来，故失败必须告警。
+调度器每日 16:00。建库和补漏由每周 ``maintain`` 跑。涨停池当天没抓就补不回来。
 
 用法：
     python -m scripts.data.update_daily
@@ -12,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import date, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -57,16 +57,40 @@ def _update_indices(today: str, daily: pd.DataFrame, pend: list) -> None:
     """
     from quant.data.store import read_index_daily
 
-    start = today
+    default_start = today
     try:
         cur = read_index_daily("000300")
         if not cur.empty:
-            start = str(cur["date"].astype(str).max())
+            default_start = str(cur["date"].astype(str).max())
     except Exception:  # noqa: BLE001
         pass
-    todo = sorted(set(("000300", "000905", "000852")) | set(pend))
+    todo = sorted(
+        set(
+            (
+                "000300",
+                "000905",
+                "000852",
+                "000002",
+                "399107",
+                "399102",
+                "399006",
+                "000688",
+            )
+        )
+        | set(pend)
+    )
     failed: list[str] = []
+    boot = (date.fromisoformat(today) - timedelta(days=180)).isoformat()
     for idx in todo:
+        start = default_start
+        try:
+            cur_i = read_index_daily(idx)
+            if cur_i is None or cur_i.empty:
+                start = boot
+            else:
+                start = str(cur_i["date"].astype(str).max())
+        except Exception:  # noqa: BLE001
+            start = boot
         try:
             df = fetch_index(idx, start=start, end=today)
             write_index_daily(df)
@@ -183,6 +207,23 @@ def _prev_close_map(daily: pd.DataFrame, as_of: str) -> dict[str, float]:
     return dict(zip(d["code"].astype(str), pd.to_numeric(d["close"], errors="coerce")))
 
 
+def merge_today_bars(daily: pd.DataFrame, today_bars: pd.DataFrame, today: str) -> pd.DataFrame:
+    """把刚写入的当日 K 并进内存 daily，供 universe / listing 使用。
+
+    ``update_daily`` 必须先 ``read_daily_raw`` 才能做除权检测，写盘发生在那之后；
+    若把写盘前的表直接交给 ``universe_snapshot``，当日 0 行会回退写成上一交易日。
+    """
+    t = str(today)[:10]
+    if today_bars is None or today_bars.empty:
+        return daily
+    bars = today_bars.copy()
+    bars["date"] = t
+    if daily is None or daily.empty:
+        return bars.reset_index(drop=True)
+    keep = daily["date"].astype(str).str[:10] != t
+    return pd.concat([daily.loc[keep], bars], ignore_index=True)
+
+
 def detect_ex_and_align_pre_close(spot: pd.DataFrame, prev_map: dict[str, float]) -> list[str]:
     """用源站原始昨收做除权检测，再把 ``spot.pre_close`` 对齐到库内 T-1 close。
 
@@ -199,70 +240,27 @@ def main() -> None:
     add_home_argument(ap)
     ap.add_argument("--date", default=None, help="指定交易日 YYYY-MM-DD，默认今天（非交易日自动跳过）")
     ap.add_argument(
-        "--force-fundamental-pit",
+        "--closed-session",
         action="store_true",
-        help="无视披露季窗口，强制增量刷新 fundamental_pit",
-    )
-    ap.add_argument(
-        "--flush-every",
-        type=int,
-        default=None,
-        help="fund_flow 逐票每 N 只落盘一次（默认 yml fund_flow_flush_every=50）",
-    )
-    ap.add_argument(
-        "--fund-flow-mode",
-        choices=("rank", "per_symbol"),
-        default=None,
-        help=(
-            "fund_flow：rank=先分页再逐票补缺；per_symbol=跳过分页直接逐票。"
-            "默认读 yml data.fund_flow_use_rank（true→rank）"
-        ),
-    )
-    ap.add_argument(
-        "--fund-flow-page-size",
-        type=int,
-        default=None,
-        help="rank 模式每页条数（默认 quant.yml data.fund_flow_rank_page_size）",
-    )
-    ap.add_argument(
-        "--req-page-interval",
-        default=None,
-        help="分页页间间隔秒，格式 MIN,MAX 或 N（默认 yml req_page_interval=61,121；下限 10）",
-    )
-    ap.add_argument(
-        "--req-symbol-interval",
-        default=None,
-        help="逐票间隔秒，格式 MIN,MAX 或 N（默认 yml req_symbol_interval=5,10）",
-    )
-    ap.add_argument(
-        "--req-batch-pause",
-        default=None,
-        help="分页批间暂停 & 单页失败跳页前暂停秒，格式 MIN,MAX 或 N（默认 yml req_batch_pause=120,240）",
-    )
-    ap.add_argument(
-        "--req-burst-pages",
-        default=None,
-        help="每成功拉 N 页后批停，格式 MIN,MAX 或 N（默认 yml req_burst_pages=1,3）",
+        help="写入最近已收盘交易日（16:00 前用上一交易日），供开机补跑，避免盘中 spot 当收盘日线",
     )
     args = ap.parse_args()
 
-    if args.req_page_interval:
-        from common.utils.source_headers import parse_interval_range, set_eastmoney_interval
-
-        lo, hi = parse_interval_range(args.req_page_interval, default=(61.0, 121.0))
-        lo_i, hi_i = max(10, int(lo)), max(10, int(hi))
-        if hi_i < lo_i:
-            lo_i, hi_i = hi_i, lo_i
-        set_eastmoney_interval(lo_i, hi_i)
-        print(f"req_page_interval: {lo_i},{hi_i}s", flush=True)
-    if args.req_symbol_interval:
-        from common.utils.source_headers import parse_interval_range
-
-        s_lo, s_hi = parse_interval_range(args.req_symbol_interval, default=(5.0, 10.0))
-        print(f"req_symbol_interval: {int(s_lo)},{int(s_hi)}s", flush=True)
-
     with home_context(args.home):
-        today = args.date or cn_now().strftime("%Y-%m-%d")
+        if args.date:
+            today = args.date
+        elif args.closed_session:
+            from quant.data.calendar import closed_session_as_of
+
+            closed = closed_session_as_of()
+            if closed is None:
+                log_progress(_SCOPE, "无已收盘交易日，跳过")
+                log_progress_done(_SCOPE, "成功", detail="skipped no closed session")
+                return
+            today = closed.isoformat()
+            print(f"closed-session as_of={today}", flush=True)
+        else:
+            today = cn_now().strftime("%Y-%m-%d")
         if not is_trading_day(__import__("datetime").date.fromisoformat(today)):
             log_progress(_SCOPE, "非交易日，跳过", detail=today)
             log_progress_done(_SCOPE, "成功", detail="skipped non-trading day")
@@ -299,17 +297,17 @@ def main() -> None:
         spot, n_bad_bars = filter_valid_spot_bars(spot)
         if n_bad_bars:
             print(f"丢弃无效盘口: {n_bad_bars} 只（close<=0 或 OHLC 不自洽）", file=sys.stderr)
+        # 停牌 volume 置 0 必须在写库前，否则 universe 读不到停牌标记
+        n_stop, n_resume = _mark_suspended(spot, today)
+        if n_stop or n_resume:
+            print(f"停牌 {n_stop} 只（volume 置 0）· 复牌盘口缺失 {n_resume} 只", file=sys.stderr)
         # 仅保留 daily_raw 列
         cols = ["code", "date", "name", "open", "high", "low", "close", "pre_close",
                 "volume", "amount", "turnover_rate", "float_mv", "total_mv"]
         spot_out = spot[[c for c in cols if c in spot.columns]]
         write_daily_raw(spot_out)
         print(f"spot 追加: {len(spot_out)} 行 @ {today}")
-
-        # 1a. 停牌识别：停牌票 volume 置 0（universe 过滤生效），复牌盘口缺失记告警
-        n_stop, n_resume = _mark_suspended(spot, today)
-        if n_stop or n_resume:
-            print(f"停牌 {n_stop} 只（volume 置 0）· 复牌盘口缺失 {n_resume} 只", file=sys.stderr)
+        daily = merge_today_bars(daily, spot_out, today)
 
         # 1b. PIT 名称快照（供 universe ST/退市过滤、涨跌停 ST 分档）
         #     spot 的 name 是当日真实名（PIT），落库后 universe 可按日取，避免依赖
@@ -373,68 +371,15 @@ def main() -> None:
             print(f"[WARN] listing_dates 失败: {e}", file=sys.stderr)
 
 
-        # 8. fundamental_pit 披露季增量刷新（round-robin 存量码 upsert）
         try:
-            from quant.data.fundamental_pit import (
-                mark_refresh_done,
-                refresh_already_ran_today,
-                refresh_fundamental_pit_incremental,
-                should_refresh_fundamental_pit,
-            )
+            from quant.data.session_archive import capture_session_extras
 
-            if args.force_fundamental_pit or should_refresh_fundamental_pit(today):
-                if args.force_fundamental_pit or not refresh_already_ran_today(today):
-                    ok, fail = refresh_fundamental_pit_incremental(limit=300, rotate=True)
-                    mark_refresh_done(today)
-                    print(f"fundamental_pit 披露季刷新: ok={ok} fail={fail}")
-                else:
-                    print(f"fundamental_pit: 今日已刷新，跳过")
-            else:
-                print("fundamental_pit: 非披露季窗口，跳过（可用 --force-fundamental-pit）")
+            cap = capture_session_extras(today)
+            print(f"涨停族 @ {today}: {cap}", flush=True)
         except Exception as e:
-            print(f"[WARN] fundamental_pit 刷新失败: {e}", file=sys.stderr)
+            print(f"[WARN] 涨停族失败: {e}", file=sys.stderr)
 
-        # 9. 因子 PIT 快照（hot/flow/theme；基本面见 fundamental_pit）
-        #    fund_flow：rank=分页+逐票补缺；per_symbol=跳过分页直接逐票（yml fund_flow_use_rank）
-        try:
-            from quant.config import load_quant_config
-            from quant.data.factor_capture import capture_all_factor_snapshots
-            from quant.data.universe import universe_codes
-
-            uni = universe_codes(today, rebuild=False)
-            # 复用 step 1 已拉的新浪 spot（含 code/float_mv），避免再触发东财 clist 拉全市场
-            data_cfg = load_quant_config().get("data") or {}
-            if args.fund_flow_mode is not None:
-                fund_flow_mode = args.fund_flow_mode
-            else:
-                fund_flow_mode = (
-                    "rank" if data_cfg.get("fund_flow_use_rank", True) else "per_symbol"
-                )
-            print(
-                f"因子快照 @ {today}: fund_flow 开始"
-                f"（mode={fund_flow_mode}；rank 时分页失败会跳页/回退逐票，属正常）…",
-                flush=True,
-            )
-            flush_every = args.flush_every
-            if flush_every is None:
-                flush_every = int(data_cfg.get("fund_flow_flush_every", 50))
-            counts = capture_all_factor_snapshots(
-                today,
-                spot=spot,
-                universe_codes=uni,
-                flush_every=max(1, int(flush_every)),
-                page_size=args.fund_flow_page_size,
-                page_interval=args.req_page_interval,
-                symbol_interval=args.req_symbol_interval,
-                batch_pause=args.req_batch_pause,
-                burst_pages=args.req_burst_pages,
-                fund_flow_mode=fund_flow_mode,
-            )
-            print(f"因子快照 @ {today}: 完成 {counts}", flush=True)
-        except Exception as e:
-            print(f"[WARN] 因子快照失败: {e}", file=sys.stderr)
-
-        # 10. 写 pending（指数/行业失败待重试），下次运行开头自动补
+        # 指数/行业失败待重试，下次运行开头自动补
         _write_pending(pend)
         n_pend = len(pend.get("indices", [])) + (1 if pend.get("industry") else 0)
         if n_pend:

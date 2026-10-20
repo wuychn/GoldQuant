@@ -99,15 +99,16 @@ def build_universe_snapshot(
         return pd.DataFrame(columns=["date", "code", "name", "included"])
 
     as_of = to_iso(as_of)
+    date_s = daily["date"].astype(str).str[:10]
     # 当日有行情的票（在市且当日有数据）
-    today_rows = daily[daily["date"] == as_of]
+    today_rows = daily[date_s == as_of]
     if today_rows.empty:
         # as_of 非交易日或无数据：回退到最近的前一交易日（PIT，绝不跳到未来）
         d_obj = _coerce_iso(as_of)
         prev = prev_trading_day(d_obj) if d_obj is not None else None
         if prev is not None:
             prev_iso = prev.isoformat()
-            today_rows = daily[daily["date"] == prev_iso]
+            today_rows = daily[date_s == prev_iso]
             as_of = prev_iso
         if today_rows.empty:
             return pd.DataFrame(columns=["date", "code", "name", "included"])

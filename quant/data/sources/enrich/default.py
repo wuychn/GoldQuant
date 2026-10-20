@@ -47,3 +47,4 @@ class DefaultEnrichSource:
 
     async def fetch_stock_minute(self, symbol: str, *, context: str = "") -> list[dict[str, Any]] | None:
         return await self._ak.fetch_stock_minute(symbol, context=context)
+

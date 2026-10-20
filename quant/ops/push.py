@@ -18,10 +18,10 @@ def save_review(mode: str, text: str, *, date_str: str | None = None) -> Path:
     return path
 
 
-def push_text(label: str, body: str, *, mode: str, push: bool = True) -> str:
-    """格式化 → 落盘 → 可选推送。返回完整消息。"""
+def push_text(label: str, body: str, *, mode: str, push: bool = True, raw: bool = False) -> str:
+    """格式化 → 落盘 → 可选推送。返回完整消息。``raw`` 时正文自带标题。"""
     ts = cn_datetime_str()
-    msg = format_push_message(label, ts, body)
+    msg = (body or "").strip() + "\n" if raw else format_push_message(label, ts, body)
     save_review(mode, msg)
     try:
         (reports_dir("ops") / f"{mode}_{ts[:10]}.txt").write_text(msg, encoding="utf-8")
@@ -32,4 +32,5 @@ def push_text(label: str, body: str, *, mode: str, push: bool = True) -> str:
             send_msg(msg, get_token())
         except Exception as e:
             print(f"[WARN] 飞书推送失败: {e}")
+            raise
     return msg

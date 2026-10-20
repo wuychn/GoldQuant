@@ -46,7 +46,6 @@ class EnrichSource(Protocol):
     def fetch_stock_concepts(self, symbol: str, *, name: str | None = None) -> Any: ...
     def fetch_stock_minute(self, symbol: str, *, context: str = "") -> Any: ...
 
-
 @runtime_checkable
 class MarketSource(Protocol):
     """运维行情数据源规范（五时段 payload 的市场宏观拉取）。
@@ -86,20 +85,20 @@ class MarketSource(Protocol):
         as_of: str | None = None,
         force: bool = False,
         return_meta: bool = False,
+        max_pages: int | None = None,
     ) -> Any: ...  # DataFrame(code, main_net_inflow)；return_meta 时为 (df, meta)
+    def fetch_zt_pool_hist(self, *, date: str) -> Any: ...
+    def fetch_zt_zb_pool(self, *, date: str) -> Any: ...
+    def fetch_zt_dt_pool(self, *, date: str) -> Any: ...
+    def fetch_zt_prev_pool(self, *, date: str) -> Any: ...
+    def fetch_severe_anomaly(self) -> Any: ...  # 东财严重异动列表（仅当日）
+    def fetch_lhb_day(self, *, date: str) -> Any: ...  # 当日龙虎榜明细
 
 
 @runtime_checkable
 class InfoSource(Protocol):
-    """资讯/基本信息数据源规范（全局新闻 + 个股基本信息）。
-
-    只负责"取数"；新闻 payload 封装、jbxx 周文件缓存等编排在调用方。
-
-    注：人气榜（hot）归 ``MarketSource.fetch_hot_raw``、问财概念（wencai）归
-    ``EnrichSource.fetch_stock_concepts``，故不在此重复，避免协议重叠。
-    """
+    """个股基本信息。只负责取数。"""
 
     name: str
 
-    def fetch_news(self) -> Any: ...
     def fetch_stock_info(self, symbol: str) -> Any: ...

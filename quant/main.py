@@ -1,16 +1,5 @@
 #!/usr/bin/env python3
-"""GoldQuant r3 CLI。
-
-用法::
-
-    python -m quant news
-    python -m quant pre_market
-    python -m quant during_market
-    python -m quant post_market_lunch
-    python -m quant post_market_evening
-    python -m quant daily_decision
-    python -m quant prefetch_concepts
-"""
+"""命令行入口。5 板复盘：``python -m quant daily_decision``。"""
 
 from __future__ import annotations
 
@@ -26,43 +15,19 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from common.progress_log import configure_progress_logging
-from common.timeutil import cn_datetime_str
 
 
 def main() -> None:
     configure_progress_logging()
-    if len(sys.argv) < 2:
-        print("用法: python -m quant <mode>")
-        print(
-            "可用: news | pre_market | during_market | post_market_lunch | "
-            "post_market_evening | daily_decision | prefetch_concepts"
-        )
+    if len(sys.argv) < 2 or sys.argv[1] != "daily_decision":
+        print("用法: python -m quant daily_decision [--no-push] [--dry-run]")
         sys.exit(1)
-    mode = sys.argv[1]
-    if mode == "prefetch_concepts":
-        import asyncio
+    from quant.ops.runner import run_daily_decision
 
-        from quant.services.concept_cache import prefetch_optional_holding_concepts
-        from quant.services.jbxx_cache import prefetch_optional_holding_jbxx
-
-        n_concepts = asyncio.run(prefetch_optional_holding_concepts())
-        n_jbxx = prefetch_optional_holding_jbxx()
-        print(f"预取完成：概念 {n_concepts} 只，基本信息 {n_jbxx} 只")
-        return
-    if mode == "daily_decision":
-        from quant.ops.runner import run_daily_decision
-
-        dry = "--dry-run" in sys.argv
-        no_push = "--no-push" in sys.argv
-        run_daily_decision(push=not no_push, dry_run=dry)
-        return
-
-    from quant.ops.runner import run_mode
-
+    dry = "--dry-run" in sys.argv
     no_push = "--no-push" in sys.argv
-    run_mode(mode, cn_datetime_str(), push=not no_push)
+    run_daily_decision(push=not no_push, dry_run=dry)
 
 
 if __name__ == "__main__":
     main()
-

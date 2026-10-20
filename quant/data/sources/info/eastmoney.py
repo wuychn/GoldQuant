@@ -17,6 +17,3 @@ class EastmoneyInfoSource:
         from quant.data.sources.eastmoney import jbxx
 
         return jbxx(symbol)
-
-    def fetch_news(self) -> list[dict[str, Any]]:
-        raise NotImplementedError("eastmoney 未实现 fetch_news（可用 akshare/default）")

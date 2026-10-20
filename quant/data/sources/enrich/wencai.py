@@ -39,3 +39,4 @@ class WencaiEnrichSource:
 
     async def fetch_stock_minute(self, symbol: str, *, context: str = "") -> list[dict[str, Any]] | None:
         raise NotImplementedError("wencai 未实现 fetch_stock_minute（可用 akshare/default）")
+

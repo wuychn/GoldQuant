@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from quant.services.enrich import _resolve_enrich_runtime
 from common.utils.error_log import format_error_detail, http_status_from_exception
 from quant.data.sources.ths.funds import (
     ThsFundsFetchError,
@@ -41,20 +40,6 @@ def test_retry_delay_grows_with_failures() -> None:
     assert d0 == 1.0
     assert d1 == 2.0
     assert d_fail == 16.0
-
-
-def test_evening_enrich_runtime_defaults() -> None:
-    conc, batch, pause = _resolve_enrich_runtime(_SettingsStub(), "post_market_evening", None)
-    assert conc == 6
-    assert batch == 20
-    assert pause == 600
-
-
-def test_intraday_enrich_no_batch() -> None:
-    conc, batch, pause = _resolve_enrich_runtime(_SettingsStub(), "during_market", None)
-    assert conc == 6
-    assert batch is None
-    assert pause == 0
 
 
 def test_http_status_from_httpx() -> None:

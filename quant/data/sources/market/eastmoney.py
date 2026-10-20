@@ -81,6 +81,7 @@ class EastmoneyMarketSource:
         as_of: str | None = None,
         force: bool = False,
         return_meta: bool = False,
+        max_pages: int | None = None,
     ) -> Any:
         """东财个股资金流排名（分页）→ DataFrame(code, main_net_inflow)。"""
         from quant.data.sources.eastmoney.fund_flow_rank import fetch_stock_fund_flow_rank
@@ -101,8 +102,39 @@ class EastmoneyMarketSource:
                 as_of=as_of,
                 force=force,
                 return_meta=return_meta,
+                max_pages=max_pages,
             ),
         )
+
+    def fetch_zt_pool_hist(self, *, date: str) -> Any:
+        from quant.data.sources.eastmoney.zt_pool import fetch_zt_pool_hist
+
+        return with_limit("eastmoney", lambda: fetch_zt_pool_hist(date=date))
+
+    def fetch_zt_zb_pool(self, *, date: str) -> Any:
+        from quant.data.sources.eastmoney.board_pools import fetch_zt_zb_pool
+
+        return with_limit("eastmoney", lambda: fetch_zt_zb_pool(date=date))
+
+    def fetch_zt_dt_pool(self, *, date: str) -> Any:
+        from quant.data.sources.eastmoney.board_pools import fetch_zt_dt_pool
+
+        return with_limit("eastmoney", lambda: fetch_zt_dt_pool(date=date))
+
+    def fetch_zt_prev_pool(self, *, date: str) -> Any:
+        from quant.data.sources.eastmoney.board_pools import fetch_zt_prev_pool
+
+        return with_limit("eastmoney", lambda: fetch_zt_prev_pool(date=date))
+
+    def fetch_severe_anomaly(self) -> Any:
+        from quant.data.sources.eastmoney.severe_anomaly import fetch_severe_anomaly
+
+        return with_limit("eastmoney", fetch_severe_anomaly)
+
+    def fetch_lhb_day(self, *, date: str) -> Any:
+        from quant.data.sources.eastmoney.lhb import fetch_lhb_day
+
+        return with_limit("eastmoney", lambda: fetch_lhb_day(date=date))
 
     # ---- 未实现接口：显式报错 ----
     def fetch_index_spot(self) -> Any:
